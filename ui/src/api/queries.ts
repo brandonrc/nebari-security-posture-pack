@@ -1,0 +1,64 @@
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { api } from './client';
+import type { ImageQuery, VulnQuery } from './types';
+
+export const qk = {
+  me: ['me'] as const,
+  summary: ['summary'] as const,
+  images: (q: ImageQuery) => ['images', q] as const,
+  image: (id: string) => ['image', id] as const,
+  vulns: (q: VulnQuery) => ['vulnerabilities', q] as const,
+  vuln: (id: string) => ['vulnerability', id] as const,
+  workloads: (ns?: string) => ['workloads', ns ?? ''] as const,
+  namespaces: ['namespaces'] as const,
+  checks: ['checks'] as const,
+  check: (id: string) => ['check', id] as const,
+  scans: ['scans'] as const,
+  scan: (id: string | number) => ['scan', String(id)] as const,
+  scanners: ['scanners'] as const,
+  settings: ['settings'] as const,
+  reportTypes: ['reportTypes'] as const,
+  reports: ['reports'] as const,
+  controls: ['compliance', 'controls'] as const,
+  stig: ['compliance', 'stig'] as const,
+};
+
+export const useMe = () => useQuery({ queryKey: qk.me, queryFn: api.me, staleTime: 5 * 60_000 });
+export const useSummary = () => useQuery({ queryKey: qk.summary, queryFn: api.summary, refetchInterval: 60_000 });
+export const useImages = (q: ImageQuery) =>
+  useQuery({ queryKey: qk.images(q), queryFn: () => api.images(q), placeholderData: keepPreviousData });
+export const useImage = (id: string) => useQuery({ queryKey: qk.image(id), queryFn: () => api.image(id) });
+export const useVulns = (q: VulnQuery) =>
+  useQuery({ queryKey: qk.vulns(q), queryFn: () => api.vulnerabilities(q), placeholderData: keepPreviousData });
+export const useVuln = (id: string) => useQuery({ queryKey: qk.vuln(id), queryFn: () => api.vulnerability(id) });
+export const useWorkloads = (namespace?: string) =>
+  useQuery({ queryKey: qk.workloads(namespace), queryFn: () => api.workloads({ namespace }) });
+export const useNamespaces = () => useQuery({ queryKey: qk.namespaces, queryFn: api.namespaces });
+export const useChecks = () => useQuery({ queryKey: qk.checks, queryFn: api.checks });
+export const useCheck = (id: string) => useQuery({ queryKey: qk.check(id), queryFn: () => api.check(id) });
+export const useScans = () => useQuery({ queryKey: qk.scans, queryFn: () => api.scans(1), refetchInterval: 15_000 });
+export const useScanners = () => useQuery({ queryKey: qk.scanners, queryFn: api.scanners });
+export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settings });
+export const useReportTypes = () => useQuery({ queryKey: qk.reportTypes, queryFn: api.reportTypes, staleTime: Infinity });
+export const useControls = () => useQuery({ queryKey: qk.controls, queryFn: api.complianceControls });
+export const useStig = () => useQuery({ queryKey: qk.stig, queryFn: api.complianceStig });
+
+/** Poll a scan every 3s while it's queued/running (DESIGN §7). */
+export const useScan = (id: string | number | null | undefined) =>
+  useQuery({
+    queryKey: qk.scan(id ?? ''),
+    queryFn: () => api.scan(id as string | number),
+    enabled: id !== null && id !== undefined && id !== '',
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'queued' || status === 'running' || status === undefined ? 3000 : false;
+    },
+  });
+
+export const useReports = () =>
+  useQuery({
+    queryKey: qk.reports,
+    queryFn: () => api.reports(),
+    refetchInterval: (query) =>
+      query.state.data?.some((r) => r.status === 'queued' || r.status === 'running') ? 3000 : false,
+  });

@@ -1,0 +1,62 @@
+# Rendered by the nginx image entrypoint (envsubst) into /tmp/nginx/conf.d.
+# Variables: NGINX_PORT (default 8080), API_UPSTREAM (host:port, scheme optional;
+# normalised by 05-security-posture.envsh), NGINX_LOCAL_RESOLVERS (from /etc/resolv.conf).
+server {
+    listen       ${NGINX_PORT};
+    server_name  _;
+    root         /usr/share/nginx/html;
+
+    # Re-resolve the API service periodically instead of pinning its IP at
+    # startup; nginx also starts cleanly before the API Service exists.
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=30s ipv6=off;
+    resolver_timeout 5s;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 'ok';
+    }
+
+    location /api/ {
+        set $api_upstream ${API_UPSTREAM};
+        proxy_pass http://$api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_pass_request_headers on;
+        proxy_read_timeout 120s;
+        proxy_buffering off;
+        client_max_body_size 5m;
+    }
+
+    # Runtime config: the chart's ConfigMap is mounted over this file.
+    location = /config.json {
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        try_files /config.json =404;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    }
+
+    # Vite emits content-hashed filenames under /assets.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # Public, unauthenticated-safe static files (landing page tile icon, favicon).
+    location ~* \.(?:svg|ico|png|woff2?)$ {
+        add_header Cache-Control "public, max-age=86400" always;
+        try_files $uri =404;
+    }
+
+    # SPA history fallback.
+    location / {
+        add_header Cache-Control "no-cache" always;
+        try_files $uri $uri/ /index.html;
+    }
+}

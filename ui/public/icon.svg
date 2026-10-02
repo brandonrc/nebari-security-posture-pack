@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Security Posture">
+  <title>Security Posture</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b053e2"/>
+      <stop offset="1" stop-color="#77399a"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 4 L54 12 V30 C54 44 44.5 54.5 32 60 C19.5 54.5 10 44 10 30 V12 Z" fill="url(#g)"/>
+  <path d="M32 9.5 L49 15.6 V30 C49 41.2 41.8 49.8 32 54.4 Z" fill="#ffffff" fill-opacity="0.12"/>
+  <path d="M22.5 32.5 L29 39 L42 25.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="49" cy="49" r="9" fill="#319890" stroke="#ffffff" stroke-width="2.5"/>
+  <path d="M45.5 51.5 L48 47.5 L50 50 L52.5 46" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

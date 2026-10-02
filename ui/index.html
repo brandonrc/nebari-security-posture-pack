@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Theme bootstrap (themeBootstrapScript('nebari:themeMode') from @nebari/use-theme-preference): avoids a light flash. -->
+    <script>
+      (function () {
+        var mode = null;
+        var prefersDark = false;
+        try {
+          mode = localStorage.getItem("nebari:themeMode");
+        } catch (e) {}
+        try {
+          prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        } catch (e) {}
+        var isDark = mode === 'dark' || (mode !== 'light' && prefersDark);
+        try {
+          document.documentElement.classList.toggle('dark', isDark);
+        } catch (e) {}
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Container vulnerability & configuration posture across the cluster" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/Nebari-Symbol.svg" />
+    <title>Security Posture · Nebari</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

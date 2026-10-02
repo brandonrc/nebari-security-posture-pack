@@ -1,0 +1,27 @@
+#!/bin/sh
+# Sourced by the nginx image entrypoint before 15-local-resolvers / 20-envsubst.
+# - make the (emptyDir-backed) render dir under /tmp
+# - normalise API_UPSTREAM: strip scheme/trailing slash; qualify a bare service
+#   name with the pod's first DNS search domain (nginx's resolver ignores search
+#   domains), e.g. security-posture-api:8000 -> security-posture-api.<ns>.svc.cluster.local:8000
+mkdir -p /tmp/nginx/conf.d
+
+upstream="${API_UPSTREAM:-security-posture-api:8000}"
+upstream="${upstream#http://}"
+upstream="${upstream#https://}"
+upstream="${upstream%%/*}"
+host="${upstream%%:*}"
+port=""
+case "$upstream" in *:*) port=":${upstream##*:}" ;; esac
+case "$host" in
+  *.*|localhost) ;;
+  *)
+    # Only qualify with a Kubernetes search domain (<ns>.svc.<cluster-domain>);
+    # elsewhere (docker, compose) the bare name resolves as-is.
+    search=$(awk '/^search/ { for (i = 2; i <= NF; i++) if ($i ~ /\.svc\./) { print $i; exit } }' /etc/resolv.conf 2>/dev/null)
+    if [ -n "$search" ]; then host="$host.$search"; fi
+    ;;
+esac
+export API_UPSTREAM="$host$port"
+export NGINX_PORT="${NGINX_PORT:-8080}"
+echo "05-security-posture.envsh: API_UPSTREAM=$API_UPSTREAM NGINX_PORT=$NGINX_PORT"
