@@ -468,9 +468,14 @@ class Worker:
         async with self.sm() as s:
             imgs = (await s.execute(select(Image).where(Image.id.in_(candidates)))).scalars().all()
         cutoff = now() - timedelta(hours=settings.rescan_after_hours)
+        enabled = [n for n in ("trivy", "grype", "clair") if getattr(settings.scanners, n) and n in self.scanners]
         out = []
         for img in imgs:
-            fresh = img.last_scanned_at is not None and img.last_scanned_at > cutoff and img.score is not None
+            runs = img.scanners or {}
+            # a scanner that errored / timed out / never ran on this digest makes it stale
+            complete = all((runs.get(n) or {}).get("status") in ("ok", "unsupported") for n in enabled)
+            fresh = (img.last_scanned_at is not None and img.last_scanned_at > cutoff and img.score is not None
+                     and complete)
             if force or target_ids or not fresh:
                 out.append(img.id)
         return sorted(out)

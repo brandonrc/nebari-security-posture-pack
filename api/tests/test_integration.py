@@ -282,6 +282,12 @@ async def test_03_rescan_skips_fresh_and_keeps_first_seen(env):
     f = next(x for x in d["findings"] if x["vulnId"] == "CVE-2024-6119")
     assert f["scanners"] == ["trivy", "grype"] and f["agreement"] == 1.0
     assert len((await c.get("/summary")).json()["trend"]) == 3
+    # the clair error makes alpine stale: a plain (non-forced) scan picks it up again, nothing else
+    r = await c.post("/scans", json={})
+    await make_worker(env).poll_once()
+    sc = (await c.get(f"/scans/{r.json()['id']}")).json()
+    assert sc["status"] == "done" and sc["imagesTotal"] == 1
+    assert (await c.get(f"/images/{alpine['id']}")).json()["scanners"]["clair"]["status"] == "ok"
 
 
 async def test_04_cancel_and_settings(env):
