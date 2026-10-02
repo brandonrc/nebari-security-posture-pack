@@ -281,6 +281,8 @@ class Worker:
             async with self.sm() as s, s.begin():
                 await s.execute(update(Scan).where(Scan.id == scan_id).values(images_total=len(to_scan)))
             ctx.add_log(f"{len(to_scan)} image(s) to scan, {len(key_to_id)} unique image(s) in inventory")
+            if enabled and to_scan:
+                await self._wait_scanners_ready(ctx, enabled)
             if enabled:
                 await self.refresh_scanner_status(enabled)
             sem = asyncio.Semaphore(max(1, settings.parallelism))
@@ -316,6 +318,46 @@ class Worker:
             progress.cancel()
         if completed and settings.reports.auto_generate:
             await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
+
+    async def scanners_not_ready(self, enabled: list[str]) -> list[str]:
+        """Reasons why an enabled scanner would fail or return empty results right now."""
+        reasons: list[str] = []
+        grype = self.scanners.get("grype")
+        if "grype" in enabled and isinstance(grype, GrypeScanner):
+            st = await grype.db_status()
+            if not st.get("valid"):
+                reasons.append(f"grype: vulnerability DB not ready ({st.get('error') or 'invalid'})")
+        clair = self.scanners.get("clair")
+        if "clair" in enabled and isinstance(clair, ClairScanner):
+            ok, err = await clair.healthy()
+            if not ok:
+                reasons.append(f"clair: {err}")
+            else:
+                ops = await clair.update_operations() or {}
+                missing = [u for u in self.s.clair_ready_updaters if not any(u in k for k in ops)]
+                if missing:
+                    reasons.append(f"clair: initial vulnerability updates not finished (waiting for {', '.join(missing)})")
+        return reasons
+
+    async def _wait_scanners_ready(self, ctx: ScanContext, enabled: list[str]) -> None:
+        deadline = time.monotonic() + max(0.0, self.s.scanner_ready_timeout_seconds)
+        logged: set[str] = set()
+        while not ctx.cancelled:
+            reasons = await self.scanners_not_ready(enabled)
+            if not reasons:
+                if logged:
+                    ctx.add_log("scanners ready")
+                return
+            for r in reasons:
+                if r not in logged:
+                    ctx.add_log(f"waiting: {r}")
+                    log.info("scan.waiting_for_scanner", scan_id=ctx.scan_id, reason=r)
+                    logged.add(r)
+            if time.monotonic() >= deadline:
+                ctx.add_log("scanner readiness timeout; scanning anyway: " + "; ".join(reasons))
+                log.warning("scan.scanner_not_ready", scan_id=ctx.scan_id, reasons="; ".join(reasons))
+                return
+            await asyncio.sleep(15)
 
     async def auto_generate_reports(self, scan_id: int, types: list[str]) -> list[str]:
         """Settings `reports.autoGenerate`: one cluster-scope report per type in its default format.
@@ -680,8 +722,7 @@ class Worker:
         if self.s.scan_on_start:
             async with self.sm() as s:
                 done = await s.scalar(select(func.count()).select_from(Scan).where(Scan.status == "done"))
-            if not done:
-                await asyncio.sleep(20)  # let the grype DB download first
+            if not done:  # run_scan waits for the grype DB / Clair updaters itself
                 await self.enqueue("scheduled", "worker-startup")
         log.info("worker.ready", hostname=self.hostname)
         while not self._stop.is_set():

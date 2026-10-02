@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     excluded_namespaces: CsvList = []
     grype_db_update_hours: float = 12
     worker_poll_seconds: float = 5
+    # Before scanning, wait (at most this long) for the grype DB to exist and for Clair to
+    # have run the updaters named in CLAIR_READY_UPDATERS (substring match), so the first
+    # scan after an install does not record "database does not exist" / empty Clair results.
+    scanner_ready_timeout_seconds: float = 1800
+    clair_ready_updaters: CsvList = ["alpine", "debian", "ubuntu"]
     scan_on_start: bool = True
 
     # reports (DESIGN §11): bytes on disk, metadata in the `reports` table
@@ -76,6 +81,7 @@ class Settings(BaseSettings):
     cluster_name: str = "nebari"
 
     @field_validator("oidc_issuers", "admin_groups", "excluded_namespaces", "mirror_rewrite", "reports_auto_generate",
+                     "clair_ready_updaters",
                      mode="before")
     @classmethod
     def _csv(cls, v: object) -> list[str]:

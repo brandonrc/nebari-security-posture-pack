@@ -31,6 +31,9 @@
           "delivery_interval" "1m")
       "metrics" (dict "name" "prometheus")
 }}
+{{- with .Values.clair.updaterSets }}
+{{- $_ := set $config "updaters" (dict "sets" .) }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:

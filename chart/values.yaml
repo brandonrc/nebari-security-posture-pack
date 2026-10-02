@@ -311,6 +311,12 @@ clair:
     seccompProfile: { type: RuntimeDefault }
   # Clair log level (debug|info|warn|error).
   logLevel: info
+  # Vulnerability updater sets (Clair `updaters.sets`). `osv` is left out:
+  # Clair 4.9.0 (claircore 1.5.48) panics while ingesting OSV data with a
+  # malformed CVSS vector ("programmer error: invalid vector constructed"),
+  # which crash-loops the combo process. Language ecosystems are still covered
+  # by Trivy and Grype. Set to [] to use Clair's defaults (all sets).
+  updaterSets: [alpine, aws, debian, oracle, photon, rhel, rhcc, suse, ubuntu, clair.cvss]
   nodeSelector: {}
   tolerations: []
   affinity: {}

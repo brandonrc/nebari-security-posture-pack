@@ -30,6 +30,8 @@ auth:
     - http://keycloak.100-89-230-107.sslip.io/auth/realms/nebari
 
 scanner:
+  # grace has 40 cores and is mostly idle.
+  parallelism: 6
   mirror:
     enabled: true
     registry: registry.container-registry.svc.cluster.local:5000

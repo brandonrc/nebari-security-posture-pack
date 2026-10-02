@@ -201,15 +201,21 @@ class ClairScanner(Scanner):
         m = re.search(r"v?(\d+\.\d+\.\d+)", res.stdout + res.stderr)
         return m.group(1) if m else None
 
-    async def db_updated_at(self) -> datetime | None:
-        """Latest updater run, from the matcher's internal update_operation API."""
+    async def update_operations(self) -> dict[str, Any] | None:
+        """`{updater: [ops]}` from the matcher's internal update_operation API (None if unreachable)."""
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.get(f"{self.clair_url}/matcher/api/v1/internal/update_operation",
                                      params={"latest": "true"})
                 r.raise_for_status()
-                data = r.json()
+                return r.json() or {}
         except Exception:
+            return None
+
+    async def db_updated_at(self) -> datetime | None:
+        """Latest updater run, from the matcher's internal update_operation API."""
+        data = await self.update_operations()
+        if data is None:
             return None
         latest: datetime | None = None
         for ops in (data or {}).values():
