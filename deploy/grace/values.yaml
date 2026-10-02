@@ -43,8 +43,16 @@ scanner:
 # image; 6Gi OOMKilled the worker at parallelism 6.
 worker:
   resources:
-    requests: { cpu: "1", memory: 2Gi }
+    # grace's memory requests are ~98% allocated: keep the request small.
+    requests: { cpu: "1", memory: 1Gi }
     limits: { cpu: "8", memory: 16Gi }
+
+# Clair OOMKilled at 4Gi while its updaters ingested RHEL/Debian data and the
+# indexer unpacked large images concurrently.
+clair:
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "4", memory: 8Gi }
 
 persistence:
   storageClass: microk8s-hostpath
