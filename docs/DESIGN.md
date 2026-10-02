@@ -1,0 +1,279 @@
+# nebari-security-posture-pack — Design Contract
+
+Status: v0.1 (experimental). This document is the contract between the chart, API,
+worker and UI. Implementation agents MUST follow it; deviations go in docs/DECISIONS.md.
+
+## 1. Purpose
+
+An **admin-only** Nebari software pack that continuously inventories every container
+running in the cluster, scans each unique image with **Trivy, Grype and Clair**,
+cross-correlates the three result sets, audits workload configuration (Kubernetes
+posture checks), and presents a single **Security Posture rating** (0–100 score, A–F
+grade) with drill-down, in a UI built on the Nebari design system.
+
+Experimentation target: the `grace` MicroK8s node (single node, 40 CPU, 113 GB RAM,
+KUBECONFIG=~/.kube-grace/config, local registry `localhost:32000`, sslip.io hosts).
+
+## 2. Repository layout (monorepo for the experiment)
+
+```
+nebari-security-posture-pack/
+  pack-metadata.yaml           # software-pack-dashboard schema
+  README.md  LICENSE  CODEOWNERS  .editorconfig  .gitignore
+  .github/workflows/{lint,test,build-images,release}.yaml   # template-style
+  chart/                       # Helm chart (name: nebari-security-posture-pack)
+    Chart.yaml                 # dep: nebari-app >=0.1.1 oci://quay.io/nebari/charts
+    values.yaml
+    templates/...
+  api/                         # Python 3.12 FastAPI service + worker (package `posture`)
+    pyproject.toml  Dockerfile.api  Dockerfile.worker  alembic/  src/posture/  tests/
+  ui/                          # React 19 + Vite + TS + Tailwind v4 + nebari-design
+    package.json  Dockerfile  nginx.conf  src/  components.json
+  deploy/grace/                # grace-specific: values.yaml, build-push.sh, deploy.sh
+  docs/DESIGN.md  docs/SCORING.md  docs/DECISIONS.md
+```
+
+Reference material (read-only clones) at
+`/tmp/claude-1000/-home-geraci/a8c043a6-2ce9-493d-b5c3-2c0b8a63e889/scratchpad/`:
+`software-pack-template/`, `nic/`, `nop/` (operator alpha.20), `nop-main/`,
+`nebari-design/`, `libchart/nebari-app/`. Local packs for conventions:
+`~/work/bifrost-pack`, `~/deploy/checkmaite-pack`, `~/build/checkmaite-frontend`.
+
+## 3. Runtime topology (all in release namespace, default `security-posture`)
+
+| Component | Image | Notes |
+|---|---|---|
+| `ui` | `security-posture-ui` (nginx:alpine, static SPA) | Only ingress target. Proxies `/api/` → `api:8000`. `/healthz` static 200. |
+| `api` | `security-posture-api` (python:3.12-slim) | FastAPI on :8000. Reads Postgres. Validates JWT + admin group. |
+| `worker` | `security-posture-worker` (api image + trivy, grype, clairctl, skopeo) | 1 replica. Runs inventory + scan jobs + scheduler. PVC `/cache`. |
+| `trivy` | `aquasec/trivy:0.75.0` | `trivy server --listen 0.0.0.0:4954 --cache-dir /cache`, PVC. |
+| `clair` | `quay.io/projectquay/clair:4.9.0` | combo mode, config from Secret, Postgres DB `clair`. :6060 (api) :8089 (introspection). |
+| `postgres` | `postgres:16-alpine` | StatefulSet, PVC, databases `posture` and `clair`. Secret `<fullname>-db` keys `password`, `postgres-password`. Support `externalDatabase`. |
+
+Grype runs inside the worker (no server); its DB lives on the worker PVC and is
+refreshed by `grype db update` on the worker's schedule (default every 12h).
+
+Namespace must carry label `nebari.dev/managed: "true"` (operator ignores it otherwise).
+
+### NebariApp
+
+One NebariApp named `<fullname>` pointing at `ui` service port 80:
+
+```yaml
+nebariapp:
+  enabled: false                       # true in deploy/grace/values.yaml
+  hostname: '{{ fail "nebariapp.hostname is required" }}'
+  service: { name: '{{ include "security-posture.fullname" . | toJson }}-ui', port: 80 }
+  routing:
+    routes: [{ pathPrefix: /, pathType: PathPrefix }]
+    publicRoutes: [{ pathPrefix: /healthz, pathType: Exact }]
+    tls: { enabled: true }
+  auth:
+    enabled: true
+    provider: keycloak
+    provisionClient: true
+    enforceAtGateway: true
+    forwardAccessToken: true
+    scopes: [openid, profile, email, groups]
+    groups: ["admin"]                  # grace operator enforces at gateway
+  gateway: public
+  landingPage:
+    enabled: true
+    displayName: Security Posture
+    description: Container vulnerability & configuration posture across the cluster
+    icon: <URL to shield icon served by the ui, e.g. https://<host>/icon.svg> 
+    category: Platform
+    priority: 20
+    healthCheck: { enabled: true, path: /healthz, intervalSeconds: 30, timeoutSeconds: 5 }
+```
+
+Admin gating has three layers, all on by default:
+1. `auth.groups` on the NebariApp (works on grace's operator build; upstream alpha.20 only
+   uses it for landing-page visibility).
+2. `adminGate.securityPolicy.enabled` (default **false**): chart renders its own Envoy
+   `SecurityPolicy` with `jwt` provider + `authorization.defaultAction: Deny` + allow rule
+   on `groups` claim (NIC Longhorn pattern). When enabled, set `auth.enforceAtGateway:
+   false` to avoid two policies on one HTTPRoute. Document this in README.
+3. API verifies the JWT itself (see §5) and requires an admin group. Always on unless
+   `AUTH_MODE=disabled` (local dev only).
+
+Values: `adminGroups: ["admin"]` feeds all three layers (`auth.groups`, SecurityPolicy
+rule, `ADMIN_GROUPS` env). Group matching strips a leading `/` (NIC realm mapper emits
+`/group`, grace's operator mapper emits `group`).
+
+### RBAC (ClusterRole bound to `<fullname>` ServiceAccount, used by api + worker)
+- `get/list/watch`: pods, namespaces, nodes, replicasets, deployments, statefulsets,
+  daemonsets, jobs, cronjobs, `nebariapps.reconcilers.nebari.dev`.
+- NO secrets access cluster-wide (imagePullSecrets unsupported in v0.1; documented).
+  Optional `registries[]` in values with `existingSecret` for private registry creds,
+  mounted into worker as a docker-config `auth.json`.
+
+### NetworkPolicy
+`api` accepts ingress only from `ui` and `worker` pods; `postgres` only from
+`api`, `worker`, `clair`; `clair`/`trivy` only from `worker`. `ui` accepts from
+`envoy-gateway-system`. Egress unrestricted (registries, Keycloak JWKS, vuln DBs).
+
+## 4. Worker pipeline
+
+```
+inventory  →  resolve unique images (by digest)  →  mirror  →  scan ×3  →  normalize  →  score  →  persist
+```
+
+1. **Inventory** (K8s API): every pod (all phases; "running" flag = phase Running) and
+   each container/initContainer/ephemeral: `image` (as specified), `imageID` (resolved
+   digest), owner chain (Pod → ReplicaSet → Deployment …), namespace, NebariApp (same
+   namespace; via `app.kubernetes.io/instance`/helm release label match, else namespace
+   fallback), securityContext snapshot for posture checks. Excluded namespaces from
+   settings (default: none; `kube-system` IS scanned).
+2. **Unique image key** = `registry/repo@sha256:digest` from `imageID` when present,
+   else `image` string. Keep `tag` from `image` for display.
+3. **Mirror** (default on, `scanner.mirror.enabled`): `skopeo copy --all docker://<ref>
+   docker://<mirrorRegistry>/posture-mirror/<repo>@<digest>` where mirrorRegistry defaults
+   to `registry.container-registry.svc.cluster.local:5000` (http, insecure). Rationale:
+   one external pull per digest (Docker Hub anonymous rate limits), identical bytes for
+   all three scanners, and Clair gets a single reachable registry. Ref rewriting:
+   `localhost:32000/...` ⇒ mirrorRegistry (same registry on grace). If mirror fails,
+   fall back to scanning the original ref directly and record a warning.
+4. **Scan** each image with the three adapters, concurrently per image, N images in
+   parallel (`scanner.parallelism`, default 3). Per-scanner timeout (default 10m).
+   - trivy: `trivy image --server http://<trivy>:4954 --format json --insecure --scanners vuln --quiet <ref>`
+   - grype: `grype <ref> -o json` with `GRYPE_REGISTRY_INSECURE_USE_HTTP=true`, `GRYPE_DB_CACHE_DIR=/cache/grype`, `GRYPE_DB_AUTO_UPDATE=false`
+   - clair: `clairctl --host http://<clair>:6060 report --out json <ref>` (clairctl config enabling insecure http for mirror registry)
+   Each adapter returns `ScanResult{scanner, version, dbUpdatedAt?, status: ok|error|timeout|unsupported, error?, findings[]}`.
+5. **Normalize** findings to `{vulnId, severity(critical|high|medium|low|negligible|unknown),
+   package, installedVersion, fixedVersion?, pkgType, cvss?, title?, url?, scanner}`.
+   Severity mapping: Clair `Critical/High/Medium/Low/Negligible/Unknown`; Grype same +
+   `Negligible`; Trivy `CRITICAL/HIGH/MEDIUM/LOW/UNKNOWN`.
+6. **Correlate**: group by `(vulnId, package)` → consensus record with `scanners[]`,
+   `severity = max`, `agreement = len(scanners)/len(enabledScanners that succeeded)`.
+7. **Score** per docs/SCORING.md; persist image score, workload score, namespace score,
+   cluster snapshot in `scan_snapshots`.
+8. **Posture checks** (config) evaluated from inventory at each scan, independent of
+   scanner success.
+
+Scheduler: APScheduler in worker; interval from settings (default 6h); manual trigger via
+API enqueues a `scan` row the worker polls (Postgres as queue, `SELECT … FOR UPDATE SKIP
+LOCKED`). Also `grype db update` + trivy server self-updates. Scan rescans only images
+whose digest is new or whose last scan is older than `rescanAfterHours` (default 24)
+unless `force`.
+
+## 5. API (FastAPI, prefix `/api/v1`, JSON, camelCase fields)
+
+Auth middleware: token from `Authorization: Bearer` or cookie `NebariIdToken` (or any
+cookie starting with `IdToken`). Verify signature via JWKS at `OIDC_JWKS_URL`, `exp`,
+and `iss` ∈ `OIDC_ISSUERS` (comma list; both internal and external Keycloak issuers).
+Groups claim `groups` (strip leading `/`); require intersection with `ADMIN_GROUPS`
+else 403 `{detail:"admin group required"}`. 401 when no/invalid token. `/health` and
+`/ready` are unauthenticated. `AUTH_MODE=disabled` bypasses (dev only; logs warning).
+
+Env vars (api & worker): `DATABASE_URL`, `AUTH_MODE` (`oidc`|`disabled`),
+`OIDC_JWKS_URL`, `OIDC_ISSUERS`, `ADMIN_GROUPS`, `TRIVY_SERVER_URL`, `CLAIR_URL`,
+`MIRROR_ENABLED`, `MIRROR_REGISTRY`, `MIRROR_INSECURE`, `SCAN_PARALLELISM`,
+`SCAN_TIMEOUT_SECONDS`, `SCAN_INTERVAL_HOURS`, `RESCAN_AFTER_HOURS`,
+`EXCLUDED_NAMESPACES`, `CACHE_DIR`, `LOG_LEVEL`.
+
+Endpoints:
+
+| Method/Path | Returns |
+|---|---|
+| `GET /health`, `GET /ready` | `{status:"ok"}` (ready checks DB) |
+| `GET /me` | `{username,email,groups[],isAdmin}` |
+| `GET /summary` | `{score,grade,vulnScore,postureScore,generatedAt,lastScan:{id,status,startedAt,finishedAt,imagesTotal,imagesDone,imagesFailed},counts:{critical,high,medium,low,negligible,unknown},fixable:{critical,high,...},images:{total,scanned,failed},workloads,namespaces,scanners:[{name,version,dbUpdatedAt,healthy,lastError}],trend:[{scanId,finishedAt,score,grade,critical,high}] (last 30), topRisks:[{imageId,ref,score,grade,critical,high,workloads}] (10), checks:{passed,failed,total}}` |
+| `GET /images?namespace=&grade=&severity=&q=&sort=&order=&page=&pageSize=` | `{items:[ImageSummary],total,page,pageSize}` |
+| `GET /images/{id}` | `ImageDetail` = ImageSummary + `findings:[Finding]` + `usedBy:[ContainerRef]` + `scans:[ScannerRun]` + `postureFindings` |
+| `GET /vulnerabilities?severity=&q=&fixable=&page=` | CVE-centric: `{items:[{vulnId,severity,scanners[],agreement,imagesAffected,workloadsAffected,fixAvailable,cvss,title,url}],total}` |
+| `GET /vulnerabilities/{vulnId}` | detail + affected images |
+| `GET /workloads?namespace=&kind=` | `[{namespace,kind,name,pack,score,grade,images:[{imageId,ref}],containers,posture:{passed,failed},counts}]` |
+| `GET /namespaces` | `[{name,pack,managed,score,grade,workloads,images,counts,posture}]` |
+| `GET /checks` | `[{id,title,severity,category,description,remediation,passed,failed}]` |
+| `GET /checks/{id}` | `+results:[{namespace,kind,name,container,status,detail}]` |
+| `GET /scans?page=` | `[{id,trigger(manual|scheduled),status(queued|running|done|failed|cancelled),startedAt,finishedAt,imagesTotal,imagesDone,imagesFailed,score,grade,requestedBy}]` |
+| `POST /scans` body `{force?:bool,imageIds?:[],namespaces?:[]}` | 202 + scan row; 409 if a scan is running (unless `imageIds` targeted) |
+| `GET /scans/{id}` | scan + `perScanner:{trivy:{ok,error},...}` + recent log lines |
+| `DELETE /scans/{id}` | cancel |
+| `GET /scanners` | `[{name,enabled,version,dbUpdatedAt,healthy,lastError,lastRunAt}]` |
+| `GET /settings` / `PUT /settings` | `{scanIntervalHours,rescanAfterHours,excludedNamespaces[],scanners:{trivy:bool,grype:bool,clair:bool},parallelism,adminGroups[] (readOnly)}` |
+| `GET /export?format=json|csv` | full current snapshot |
+
+`ImageSummary`: `{id,ref,registry,repository,tag,digest,score,grade,counts{...},fixable{...},
+scanners:{trivy:ScannerRunSummary,grype:…,clair:…},agreementIndex (0–1),
+namespaces[],workloads,containers,running:bool,lastScannedAt,mirrored:bool,warnings[]}`
+`ScannerRunSummary`: `{status,findings,durationMs,error?,version?}`
+`Finding`: `{vulnId,severity,package,installedVersion,fixedVersion,pkgType,scanners[],
+agreement,perScanner:{trivy:"high",grype:"critical"},cvss,title,url,fixable}`
+
+Pagination default `pageSize=50`, max 500. Errors: `{detail}`.
+
+OpenAPI at `/api/v1/openapi.json`, docs at `/api/v1/docs` (admin-gated).
+
+## 6. Database (Postgres, SQLAlchemy 2 + Alembic)
+
+Tables (minimum): `images`, `image_scans` (per image per scan per scanner, raw JSON kept
+compressed/truncated), `findings` (normalized per scanner), `consensus_findings`,
+`containers` (inventory snapshot per scan), `workloads`, `posture_results`, `scans`,
+`scan_snapshots` (cluster/namespace/workload/image scores per scan), `settings` (single
+row JSON). Keep raw scanner JSON ≤ 2 MB per row (truncate with flag).
+
+## 7. UI (React 19 + Vite + TypeScript + Tailwind v4 + nebari-design)
+
+- Vendor components from `nebari-design/registry/nebari/` (globals.css theme, ui/*,
+  hooks/use-theme-preference) via `shadcn add @nebari/...` inside the Docker build or by
+  copying sources (no node on host). Fonts: `@fontsource-variable/geist`,
+  `@fontsource/ibm-plex-mono`. Apply the `nebari-ui` SKILL.md header recipe: shared
+  Nebari header (`NavigationMenu` + `MenuBarBrand` with Nebari logo, light/dark logo
+  swap), profile menu with theme radio group + sign out (`/logout`), `bg-canvas` body,
+  Cards on top. Sidebar via `@nebari/sidebar` for section nav.
+- Routes (react-router): `/` Overview, `/images`, `/images/:id`, `/vulnerabilities`,
+  `/vulnerabilities/:vulnId`, `/workloads`, `/namespaces`, `/checks`, `/checks/:id`,
+  `/scans`, `/scans/:id`, `/settings`.
+- Overview: big grade tile (score ring, grade letter, delta vs previous scan), severity
+  stat tiles (consensus counts, fixable sub-count), scanner health row (3 cards: trivy /
+  grype / clair with version, DB age, last status), trend sparkline/area chart (score
+  over last 30 scans), top-10 riskiest images table, posture checks pass/fail bar,
+  "Scan now" button with live progress (poll `/scans/{id}` every 3s).
+- Images: DataTable (TanStack) with grade badge, severity count chips, per-scanner
+  mini-status (✓/!/–), agreement index, namespaces; filters namespace/grade/severity/text.
+- Image detail: header (ref, digest, grade, score breakdown), tabs: Findings (table with
+  per-scanner severity columns showing which scanner flagged it — the "three-scanner
+  consensus" view is the headline feature), Used by, Scanner runs (raw status/errors),
+  Posture.
+- Vulnerabilities: CVE-centric table; Workloads/Namespaces: grouped tables with grades.
+- Checks: catalogue with pass/fail bars; detail lists offenders with remediation.
+- Scans: history + live progress; Settings: form bound to `/settings`.
+- Severity colors use design tokens only: critical→`destructive` strong, high→
+  `destructive` soft, medium→`warning`, low→`info`, negligible/unknown→`muted`.
+  Grades: A→success, B→success soft, C→warning, D→destructive soft, F→destructive.
+- Runtime config: `/config.json` from ConfigMap (`{apiBase:"/api/v1", title}`).
+  TanStack Query for data. Vitest unit tests for score helpers; Playwright optional.
+- Dev mode: `VITE_API_MOCK=1` serves fixtures (MSW) so UI can be built without the API.
+
+## 8. Chart values (abridged; see chart/values.yaml for full)
+
+```yaml
+images: { api: {repository, tag}, worker: {...}, ui: {...}, trivy, clair, postgres }
+adminGroups: ["admin"]
+adminGate: { securityPolicy: { enabled: false } }
+auth: { mode: oidc, jwksUrl: "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari/protocol/openid-connect/certs", issuers: [] }
+scanner: { parallelism: 3, timeoutSeconds: 600, intervalHours: 6, rescanAfterHours: 24,
+           excludedNamespaces: [], trivy: {enabled: true}, grype: {enabled: true}, clair: {enabled: true},
+           mirror: { enabled: true, registry: registry.container-registry.svc.cluster.local:5000, insecure: true, rewrite: {"localhost:32000": "registry.container-registry.svc.cluster.local:5000"} } }
+persistence: { storageClass: "", worker: 20Gi, trivy: 10Gi, postgres: 10Gi }
+postgresql: { enabled: true, existingSecret: "" }   # externalDatabase.url alt.
+networkPolicy: { enabled: true }
+resources: {...}
+nebariapp: {...as §3}
+```
+
+## 9. Grace deployment
+
+- Namespace `security-posture`, hostname `security.100-89-230-107.sslip.io`.
+- Images pushed to `localhost:32000/security-posture-{api,worker,ui}:<git-sha>`.
+- `deploy/grace/build-push.sh` (docker build all three, push), `deploy/grace/deploy.sh`
+  (`kubectl create ns` + label, `helm dependency build`, `helm upgrade --install
+  security-posture ./chart -n security-posture -f deploy/grace/values.yaml --wait`).
+- Verify: NebariApp Ready/AuthReady/RoutingReady; `curl -k https://security.../healthz`;
+  unauthenticated → redirect to Keycloak; login as alice (not admin) → 403; admin → UI.
+
+## 10. Non-goals for v0.1
+imagePullSecrets discovery, SBOM storage, policy enforcement/admission, multi-cluster,
+notifications. Document these in README "Limitations".
