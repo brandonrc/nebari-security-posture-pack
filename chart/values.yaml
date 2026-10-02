@@ -246,6 +246,8 @@ api:
   affinity: {}
 
 worker:
+  # Budget ~2Gi memory per parallel image (scanner.parallelism): grype and the
+  # trivy client load large images' package catalogues in memory.
   resources:
     requests: { cpu: 500m, memory: 1Gi }
     limits: { cpu: "4", memory: 6Gi }

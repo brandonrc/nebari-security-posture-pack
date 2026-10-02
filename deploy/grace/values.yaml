@@ -39,6 +39,13 @@ scanner:
     rewrite:
       "localhost:32000": registry.container-registry.svc.cluster.local:5000
 
+# grype/trivy/skopeo on multi-GB images (ray, jupyter) need ~2Gi per parallel
+# image; 6Gi OOMKilled the worker at parallelism 6.
+worker:
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "8", memory: 16Gi }
+
 persistence:
   storageClass: microk8s-hostpath
 
