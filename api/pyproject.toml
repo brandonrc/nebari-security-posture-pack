@@ -1,0 +1,44 @@
+[project]
+name = "nebari-security-posture"
+version = "0.1.0"
+description = "Nebari Security Posture pack: API + scan worker (Trivy, Grype, Clair consensus)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "BSD-3-Clause" }
+dependencies = [
+  "fastapi==0.142.2",
+  "uvicorn[standard]==0.54.0",
+  "sqlalchemy[asyncio]==2.1.2",
+  "asyncpg==0.31.0",
+  "alembic==1.20.0",
+  "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
+  "httpx==0.28.1",
+  "pyjwt[crypto]==2.15.1",
+  "kubernetes==36.0.3",
+  "apscheduler==3.11.3",
+  "pyyaml==6.0.3",
+  # compliance report generators (posture.reports, see reports-requirements.txt)
+  "openpyxl==3.1.5",
+  "jinja2==3.1.6",
+  "weasyprint==70.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "cryptography==50.0.2", "jsonschema==4.26.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/posture"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+pythonpath = ["src"]
+markers = ["integration: needs Postgres via TEST_DATABASE_URL"]
+filterwarnings = ["ignore::DeprecationWarning:starlette.*", "ignore:Using `httpx` with `starlette.testclient`"]

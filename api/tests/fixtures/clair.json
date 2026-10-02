@@ -1,0 +1,230 @@
+{
+ "manifest_hash": "sha256:c0d488a800e4127c334ad20d61d7bc21b4097540327217dfab52262adc02380c",
+ "packages": {
+  "6": {
+   "id": "6",
+   "name": "busybox",
+   "version": "1.35.0-r29",
+   "kind": "binary",
+   "source": {
+    "id": "5",
+    "name": "busybox",
+    "version": "1.35.0-r29",
+    "kind": "source",
+    "normalized_version": "",
+    "cpe": ""
+   },
+   "normalized_version": "",
+   "arch": "x86_64",
+   "cpe": ""
+  },
+  "16": {
+   "id": "16",
+   "name": "libcrypto3",
+   "version": "3.0.7-r0",
+   "kind": "binary",
+   "source": {
+    "id": "15",
+    "name": "openssl",
+    "version": "3.0.7-r0",
+    "kind": "source",
+    "normalized_version": "",
+    "cpe": ""
+   },
+   "normalized_version": "",
+   "arch": "x86_64",
+   "cpe": ""
+  },
+  "18": {
+   "id": "18",
+   "name": "libssl3",
+   "version": "3.0.7-r0",
+   "kind": "binary",
+   "source": {
+    "id": "15",
+    "name": "openssl",
+    "version": "3.0.7-r0",
+    "kind": "source",
+    "normalized_version": "",
+    "cpe": ""
+   },
+   "normalized_version": "",
+   "arch": "x86_64",
+   "cpe": ""
+  }
+ },
+ "distributions": {
+  "1": {
+   "id": "1",
+   "did": "alpine",
+   "name": "Alpine Linux",
+   "version": "3.17",
+   "version_code_name": "",
+   "version_id": "",
+   "arch": "",
+   "cpe": "",
+   "pretty_name": "Alpine Linux v3.17"
+  }
+ },
+ "repository": {},
+ "environments": {
+  "6": [
+   {
+    "package_db": "lib/apk/db/installed",
+    "introduced_in": "sha256:c158987b05517b6f2c5913f3acef1f2182a32345a304fe357e3ace5fadcad715",
+    "distribution_id": "1",
+    "repository_ids": null
+   }
+  ],
+  "16": [
+   {
+    "package_db": "lib/apk/db/installed",
+    "introduced_in": "sha256:c158987b05517b6f2c5913f3acef1f2182a32345a304fe357e3ace5fadcad715",
+    "distribution_id": "1",
+    "repository_ids": null
+   }
+  ],
+  "18": [
+   {
+    "package_db": "lib/apk/db/installed",
+    "introduced_in": "sha256:c158987b05517b6f2c5913f3acef1f2182a32345a304fe357e3ace5fadcad715",
+    "distribution_id": "1",
+    "repository_ids": null
+   }
+  ]
+ },
+ "vulnerabilities": {
+  "48104": {
+   "id": "48104",
+   "updater": "alpine-main-v3.17-updater",
+   "name": "CVE-2023-42363",
+   "description": "",
+   "issued": "0001-01-01T00:00:00Z",
+   "links": "https://security.alpinelinux.org/vuln/CVE-2023-42363",
+   "severity": "",
+   "normalized_severity": "Unknown",
+   "package": {
+    "id": "",
+    "name": "busybox",
+    "version": "",
+    "kind": "source",
+    "normalized_version": "",
+    "cpe": ""
+   },
+   "distribution": {
+    "id": "",
+    "did": "alpine",
+    "name": "Alpine Linux",
+    "version": "",
+    "version_code_name": "",
+    "version_id": "3.17",
+    "arch": "",
+    "cpe": "",
+    "pretty_name": "Alpine Linux v3.17"
+   },
+   "repository": {
+    "cpe": ""
+   },
+   "fixed_in_version": "1.35.0-r31"
+  },
+  "58965": {
+   "id": "58965",
+   "updater": "alpine-main-v3.17-updater",
+   "name": "CVE-2024-6119",
+   "description": "",
+   "issued": "0001-01-01T00:00:00Z",
+   "links": "https://security.alpinelinux.org/vuln/CVE-2024-6119",
+   "severity": "",
+   "normalized_severity": "Unknown",
+   "package": {
+    "id": "",
+    "name": "openssl",
+    "version": "",
+    "kind": "source",
+    "normalized_version": "",
+    "cpe": ""
+   },
+   "distribution": {
+    "id": "",
+    "did": "alpine",
+    "name": "Alpine Linux",
+    "version": "",
+    "version_code_name": "",
+    "version_id": "3.17",
+    "arch": "",
+    "cpe": "",
+    "pretty_name": "Alpine Linux v3.17"
+   },
+   "repository": {
+    "cpe": ""
+   },
+   "fixed_in_version": "3.0.15-r0"
+  },
+  "58621": {
+   "id": "58621",
+   "updater": "alpine-main-v3.17-updater",
+   "name": "CVE-2023-0464",
+   "description": "",
+   "issued": "0001-01-01T00:00:00Z",
+   "links": "https://security.alpinelinux.org/vuln/CVE-2023-0464",
+   "severity": "",
+   "normalized_severity": "Unknown",
+   "package": {
+    "id": "",
+    "name": "openssl",
+    "version": "",
+    "kind": "source",
+    "normalized_version": "",
+    "cpe": ""
+   },
+   "distribution": {
+    "id": "",
+    "did": "alpine",
+    "name": "Alpine Linux",
+    "version": "",
+    "version_code_name": "",
+    "version_id": "3.17",
+    "arch": "",
+    "cpe": "",
+    "pretty_name": "Alpine Linux v3.17"
+   },
+   "repository": {
+    "cpe": ""
+   },
+   "fixed_in_version": "3.0.8-r1"
+  }
+ },
+ "package_vulnerabilities": {
+  "18": [
+   "58621"
+  ],
+  "6": [
+   "48104"
+  ],
+  "16": [
+   "58965"
+  ]
+ },
+ "enrichments": {
+  "message/vnd.clair.map.vulnerability; enricher=clair.cvss schema=https://csrc.nist.gov/schema/nvd/feed/1.1/cvss-v3.x.json": [
+   {
+    "58965": [
+     {
+      "version": "3.1",
+      "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+      "attackVector": "NETWORK",
+      "attackComplexity": "LOW",
+      "privilegesRequired": "NONE",
+      "userInteraction": "NONE",
+      "scope": "UNCHANGED",
+      "confidentialityImpact": "NONE",
+      "integrityImpact": "NONE",
+      "availabilityImpact": "HIGH",
+      "baseScore": 7.5,
+      "baseSeverity": "HIGH"
+     }
+    ]
+   }
+  ]
+ }
+}

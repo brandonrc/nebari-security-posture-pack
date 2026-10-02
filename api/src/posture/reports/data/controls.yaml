@@ -1,0 +1,38 @@
+# NIST SP 800-53 rev5 control tagging (DESIGN §11). Consumed by posture.controls.
+version: 1
+titles:
+  RA-5: Vulnerability Monitoring and Scanning
+  SI-2: Flaw Remediation
+  SI-2(2): Flaw Remediation | Automated Flaw Remediation Status
+  AC-6: Least Privilege
+  AC-6(10): Least Privilege | Prohibit Non-privileged Users from Executing Privileged Functions
+  CM-7: Least Functionality
+  SC-7: Boundary Protection
+  SC-6: Resource Availability
+  CM-2: Baseline Configuration
+  CM-14: Signed Components
+  SI-13: Predictable Failure Prevention
+  IA-5: Authenticator Management
+  CM-6: Configuration Settings
+  SI-16: Memory Protection
+  AC-4: Information Flow Enforcement
+vulnerabilities:
+  default: [RA-5, SI-2]
+  fixable: [RA-5, SI-2, SI-2(2)]
+checks:
+  privileged: [AC-6, CM-7]
+  host-namespaces: [SC-7, CM-7]
+  host-path: [SC-7, CM-7]
+  run-as-root: [AC-6, CM-7]
+  privilege-escalation: [AC-6, CM-7]
+  added-capabilities: [AC-6, CM-7]
+  capabilities-not-dropped: [AC-6, CM-7]
+  writable-rootfs: [CM-6, CM-7]
+  no-resource-limits: [SC-6]
+  no-resource-requests: [SC-6]
+  mutable-tag: [CM-2, CM-14]
+  no-liveness-probe: [SI-13]
+  no-readiness-probe: [SI-13]
+  automount-sa-token: [AC-6(10), IA-5]
+  seccomp-unconfined: [CM-6, SI-16]
+  no-netpol: [SC-7, AC-4]
