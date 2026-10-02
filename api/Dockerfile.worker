@@ -35,12 +35,14 @@ RUN set -eux; \
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="security-posture-worker" \
       org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
+# skopeo for mirroring; pango/harfbuzz/fonts for WeasyPrint (SAR PDF from reports.autoGenerate)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends skopeo ca-certificates \
+      libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 10001 posture \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture \
- && mkdir -p /cache && chown 10001:10001 /cache
+ && mkdir -p /cache /data/reports && chown 10001:10001 /cache /data/reports
 COPY --from=tools /dl/trivy /dl/grype /dl/clairctl /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
 # Everything the tools write goes under /cache (PVC) or /tmp (emptyDir): the root fs

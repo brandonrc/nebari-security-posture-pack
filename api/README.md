@@ -86,6 +86,9 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `WORKER_HEALTH_PORT` | `9000` | worker | `/healthz` (`lastHeartbeatAgeSeconds`) |
 | `CACHE_DIR` | `/cache` (worker) `/tmp` (api) | worker | grype DB, trivy client cache, clairctl config, skopeo policy |
 | `CLUSTER_NAME` | `nebari` | both | default `systemName` |
+| `REPORTS_DIR` | `/data/reports` | both | report files `<id>.<ext>` (chart: PVC `persistence.reports`, shared by api + worker) |
+| `REPORTS_KEEP_PER_TYPE` | `50` | both | retention: newest N finished reports per type |
+| `REPORTS_AUTO_GENERATE` | empty | both | default for settings `reports.autoGenerate` (comma list of report types) |
 | `LOG_LEVEL` | `INFO` | both | logs are `key=value` lines on stdout; tokens are never logged |
 
 ## Module map (`src/posture/`)
@@ -96,7 +99,8 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `app_settings.py` | editable settings (single `settings` row) over env defaults: interval, rescan, exclusions, scanner toggles, parallelism, `systemName`, `organization`, `remediationSlaDays`, `reports.autoGenerate` |
 | `main.py` | FastAPI app, `/api/v1` routers, admin-gated `/api/v1/openapi.json` + `/api/v1/docs`, access log |
 | `auth.py` | Bearer / `NebariIdToken` / `IdToken*` cookie → JWKS-verified JWT → issuer check → groups → admin |
-| `routers/` | `health`, `me`, `summary`, `images`, `vulnerabilities`, `workloads` (+`/namespaces`), `checks`, `scans`, `scanners`, `settings`, `export`, `compliance` (`/compliance/controls` only) |
+| `routers/` | `health`, `me`, `summary`, `images`, `vulnerabilities`, `workloads` (+`/namespaces`), `checks`, `scans`, `scanners`, `settings`, `export`, `compliance` (`/compliance/controls`), `reports` (`/reports*`, `/compliance/stig`) |
+| `report_jobs.py` | report rows, generation off the event loop (`asyncio.to_thread(registry.generate)`), files under `REPORTS_DIR`, retention; used by the API background task and the worker's `reports.autoGenerate` |
 | `views.py` | shared queries and camelCase JSON shapes |
 | `db/` | SQLAlchemy 2 async models + engine; `alembic/` migrations (`0001` initial) |
 | `migrate.py` | `python -m posture.migrate` |

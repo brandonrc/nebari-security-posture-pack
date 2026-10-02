@@ -58,3 +58,7 @@ adminGate:
 nebariapp:
   enabled: true
   hostname: security.100-89-230-107.sslip.io
+
+# Generate every compliance report after each completed scan (grace demo).
+reports:
+  autoGenerate: [poam, stig-checklist, sar, oscal-ar, inventory, vuln-export]

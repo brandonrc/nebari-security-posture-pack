@@ -32,6 +32,21 @@ class SlaDays(CamelModel):
 class ReportsSettings(CamelModel):
     auto_generate: list[str] = Field(default_factory=list)
 
+    @field_validator("auto_generate")
+    @classmethod
+    def _known_types(cls, v: list[str]) -> list[str]:
+        from .reports.registry import REPORT_TYPES
+
+        known = {t["type"] for t in REPORT_TYPES}
+        out: list[str] = []
+        for t in v:
+            t = (t or "").strip()
+            if t and t not in known:
+                raise ValueError(f"unknown report type {t!r} (known: {', '.join(sorted(known))})")
+            if t and t not in out:
+                out.append(t)
+        return out
+
 
 class AppSettings(CamelModel):
     scan_interval_hours: float = Field(6, gt=0, le=24 * 30)
@@ -64,6 +79,7 @@ def defaults(env: Settings | None = None) -> AppSettings:
         scanners=ScannerToggles(trivy=env.trivy_enabled, grype=env.grype_enabled, clair=env.clair_enabled),
         parallelism=env.scan_parallelism,
         system_name=env.cluster_name,
+        reports=ReportsSettings(auto_generate=env.reports_auto_generate),
         admin_groups=sorted(env.admin_group_set),
     )
 

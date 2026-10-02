@@ -14,6 +14,11 @@ metadata:
     {{- include "security-posture.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
 spec:
   replicas: {{ .Values.api.replicas }}
+  {{- if .Values.persistence.enabled }}
+  # The reports PVC is ReadWriteOnce by default.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
@@ -77,9 +82,12 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: reports
+              mountPath: {{ .Values.reports.dir }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- include "security-posture.reportsVolume" . | nindent 8 }}
       {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

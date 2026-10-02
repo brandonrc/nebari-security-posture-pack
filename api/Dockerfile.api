@@ -24,7 +24,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
       libharfbuzz-subset0 fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
-RUN groupadd --gid 10001 posture && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture
+RUN groupadd --gid 10001 posture && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture \
+ && mkdir -p /data/reports && chown 10001:10001 /data/reports
 COPY --from=builder /opt/venv /opt/venv
 USER 10001:10001
 EXPOSE 8000

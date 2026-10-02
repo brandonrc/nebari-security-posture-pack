@@ -155,3 +155,22 @@ def test_settings_parsing(monkeypatch):
     assert s.excluded_namespaces == []
     assert s.rewrite_map == {"localhost:32000": "registry.container-registry.svc.cluster.local:5000"}
     assert s.database_url == "postgresql+asyncpg://u:p@h/db"
+
+
+def test_report_routes_are_admin_only():
+    """The real app mounts /reports* and /compliance/stig behind require_admin."""
+    _, _, auth = make_client()
+    from posture.main import create_app
+
+    set_authenticator(auth)
+    client = TestClient(create_app())
+    user = {"Authorization": f"Bearer {token(groups=['/users'])}"}
+    for method, path in [("GET", "/api/v1/reports/types"), ("GET", "/api/v1/reports"),
+                         ("POST", "/api/v1/reports"), ("GET", "/api/v1/reports/x"),
+                         ("GET", "/api/v1/reports/x/download"), ("DELETE", "/api/v1/reports/x"),
+                         ("GET", "/api/v1/compliance/stig")]:
+        assert client.request(method, path).status_code == 401, path
+        r = client.request(method, path, headers=user, json={"type": "poam", "format": "csv"})
+        assert r.status_code == 403 and r.json() == {"detail": "admin group required"}, path
+    admin = {"Authorization": f"Bearer {token()}"}
+    assert client.get("/api/v1/reports/types", headers=admin).status_code == 200

@@ -9,13 +9,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.models import PostureResultRow
 from ..db.session import get_session
 from ..posture_checks import CHECKS, CHECKS_BY_ID, CheckDef
+from ..reports.stig import rules_for_check
 from ..views import latest_done_scan
 
 router = APIRouter(tags=["checks"])
 
 
+def stig_ref(check_id: str) -> dict[str, Any] | None:
+    """First Kubernetes STIG rule evidenced by the check (SRG rules as fallback)."""
+    rules = sorted(rules_for_check(check_id), key=lambda r: r.get("benchmark") != "kubernetes")
+    if not rules:
+        return None
+    r = rules[0]
+    return {"vulnId": r["vulnId"], "ruleId": r["ruleId"], "cat": r.get("cat"), "benchmark": r.get("benchmark"),
+            "all": [{"vulnId": x["vulnId"], "ruleId": x["ruleId"], "cat": x.get("cat"),
+                     "benchmark": x.get("benchmark")} for x in rules]}
+
+
 def check_dict(c: CheckDef, passed: int = 0, failed: int = 0) -> dict[str, Any]:
-    return {"id": c.id, "title": c.title, "severity": c.severity, "category": c.category, "scope": c.scope,
+    return {"stig": stig_ref(c.id),"id": c.id, "title": c.title, "severity": c.severity, "category": c.category, "scope": c.scope,
             "description": c.description, "remediation": c.remediation, "controls": c.controls,
             "passed": passed, "failed": failed}
 

@@ -51,3 +51,15 @@
   Additional env vars beyond §5: `OIDC_AUDIENCE`, `TRIVY_ENABLED`, `GRYPE_ENABLED`,
   `CLAIR_ENABLED`, `MIRROR_REWRITE`, `MIRROR_ALL_PLATFORMS`, `REGISTRY_AUTH_FILE`,
   `GRYPE_DB_UPDATE_HOURS`, `SCAN_ON_START`, `WORKER_HEALTH_PORT`, `CLUSTER_NAME`.
+- 2026-10-02 (integration): Report bytes live on disk (`REPORTS_DIR=/data/reports/<id>.<ext>`,
+  PVC `persistence.reports`, 2Gi), metadata in `reports`. `POST /reports` validates
+  (unknown type/format/scope/`poamVariant` → 422; PDF without WeasyPrint libs → 503; no
+  completed scan → 409) then generates in a FastAPI BackgroundTask; generation failures
+  become `status: failed` rows with `error`. Download of a row whose file is gone → 410.
+  The worker generates `reports.autoGenerate` (cluster scope, default formats poam=xlsx,
+  stig-checklist=cklb, sar=pdf, oscal-ar=json, inventory=xlsx, vuln-export=csv,
+  `createdBy: "auto"`) after each completed scan, so it mounts the same PVC; with
+  ReadWriteOnce the worker has a required podAffinity to the api pod and the api uses
+  `strategy: Recreate`. Retention: newest 50 finished reports per type
+  (`REPORTS_KEEP_PER_TYPE`). `GET /reports/types` adds `defaultFormat`; `/checks` items carry
+  `stig: {vulnId, ruleId, cat, benchmark, all[]}`; `/compliance/stig` rows add `checkId`.

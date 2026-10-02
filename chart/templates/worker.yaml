@@ -70,6 +70,8 @@ spec:
               mountPath: /cache
             - name: tmp
               mountPath: /tmp
+            - name: reports
+              mountPath: {{ .Values.reports.dir }}
             {{- if .Values.registryAuth.existingSecret }}
             - name: registry-auth
               mountPath: /etc/posture/docker
@@ -85,6 +87,7 @@ spec:
           {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- include "security-posture.reportsVolume" . | nindent 8 }}
         {{- if .Values.registryAuth.existingSecret }}
         - name: registry-auth
           secret:
@@ -101,7 +104,16 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.worker.affinity }}
+      {{- if .Values.worker.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.worker.affinity | nindent 8 }}
+      {{- else if and .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
+      # Shares the ReadWriteOnce reports PVC with the api: same node.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 18 }}
       {{- end }}

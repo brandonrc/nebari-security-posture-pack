@@ -3,12 +3,13 @@
 {{- if .Values.scanner.trivy.enabled }}
 {{- $pvcs = append $pvcs (dict "component" "trivy" "size" .Values.persistence.trivy) }}
 {{- end }}
+{{- $pvcs = append $pvcs (dict "component" "api" "size" .Values.persistence.reports "name" (printf "%s-reports" (include "security-posture.fullname" .))) }}
 {{- range $pvcs }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "security-posture.componentName" (dict "ctx" $ "component" .component) }}-cache
+  name: {{ .name | default (printf "%s-cache" (include "security-posture.componentName" (dict "ctx" $ "component" .component))) }}
   namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "security-posture.componentLabels" (dict "ctx" $ "component" .component) | nindent 4 }}

@@ -65,12 +65,18 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = 5
     scan_on_start: bool = True
 
+    # reports (DESIGN §11): bytes on disk, metadata in the `reports` table
+    reports_dir: str = "/data/reports"
+    reports_keep_per_type: int = 50
+    reports_auto_generate: CsvList = []  # default for settings `reports.autoGenerate`
+
     # misc
     cache_dir: str = "/cache"
     log_level: str = "INFO"
     cluster_name: str = "nebari"
 
-    @field_validator("oidc_issuers", "admin_groups", "excluded_namespaces", "mirror_rewrite", mode="before")
+    @field_validator("oidc_issuers", "admin_groups", "excluded_namespaces", "mirror_rewrite", "reports_auto_generate",
+                     mode="before")
     @classmethod
     def _csv(cls, v: object) -> list[str]:
         return _split(v)

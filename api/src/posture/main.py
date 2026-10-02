@@ -12,7 +12,8 @@ from fastapi.responses import JSONResponse
 from . import __version__
 from .auth import current_user, get_authenticator, require_admin
 from .config import get_settings
-from .db.session import dispose_engine
+from . import report_jobs
+from .db.session import dispose_engine, get_sessionmaker
 from .logs import get_logger, setup_logging
 from .routers import (
     checks,
@@ -21,6 +22,7 @@ from .routers import (
     health,
     images,
     me,
+    reports,
     scanners,
     scans,
     settings,
@@ -38,7 +40,11 @@ async def lifespan(app: FastAPI):
     s = get_settings()
     setup_logging(s.log_level)
     get_authenticator()  # logs a warning when AUTH_MODE=disabled
-    log.info("api.start", version=__version__, auth_mode=s.auth_mode)
+    log.info("api.start", version=__version__, auth_mode=s.auth_mode, reports_dir=s.reports_dir)
+    try:
+        await report_jobs.fail_interrupted(get_sessionmaker())
+    except Exception as e:  # noqa: BLE001  (DB may still be migrating; not fatal)
+        log.warning("api.reports_recover_failed", error=str(e))
     yield
     await dispose_engine()
 
@@ -79,7 +85,8 @@ def create_app() -> FastAPI:
 
     admin = APIRouter(prefix=PREFIX, dependencies=[Depends(require_admin)])
     for r in (summary.router, images.router, vulnerabilities.router, workloads.router, workloads.ns_router,
-              checks.router, scans.router, scanners.router, settings.router, export.router, compliance.router):
+              checks.router, scans.router, scanners.router, settings.router, export.router, compliance.router,
+              reports.router):
         admin.include_router(r)
 
     @admin.get("/openapi.json", include_in_schema=False)

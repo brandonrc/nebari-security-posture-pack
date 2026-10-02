@@ -154,6 +154,20 @@ registryAuth:
 
 logLevel: info
 
+# Compliance reports (DESIGN §11).
+reports:
+  # Where report files are written (PVC persistence.reports when persistence is
+  # enabled, else an emptyDir - files are then lost on restart and reports the
+  # worker generates are not downloadable from the api).
+  dir: /data/reports
+  # Retention: newest N finished reports per type.
+  keepPerType: 50
+  # Default for settings `reports.autoGenerate` (editable in the UI): report
+  # types generated after every completed scan, cluster scope, default format
+  # (poam=xlsx, stig-checklist=cklb, sar=pdf, oscal-ar=json, inventory=xlsx,
+  # vuln-export=csv).
+  autoGenerate: []
+
 # =============================================================================
 # Database
 # =============================================================================
@@ -207,6 +221,11 @@ persistence:
   # Trivy server vulnerability DB cache.
   trivy: 10Gi
   postgres: 10Gi
+  # Generated compliance reports (bytes; metadata is in Postgres). Mounted at
+  # reports.dir in the api AND the worker (reports.autoGenerate). With
+  # ReadWriteOnce the worker gets a required podAffinity to the api pod so both
+  # land on the node that has the volume (unless worker.affinity is set).
+  reports: 2Gi
 
 # =============================================================================
 # Components

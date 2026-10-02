@@ -307,6 +307,12 @@ Environment shared by api and worker (DESIGN.md section 5).
   value: {{ join "," .Values.scanner.excludedNamespaces | quote }}
 - name: LOG_LEVEL
   value: {{ .Values.logLevel | quote }}
+- name: REPORTS_DIR
+  value: {{ .Values.reports.dir | quote }}
+- name: REPORTS_KEEP_PER_TYPE
+  value: {{ .Values.reports.keepPerType | quote }}
+- name: REPORTS_AUTO_GENERATE
+  value: {{ join "," (.Values.reports.autoGenerate | default list) | quote }}
 - name: POD_NAMESPACE
   valueFrom:
     fieldRef:
@@ -324,4 +330,17 @@ NetworkPolicy pod peer. Usage: include "security-posture.np.peer" (dict "ctx" $ 
 - podSelector:
     matchLabels:
       {{- include "security-posture.componentSelectorLabels" . | nindent 6 }}
+{{- end }}
+
+{{/*
+Reports volume (PVC shared by api + worker, or emptyDir without persistence).
+*/}}
+{{- define "security-posture.reportsVolume" -}}
+- name: reports
+  {{- if .Values.persistence.enabled }}
+  persistentVolumeClaim:
+    claimName: {{ include "security-posture.fullname" . }}-reports
+  {{- else }}
+  emptyDir: {}
+  {{- end }}
 {{- end }}

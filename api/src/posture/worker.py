@@ -25,7 +25,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from . import app_settings
+from . import app_settings, report_jobs
 from .aggregate import ImageInfo, aggregate
 from .analysis import analyze
 from .config import Settings, get_settings
@@ -264,6 +264,7 @@ class Worker:
         ctx.add_log(f"scan started (scanners: {', '.join(enabled) or 'none'})")
         log.info("scan.started", scan_id=scan_id, scanners=",".join(enabled), force=force)
         progress = asyncio.create_task(self._progress_loop(ctx))
+        completed = False
         try:
             try:
                 inv = await self.inventory_fn(settings.excluded_namespaces)
@@ -304,6 +305,7 @@ class Worker:
                 return
             await self._persist_snapshot(ctx, inv, key_to_id)
             await self._finish(ctx, "done")
+            completed = True
         except asyncio.CancelledError:
             await self._finish(ctx, "failed", error="worker shutting down")
             raise
@@ -312,6 +314,28 @@ class Worker:
             await self._finish(ctx, "failed", error=str(e)[:2000])
         finally:
             progress.cancel()
+        if completed and settings.reports.auto_generate:
+            await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
+
+    async def auto_generate_reports(self, scan_id: int, types: list[str]) -> list[str]:
+        """Settings `reports.autoGenerate`: one cluster-scope report per type in its default format.
+        Best effort: a failing report is recorded as a failed row and never fails the scan."""
+        statuses: list[str] = []
+        for rtype in types:
+            try:
+                fmt, kind, name = report_jobs.validate_request(rtype, None, None, None)
+                async with self.sm() as s, s.begin():
+                    row = await report_jobs.create_row(s, report_type=rtype, fmt=fmt, scope_kind=kind,
+                                                       scope_name=name, scan_id=scan_id, options={},
+                                                       created_by="auto")
+                    rid = row.id
+                status = await report_jobs.run_report(self.sm, rid)
+            except Exception:  # noqa: BLE001
+                log.exception("report.auto_failed", scan_id=scan_id, type=rtype)
+                status = "failed"
+            statuses.append(status)
+            log.info("report.auto", scan_id=scan_id, type=rtype, status=status)
+        return statuses
 
     async def _finish(self, ctx: ScanContext, status: str, error: str | None = None) -> None:
         async with self.sm() as s, s.begin():
