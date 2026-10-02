@@ -7,3 +7,6 @@ chart/charts/
 chart/Chart.lock
 .env
 *.local.yaml
+
+# grace sample outputs (generated, not committed)
+deploy/grace/sample-reports/
