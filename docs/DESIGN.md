@@ -277,3 +277,64 @@ nebariapp: {...as §3}
 ## 10. Non-goals for v0.1
 imagePullSecrets discovery, SBOM storage, policy enforcement/admission, multi-cluster,
 notifications. Document these in README "Limitations".
+
+## 11. Compliance reports (ATO / cATO support)
+
+Goal: turn each scan snapshot into the artifacts an ISSO/ISSM uploads to eMASS or hands to
+an assessor, so continuous scanning feeds continuous ATO. No manual re-keying.
+
+### Report types
+
+| type | format(s) | content |
+|---|---|---|
+| `poam` | `xlsx`, `csv` | **Plan of Action & Milestones** in the eMASS POA&M import column layout (see §11.3). One row per consensus finding per image (optionally rolled up per CVE), with NIST 800-53 control, scheduled completion from severity SLA, source scanner(s), status `Ongoing`, raw + residual severity, mitigation text (fixed version). Posture check failures are rows too (control CM-6/CM-7/AC-6). |
+| `stig-checklist` | `ckl` (STIG Viewer 2.x XML), `cklb` (STIG Viewer 3 JSON) | Posture checks mapped to **Kubernetes STIG** (V2R2) / **Container Platform SRG** vuln IDs via a mapping table `reports/data/stig_mapping.yaml` (checkId → `{vulnId, ruleId, ruleTitle, severity(cat), stigId, benchmark}`). Each rule gets `NotAFinding` / `Open` / `Not_Reviewed` with finding details listing offending workloads, plus comments. Scope: cluster, namespace or workload. Unmapped STIG rules are `Not_Reviewed` so the checklist is complete and importable. |
+| `sar` | `pdf`, `html` | **Security Assessment Report** style narrative: system name/date/scope, methodology (three scanners, consensus, scoring), overall score/grade and trend, inventory (namespaces, workloads, images with digests), findings by severity with agreement, posture results, scanner versions and DB freshness, limitations, appendix tables. Printable, Nebari-branded (logo, tokens). |
+| `oscal-ar` | `json` | **OSCAL Assessment Results** 1.1.x: `assessment-results` with one `result` per scan, `observations` per finding (subjects = image/workload), `risks` with severity & deadline, `findings` tied to control ids (`ra-5`, `si-2`, `cm-6`, …), `local-definitions` listing scanner tools as components. Validated against the OSCAL JSON schema in tests. |
+| `inventory` | `xlsx`, `csv` | **Hardware/Software inventory** (eMASS asset list style): image, digest, registry, version/tag, namespaces, workloads, pack, running count, base OS (from scanner metadata), scanner coverage. |
+| `vuln-export` | `csv`, `json`, `cyclonedx-vex` (stretch) | Flat findings export for ingest into Nessus/ACAS-style trackers or Iron Bank VAT justification sheets: one row per (image, CVE, package) with all three scanners' severities. |
+
+### NIST 800-53 control tagging
+Every finding carries `controls[]`: vulnerabilities → `RA-5`, `SI-2` (+ `SI-2(2)` when fix
+available). Posture checks: privileged/root/privilege-escalation/capabilities → `AC-6`,
+`CM-7`; host namespaces/hostPath → `SC-7`, `CM-7`; resource limits → `SC-6`; mutable tag →
+`CM-2`, `CM-14`; probes → `SI-13`; automount SA token → `AC-6(10)`, `IA-5`; seccomp →
+`CM-6`, `SI-16`; no NetworkPolicy → `SC-7`, `AC-4`. Mapping lives in
+`reports/data/controls.yaml` and is surfaced in the API (`controls` field on findings and
+checks) and UI.
+
+### Severity → remediation SLA (configurable in settings `remediationSlaDays`)
+critical 15, high 30, medium 90, low 180 days from first-seen. POA&M scheduled completion =
+firstSeenAt + SLA. Overdue rows are flagged; `/summary` carries `slaOverdue:{critical,high,...}`.
+
+### API
+| Method/Path | Returns |
+|---|---|
+| `GET /reports/types` | catalogue `[{type,formats[],scopes[],description}]` |
+| `GET /reports?scanId=&type=` | `[{id,type,format,scope:{kind:cluster|namespace|workload,name?},scanId,status(queued|running|done|failed),createdAt,createdBy,sizeBytes,filename,error?}]` |
+| `POST /reports` body `{type,format,scope?,scanId? (default latest done),options?:{rollupByCve?:bool,systemName?:string,includeSystemNamespaces?:bool}}` | 202 + report row; generation runs in the API process via background task (reports are seconds, not minutes) |
+| `GET /reports/{id}` | row; `GET /reports/{id}/download` streams the file with correct content-type and `Content-Disposition` |
+| `DELETE /reports/{id}` | delete |
+| `GET /compliance/controls` | control coverage summary `[{control,title,findingsOpen,checksFailed,status}]` |
+| `GET /compliance/stig` | STIG rule status rollup for the latest scan `[{vulnId,ruleId,title,cat,status,offenders}]` |
+
+Settings additions: `systemName` (default cluster name), `organization`, `remediationSlaDays`,
+`reports.autoGenerate: [types…]` (generated automatically after every completed scan, default `[]`).
+
+Storage: `reports` table (metadata) + file bytes on the worker/api PVC under `/data/reports/<id>.<ext>`
+(or bytea column if ≤ 20 MB; pick one and document). Retention: keep last 50 per type.
+
+### UI
+Route `/reports`: table of generated reports (type, format, scope, scan, created, size,
+download/delete), "Generate report" dialog (type → formats → scope → options), and a
+**Compliance** tab/route `/compliance` with: NIST control coverage table (open findings per
+control), STIG rollup (CAT I/II/III open counts, per-rule status with offenders), SLA overdue
+tiles. Findings tables show `controls` chips; check detail shows the STIG rule id.
+
+### Implementation split
+`api/src/posture/reports/` is a pure package: `generate(report_type, fmt, snapshot:
+ReportSnapshot, options) -> (bytes, filename, content_type)` where `ReportSnapshot` is a
+pydantic model (system/org/scan metadata, images, findings, workloads, posture results,
+scanner status) built by `reports/snapshot.py` from the DB. Generators: `poam.py` (openpyxl),
+`stig.py` (ckl XML via `xml.etree`, cklb JSON), `sar.py` (Jinja2 HTML → PDF via WeasyPrint),
+`oscal.py`, `inventory.py`, `vuln_export.py`. Data: `data/stig_mapping.yaml`, `data/controls.yaml`.
