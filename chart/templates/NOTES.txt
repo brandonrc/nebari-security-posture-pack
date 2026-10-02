@@ -1,0 +1,43 @@
+{{ include "security-posture.fullname" . }} (Security Posture pack {{ .Chart.AppVersion }}) has been deployed to namespace {{ .Release.Namespace }}.
+
+Components: ui, api, worker{{ if .Values.scanner.trivy.enabled }}, trivy{{ end }}{{ if .Values.scanner.clair.enabled }}, clair{{ end }}{{ if .Values.postgresql.enabled }}, postgres{{ end }}
+Enabled scanners: {{ include "security-posture.enabledScanners" . }}
+Admin groups:     {{ include "security-posture.adminGroups" . }}
+
+{{- if .Values.nebariapp.enabled }}
+
+NebariApp is ENABLED. The nebari-operator will create the HTTPRoute, TLS
+certificate and Keycloak client for:
+  https://{{ tpl .Values.nebariapp.hostname . | trimAll "\"" }}
+
+IMPORTANT: the namespace must carry the label nebari.dev/managed=true or the
+operator silently ignores the NebariApp:
+  kubectl label namespace {{ .Release.Namespace }} nebari.dev/managed=true --overwrite
+
+Check status (expect Ready, AuthReady, RoutingReady):
+  kubectl get nebariapp {{ include "security-posture.fullname" . }} -n {{ .Release.Namespace }} -o wide
+{{- if .Values.adminGate.securityPolicy.enabled }}
+
+Admin gate: chart-rendered SecurityPolicy {{ include "security-posture.fullname" . }}-admin-gate
+(enforceAtGateway rendered false on the NebariApp).
+{{- end }}
+{{- else }}
+
+NebariApp is DISABLED. To reach the UI locally:
+  kubectl port-forward svc/{{ include "security-posture.componentName" (dict "ctx" . "component" "ui") }} 8080:{{ .Values.ui.service.port }} -n {{ .Release.Namespace }}
+  open http://localhost:8080
+{{- if eq .Values.auth.mode "oidc" }}
+The API requires a Keycloak token with an admin group; without the gateway
+there is no NebariIdToken cookie. For local development only, set
+auth.mode=disabled.
+{{- end }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "oidc") (not .Values.auth.issuers) }}
+
+WARNING: auth.issuers is empty - the API will reject every token. Set it to
+the Keycloak realm issuer URL(s) (internal and external).
+{{- end }}
+{{- if eq .Values.auth.mode "disabled" }}
+
+WARNING: auth.mode=disabled - the API performs NO authentication. Development only.
+{{- end }}

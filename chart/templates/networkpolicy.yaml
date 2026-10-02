@@ -1,0 +1,127 @@
+{{/*
+  Ingress-only policies (egress stays open: registries, Keycloak JWKS,
+  vulnerability DB feeds, the Kubernetes API).
+    api      <- ui, worker               :8000
+    postgres <- api, worker, clair       :5432
+    trivy    <- worker                   :4954
+    clair    <- worker                   :6060, :8089
+    ui       <- gatewayNamespaces + uiAllowedNamespaces (pod port)
+  Kubelet probes are not subject to these policies on common CNIs.
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "api") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "ui") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker") | nindent 8 }}
+      ports:
+        - port: 8000
+          protocol: TCP
+{{- if .Values.postgresql.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "postgres") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "api") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "clair") | nindent 8 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- end }}
+{{- if .Values.scanner.trivy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "trivy") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "trivy") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker") | nindent 8 }}
+      ports:
+        - port: 4954
+          protocol: TCP
+{{- end }}
+{{- if .Values.scanner.clair.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "clair") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "clair") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker") | nindent 8 }}
+      ports:
+        - port: 6060
+          protocol: TCP
+        - port: 8089
+          protocol: TCP
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "ui") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "ui") | nindent 6 }}
+  policyTypes: [Ingress]
+  {{- /* `| default list`: an explicit null in an overlay makes concat panic. */}}
+  {{- $uiFrom := concat (.Values.networkPolicy.gatewayNamespaces | default list) (.Values.networkPolicy.uiAllowedNamespaces | default list) | uniq }}
+  {{- if not $uiFrom }}
+  {{- fail "networkPolicy.enabled needs networkPolicy.gatewayNamespaces (an empty `from` would allow all ingress to the ui)" }}
+  {{- end }}
+  ingress:
+    - from:
+        {{- range $uiFrom }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+      ports:
+        # Pod port, not Service port: policies match after DNAT.
+        - port: {{ .Values.ui.containerPort }}
+          protocol: TCP
+{{- end }}

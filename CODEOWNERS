@@ -1,0 +1,6 @@
+# Default owners for everything in the repo.
+* @geraci
+
+# Helm chart and deployment tooling
+/chart/  @geraci
+/deploy/ @geraci

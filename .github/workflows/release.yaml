@@ -1,0 +1,30 @@
+name: Release Chart
+
+# Releases the chart via the shared reusable workflow in nebari-dev/.github.
+# On a chart/Chart.yaml version bump it pins the three first-party image tags
+# to the release commit's sha, packages the chart, creates a GitHub Release,
+# and opens a PR in nebari-dev/helm-repository (published to
+# quay.io/nebari/charts).
+#
+# Only works for official packs in the nebari-dev org (NEBARI_HELM_REPO_TOKEN
+# and the central helm-repository). build-images.yaml runs on the same bump so
+# the pinned sha-<short> tags exist.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "chart/Chart.yaml"
+
+jobs:
+  release:
+    uses: nebari-dev/.github/.github/workflows/pack-release.yaml@v1
+    with:
+      chart-path: chart
+      chart-name: nebari-security-posture-pack
+      tag-paths: |
+        images.api.tag
+        images.worker.tag
+        images.ui.tag
+    secrets:
+      NEBARI_HELM_REPO_TOKEN: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}

@@ -1,0 +1,406 @@
+# Default values for nebari-security-posture-pack.
+#
+# Contract: docs/DESIGN.md (sections 3, 5, 8). Every component runs in the
+# release namespace. The namespace MUST carry `nebari.dev/managed: "true"`
+# when nebariapp.enabled is true or the nebari-operator ignores the NebariApp.
+#
+# This file contains NO secrets. Database credentials are generated into
+# Secret <fullname>-db on first install (and kept across upgrades), or read
+# from an existing Secret you name.
+
+# =============================================================================
+# Images
+# =============================================================================
+# First-party images (api, worker, ui) are built from this repo. Third-party
+# images are pinned. A non-empty `digest` (sha256:...) wins over `tag`.
+images:
+  api:
+    repository: quay.io/nebari/nebari-security-posture-pack-api
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  worker:
+    # api image + trivy, grype, clairctl and skopeo binaries.
+    repository: quay.io/nebari/nebari-security-posture-pack-worker
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  ui:
+    repository: quay.io/nebari/nebari-security-posture-pack-ui
+    tag: "0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  trivy:
+    repository: aquasec/trivy
+    tag: "0.75.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  clair:
+    repository: quay.io/projectquay/clair
+    tag: "4.9.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  postgres:
+    # Also used for the wait-for-db init containers (pg_isready).
+    repository: postgres
+    tag: "16-alpine"
+    digest: ""
+    pullPolicy: IfNotPresent
+
+# =============================================================================
+# Admin gating
+# =============================================================================
+# Keycloak groups allowed to use the pack. Feeds all three gating layers:
+#   1. nebariapp.auth.groups (gateway enforcement on operators that support it)
+#   2. the optional chart-rendered SecurityPolicy (adminGate.securityPolicy)
+#   3. ADMIN_GROUPS for the API's own JWT verification
+# A leading "/" is ignored when matching (NIC's realm mapper emits "/group",
+# grace's operator mapper emits "group"); the SecurityPolicy accepts both.
+adminGroups:
+  - admin
+
+adminGate:
+  securityPolicy:
+    # Render an Envoy Gateway SecurityPolicy (OIDC + JWT + authorization
+    # default Deny, allow on the `groups` claim) targeting the HTTPRoute the
+    # operator creates for the NebariApp (<fullname>-route). Use this on
+    # upstream operator builds that only use auth.groups for landing-page
+    # visibility. When enabled, the NebariApp's auth.enforceAtGateway is
+    # rendered false automatically so the route carries exactly one policy;
+    # the operator still provisions the Keycloak client (provisionClient).
+    # Requires nebariapp.enabled.
+    enabled: false
+    # Token issuer as stamped into the `iss` claim (public Keycloak URL).
+    # Also used as oidc.provider.issuer (EG >= 1.9 requires https there).
+    externalIssuer: https://grace.possum-fujita.ts.net:8443/auth/realms/nebari
+    # In-cluster Keycloak realm URL, used for the back-channel token and
+    # JWKS endpoints (Envoy may not resolve the public FQDN).
+    internalIssuer: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
+    # OIDC callback path; must match nebariapp.auth.redirectURI.
+    redirectPath: /oauth2/callback
+    logoutPath: /logout
+    # Cookie holding the ID token (what the operator's policy uses, and what
+    # the API reads).
+    idTokenCookie: NebariIdToken
+    # Override the generated client id (default "<namespace>-<fullname>",
+    # the operator's naming).
+    clientID: ""
+    # Override the client secret Secret (default "<fullname>-oidc-client",
+    # created by the operator when nebariapp.auth.provisionClient is true).
+    clientSecretName: ""
+    # Fields that need a newer Envoy Gateway than grace runs (strict decoding
+    # rejects unknown fields). Enable on EG >= 1.5:
+    #   endSessionEndpoint    - Keycloak logout on /logout
+    #   passThroughAuthHeader - let `Authorization: Bearer` requests skip the
+    #                           OIDC redirect and go straight to JWT checks
+    endSessionEndpoint: false
+    passThroughAuthHeader: false
+
+# =============================================================================
+# API authentication (layer 3)
+# =============================================================================
+auth:
+  # oidc: verify JWT signature/exp/iss + admin group on every request.
+  # disabled: no auth at all; local development ONLY.
+  mode: oidc
+  # JWKS endpoint used to verify token signatures (in-cluster URL).
+  jwksUrl: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari/protocol/openid-connect/certs
+  # Accepted `iss` values (list both internal and external issuers). REQUIRED
+  # for mode=oidc: with an empty list the API rejects every token.
+  issuers: []
+
+# =============================================================================
+# Scanning
+# =============================================================================
+scanner:
+  # Images scanned in parallel (each image runs its three scanners concurrently).
+  parallelism: 3
+  # Per-scanner, per-image timeout.
+  timeoutSeconds: 600
+  # Scheduled scan interval.
+  intervalHours: 6
+  # Skip re-scanning a digest scanned more recently than this (unless forced).
+  rescanAfterHours: 24
+  # Namespaces never inventoried (kube-system IS scanned by default).
+  excludedNamespaces: []
+  trivy:
+    # Deploys the trivy server (Deployment + PVC + Service).
+    enabled: true
+  grype:
+    # Grype runs inside the worker; its DB lives on the worker PVC.
+    enabled: true
+  clair:
+    # Deploys Clair in combo mode (uses Postgres database `clair`).
+    enabled: true
+  mirror:
+    # skopeo-copy each digest into an in-cluster registry before scanning so
+    # all three scanners see identical bytes and upstreams are pulled once.
+    enabled: true
+    registry: registry.container-registry.svc.cluster.local:5000
+    # Plain-HTTP registry.
+    insecure: true
+    # Registry host rewrites applied to image refs before pulling (e.g. the
+    # node-local alias of the in-cluster registry). Rendered as
+    # MIRROR_REWRITE="src=dst,...".
+    rewrite:
+      "localhost:32000": registry.container-registry.svc.cluster.local:5000
+
+# Private registry credentials (optional). Name a kubernetes.io/dockerconfigjson
+# Secret in the release namespace; it is mounted into the worker at
+# /etc/posture/docker/config.json (DOCKER_CONFIG / REGISTRY_AUTH_FILE point at
+# it). Pod imagePullSecrets are NOT discovered (v0.1 limitation).
+registryAuth:
+  existingSecret: ""
+
+logLevel: info
+
+# =============================================================================
+# Database
+# =============================================================================
+database:
+  # SQLAlchemy URL scheme used to build DATABASE_URL (the api is async and
+  # uses asyncpg; plain "postgresql" is normalised to asyncpg by the app).
+  driver: postgresql+asyncpg
+  # How long wait-for-db init containers wait for Postgres.
+  waitTimeoutSeconds: 300
+
+# Bundled Postgres (StatefulSet, plain postgres image - no Bitnami).
+postgresql:
+  enabled: true
+  # Existing Secret with keys `password` (app user) and `postgres-password`
+  # (superuser). Empty: the chart generates <fullname>-db once and keeps it.
+  existingSecret: ""
+  auth:
+    username: posture
+    database: posture
+    # Second database owned by the same user, used by Clair.
+    clairDatabase: clair
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 2Gi }
+
+# External Postgres, used when postgresql.enabled is false. Both databases
+# must exist and be owned by `user` (Clair needs CREATE on its database and
+# the trusted `uuid-ossp` extension).
+externalDatabase:
+  host: ""
+  port: 5432
+  user: posture
+  database: posture
+  clairDatabase: clair
+  sslmode: require
+  # Secret holding the password (required when postgresql.enabled is false).
+  existingSecret: ""
+  passwordKey: password
+
+# =============================================================================
+# Persistence
+# =============================================================================
+persistence:
+  # false: use emptyDir everywhere (scanner DBs re-download on every restart).
+  enabled: true
+  # "" = cluster default StorageClass.
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  # Worker cache: grype DB, skopeo scratch, clairctl state.
+  worker: 20Gi
+  # Trivy server vulnerability DB cache.
+  trivy: 10Gi
+  postgres: 10Gi
+
+# =============================================================================
+# Components
+# =============================================================================
+api:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+worker:
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "4", memory: 6Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  # Extra env (list of EnvVar) appended to the worker container.
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+ui:
+  replicas: 1
+  # Port nginx listens on inside the container (unprivileged; also passed as
+  # NGINX_PORT). The Service always exposes port 80.
+  containerPort: 8080
+  service:
+    port: 80
+  # Window title passed in /config.json.
+  title: Security Posture
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    fsGroup: 101
+    seccompProfile: { type: RuntimeDefault }
+  # nginx writes its config/pid/cache at startup, so the root filesystem is
+  # writable by default; emptyDirs below cover the usual scratch paths.
+  readOnlyRootFilesystem: false
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+trivy:
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "2", memory: 4Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+clair:
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "2", memory: 4Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile: { type: RuntimeDefault }
+  # Clair log level (debug|info|warn|error).
+  logLevel: info
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+postgres:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70        # `postgres` in the alpine image
+    runAsGroup: 70
+    fsGroup: 70
+    seccompProfile: { type: RuntimeDefault }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Container-level security context applied to every container.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+serviceAccount:
+  # ServiceAccount for api + worker, bound to the read-only ClusterRole.
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  # ClusterRole + ClusterRoleBinding: get/list/watch on workloads, pods,
+  # namespaces, nodes, networkpolicies, serviceaccounts and NebariApps.
+  # No Secret access.
+  create: true
+
+# =============================================================================
+# NetworkPolicy
+# =============================================================================
+# api <- ui, worker | postgres <- api, worker, clair | trivy, clair <- worker
+# ui <- gatewayNamespaces + uiAllowedNamespaces. Egress is unrestricted.
+networkPolicy:
+  enabled: true
+  # Namespace(s) running the Envoy Gateway data plane.
+  gatewayNamespaces:
+    - envoy-gateway-system
+  # Extra namespaces allowed to reach the ui directly (e.g. the landing-page
+  # health prober).
+  uiAllowedNamespaces: []
+
+# =============================================================================
+# Nebari Integration
+# =============================================================================
+# NebariApp CR rendered through the nebari-app library chart. String values
+# containing "{{" are tpl-expanded and MUST render to valid JSON (hence the
+# `| toJson`). Requires the namespace label nebari.dev/managed=true.
+nebariapp:
+  enabled: false
+  hostname: '{{ fail "nebariapp.hostname is required when nebariapp.enabled is true" }}'
+  # The operator validates that this Service exists; it is the ui Service.
+  service:
+    name: '{{ printf "%s-ui" (include "security-posture.fullname" .) | toJson }}'
+    port: '{{ .Values.ui.service.port }}'
+  routing:
+    # Required: without routes the operator creates no HTTPRoute.
+    routes:
+      - pathPrefix: /
+        pathType: PathPrefix
+    publicRoutes:
+      - pathPrefix: /healthz
+        pathType: Exact
+      # Landing-page tile icon must load for any signed-in user.
+      - pathPrefix: /icon.svg
+        pathType: Exact
+    tls:
+      enabled: true
+  auth:
+    enabled: true
+    provider: keycloak
+    provisionClient: true
+    # Gateway OIDC enforcement; turned off automatically when the chart
+    # renders its own SecurityPolicy (adminGate.securityPolicy.enabled).
+    enforceAtGateway: '{{ not .Values.adminGate.securityPolicy.enabled | toJson }}'
+    # Only valid together with enforceAtGateway (operator validation).
+    forwardAccessToken: '{{ not .Values.adminGate.securityPolicy.enabled | toJson }}'
+    # Must be a real callback path (Envoy rejects "/").
+    redirectURI: /oauth2/callback
+    scopes:
+      - openid
+      - profile
+      - email
+      - groups
+    # Grace's operator enforces these at the gateway; upstream alpha.20 uses
+    # them for landing-page visibility only.
+    groups: '{{ .Values.adminGroups | toJson }}'
+  gateway: public
+  landingPage:
+    enabled: true
+    displayName: Security Posture
+    description: Container vulnerability & configuration posture across the cluster
+    icon: '{{ printf "https://%s/icon.svg" (tpl .Values.nebariapp.hostname . | trimAll "\"") | toJson }}'
+    category: Platform
+    priority: 20
+    healthCheck:
+      enabled: true
+      path: /healthz
+      intervalSeconds: 30
+      timeoutSeconds: 5
+
+# =============================================================================
+# Overrides
+# =============================================================================
+nameOverride: ""
+fullnameOverride: ""

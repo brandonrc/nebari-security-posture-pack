@@ -1,0 +1,84 @@
+{{/*
+  Optional admin gate for operators that do not enforce auth.groups at the
+  gateway (upstream nebari-operator alpha.20). Same shape as the policy
+  grace's operator generates for a group-gated NebariApp, plus NIC's
+  Longhorn pattern: OIDC login, JWT verification from the ID-token cookie
+  (or a Bearer header), and authorization default Deny with an allow rule on
+  the `groups` claim.
+
+  Both authorizationEndpoint and tokenEndpoint are set, which suppresses OIDC
+  discovery (Envoy may be unable to resolve the public Keycloak FQDN).
+  The NebariApp renders enforceAtGateway=false while this is enabled so the
+  HTTPRoute is targeted by exactly one SecurityPolicy.
+*/}}
+{{- if .Values.adminGate.securityPolicy.enabled }}
+{{- if not .Values.nebariapp.enabled }}
+{{- fail "adminGate.securityPolicy.enabled requires nebariapp.enabled (it targets the operator-created HTTPRoute)" }}
+{{- end }}
+{{- $sp := .Values.adminGate.securityPolicy }}
+{{- $fullname := include "security-posture.fullname" . }}
+{{- $hostname := tpl .Values.nebariapp.hostname . | trimAll "\"" }}
+{{- $ext := trimSuffix "/" $sp.externalIssuer }}
+{{- $int := trimSuffix "/" $sp.internalIssuer }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: {{ $fullname }}-admin-gate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ $fullname }}-route
+  oidc:
+    provider:
+      issuer: {{ $ext | quote }}
+      authorizationEndpoint: {{ printf "%s/protocol/openid-connect/auth" $ext | quote }}
+      tokenEndpoint: {{ printf "%s/protocol/openid-connect/token" $int | quote }}
+      {{- if $sp.endSessionEndpoint }}
+      endSessionEndpoint: {{ printf "%s/protocol/openid-connect/logout" $ext | quote }}
+      {{- end }}
+    clientID: {{ $sp.clientID | default (printf "%s-%s" .Release.Namespace $fullname) | quote }}
+    clientSecret:
+      group: ""
+      kind: Secret
+      name: {{ $sp.clientSecretName | default (printf "%s-oidc-client" $fullname) | quote }}
+    redirectURL: {{ printf "https://%s%s" $hostname $sp.redirectPath | quote }}
+    logoutPath: {{ $sp.logoutPath | quote }}
+    cookieNames:
+      idToken: {{ $sp.idTokenCookie | quote }}
+    scopes:
+      {{- toYaml .Values.nebariapp.auth.scopes | nindent 6 }}
+    refreshToken: true
+    forwardAccessToken: true
+    {{- if $sp.passThroughAuthHeader }}
+    passThroughAuthHeader: true
+    {{- end }}
+  jwt:
+    providers:
+      - name: nebari-oidc
+        issuer: {{ $ext | quote }}
+        extractFrom:
+          cookies:
+            - {{ $sp.idTokenCookie | quote }}
+          headers:
+            - name: Authorization
+              valuePrefix: "Bearer "
+        remoteJWKS:
+          uri: {{ printf "%s/protocol/openid-connect/certs" $int | quote }}
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: allow-admin-groups
+        action: Allow
+        principal:
+          jwt:
+            provider: nebari-oidc
+            claims:
+              - name: groups
+                valueType: StringArray
+                values:
+                  {{- include "security-posture.adminGroupClaimValues" . | fromJsonArray | toYaml | nindent 18 }}
+{{- end }}

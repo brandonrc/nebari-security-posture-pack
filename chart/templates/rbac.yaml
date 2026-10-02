@@ -1,0 +1,61 @@
+{{/*
+  Read-only cluster access for api + worker: inventory every pod and its
+  owner chain, namespaces/nodes for context, NetworkPolicies and
+  ServiceAccounts for the posture checks (no-netpol, automount-sa-token),
+  and NebariApps to attribute workloads to packs. Deliberately NO access to
+  Secrets (imagePullSecrets are not discovered in v0.1).
+*/}}
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "security-posture.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+{{- end }}
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-reader
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes", "serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["reconcilers.nebari.dev"]
+    resources: ["nebariapps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-reader
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "security-posture.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,25 @@
+{{- if .Values.persistence.enabled }}
+{{- $pvcs := list (dict "component" "worker" "size" .Values.persistence.worker) }}
+{{- if .Values.scanner.trivy.enabled }}
+{{- $pvcs = append $pvcs (dict "component" "trivy" "size" .Values.persistence.trivy) }}
+{{- end }}
+{{- range $pvcs }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" $ "component" .component) }}-cache
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" $ "component" .component) | nindent 4 }}
+spec:
+  accessModes:
+    - {{ $.Values.persistence.accessMode }}
+  {{- with $.Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .size }}
+{{- end }}
+{{- end }}

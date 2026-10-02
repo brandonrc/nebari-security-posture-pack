@@ -1,0 +1,27 @@
+{{/*
+  NebariApp (reconcilers.nebari.dev/v1) - the single integration point with
+  the nebari-operator: HTTPRoute <fullname>-route on the shared gateway, a
+  cert-manager Certificate, and (provisionClient) a Keycloak client whose
+  credentials land in Secret <fullname>-oidc-client.
+
+  Operator rules this is written around:
+    1. The namespace must carry nebari.dev/managed=true or the operator
+       ignores the CR silently. The chart does not own the namespace.
+    2. routing.routes is effectively required (no routes -> no HTTPRoute).
+    3. service.name must reference an existing Service (the ui Service).
+    4. redirectURI must be a real callback path; Envoy rejects "/".
+
+  Spec comes straight from .Values.nebariapp via the nebari-app library chart;
+  strings containing "{{" are tpl-expanded and must render to JSON.
+*/}}
+{{- if .Values.nebariapp.enabled }}
+{{- include "nebari-app.nebariApp" (dict
+    "metadata" (dict
+      "name"      (include "security-posture.fullname" .)
+      "namespace" .Release.Namespace
+      "labels"    (include "security-posture.labels" . | fromYaml)
+    )
+    "spec"   (omit .Values.nebariapp "enabled")
+    "tplCtx" .
+) -}}
+{{- end }}

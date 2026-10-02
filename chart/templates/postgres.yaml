@@ -1,0 +1,217 @@
+{{/*
+  postgres - bundled single-instance Postgres (plain postgres image, no
+  Bitnami). Superuser `postgres` (key postgres-password) owns the cluster;
+  the init script creates the app role (key password) and the two databases
+  it owns: `posture` (api/worker) and `clair`.
+
+  Secret <fullname>-db is generated once and re-read with `lookup` on every
+  upgrade so passwords never rotate underneath the data directory. (Under
+  `helm template` / ArgoCD, lookup returns nothing; pin
+  postgresql.existingSecret there.) The init script only runs on an empty
+  data directory.
+*/}}
+{{- if .Values.postgresql.enabled }}
+{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "postgres") }}
+{{- $secretName := include "security-posture.db.secretName" . }}
+{{- if not .Values.postgresql.existingSecret }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
+{{- $password := randAlphaNum 32 | b64enc }}
+{{- $superPassword := randAlphaNum 32 | b64enc }}
+{{- if and $existing $existing.data }}
+{{- $password = index $existing.data "password" | default $password }}
+{{- $superPassword = index $existing.data "postgres-password" | default $superPassword }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+  annotations:
+    # Never delete the credentials on uninstall: the PVC outlives the release.
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  password: {{ $password }}
+  postgres-password: {{ $superPassword }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+data:
+  10-posture.sh: |
+    #!/bin/sh
+    # Runs once, on an empty data directory, as the postgres superuser.
+    set -eu
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
+      -v app_user="$APP_DB_USER" -v app_password="$APP_DB_PASSWORD" <<'SQL'
+    CREATE ROLE :"app_user" LOGIN PASSWORD :'app_password';
+    SQL
+    for db in "$APP_DB_NAME" "$CLAIR_DB_NAME"; do
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres \
+        -c "CREATE DATABASE \"$db\" OWNER \"$APP_DB_USER\""
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$db" \
+        -c "GRANT ALL ON SCHEMA public TO \"$APP_DB_USER\""
+    done
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "postgres") | nindent 4 }}
+spec:
+  serviceName: {{ $name }}-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.postgres.podSecurityContext | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "security-posture.image" .Values.images.postgres | quote }}
+          imagePullPolicy: {{ .Values.images.postgres.pullPolicy }}
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: postgres-password
+            - name: APP_DB_USER
+              value: {{ .Values.postgresql.auth.username | quote }}
+            - name: APP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: password
+            - name: APP_DB_NAME
+              value: {{ .Values.postgresql.auth.database | quote }}
+            - name: CLAIR_DB_NAME
+              value: {{ .Values.postgresql.auth.clairDatabase | quote }}
+            # Subdirectory: initdb needs an empty dir it owns, and a volume
+            # root may contain lost+found.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U postgres -h 127.0.0.1 -p 5432"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U postgres -h 127.0.0.1 -p 5432"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: init
+          configMap:
+            name: {{ $name }}-init
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.postgres.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgres.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgres.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 10 }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.postgres }}
+  {{- end }}
+{{- end }}

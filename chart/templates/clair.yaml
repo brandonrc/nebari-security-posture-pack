@@ -1,0 +1,153 @@
+{{/*
+  clair - Clair v4 in combo mode (indexer + matcher + notifier in one
+  process) on Postgres database `clair`. The config Secret carries no
+  credential: the connstrings omit the password and pgx reads PGPASSWORD.
+  :6060 serves the API (worker's clairctl), :8089 serves introspection
+  (/healthz, /readyz, /metrics).
+*/}}
+{{- if .Values.scanner.clair.enabled }}
+{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "clair") }}
+{{- $conn := include "security-posture.db.clairConnString" . }}
+{{- $config := dict
+      "http_listen_addr" ":6060"
+      "introspection_addr" ":8089"
+      "log_level" .Values.clair.logLevel
+      "indexer" (dict
+          "connstring" $conn
+          "scanlock_retry" 10
+          "layer_scan_concurrency" 10
+          "migrations" true)
+      "matcher" (dict
+          "connstring" $conn
+          "indexer_addr" "http://localhost:6060"
+          "max_conn_pool" 20
+          "migrations" true)
+      "notifier" (dict
+          "connstring" $conn
+          "indexer_addr" "http://localhost:6060"
+          "matcher_addr" "http://localhost:6060"
+          "migrations" true
+          "poll_interval" "5m"
+          "delivery_interval" "1m")
+      "metrics" (dict "name" "prometheus")
+}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "clair") | nindent 4 }}
+type: Opaque
+stringData:
+  config.yaml: |
+    {{- toYaml $config | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "clair") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "clair") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "clair") | nindent 8 }}
+      annotations:
+        checksum/config: {{ toYaml $config | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.clair.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- include "security-posture.waitForDb" . | nindent 8 }}
+      containers:
+        - name: clair
+          image: {{ include "security-posture.image" .Values.images.clair | quote }}
+          imagePullPolicy: {{ .Values.images.clair.pullPolicy }}
+          env:
+            - name: CLAIR_MODE
+              value: combo
+            - name: CLAIR_CONF
+              value: /etc/clair/config.yaml
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "security-posture.db.secretName" . }}
+                  key: {{ include "security-posture.db.passwordKey" . }}
+          ports:
+            - name: http
+              containerPort: 6060
+              protocol: TCP
+            - name: introspection
+              containerPort: 8089
+              protocol: TCP
+          # Migrations + first updater run can take a few minutes.
+          startupProbe:
+            httpGet: { path: /healthz, port: introspection }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /healthz, port: introspection }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: introspection }
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.clair.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/clair
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ $name }}-config
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.clair.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clair.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clair.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "clair") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 6060
+      targetPort: http
+      protocol: TCP
+    - name: introspection
+      port: 8089
+      targetPort: introspection
+      protocol: TCP
+  selector:
+    {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "clair") | nindent 4 }}
+{{- end }}

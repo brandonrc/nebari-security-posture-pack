@@ -1,0 +1,108 @@
+{{/*
+  trivy - `trivy server`; the worker runs `trivy image --server ...` as a
+  thin client. The vulnerability DB is downloaded into /cache (PVC) on start
+  and refreshed by the server itself.
+*/}}
+{{- if .Values.scanner.trivy.enabled }}
+{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "trivy") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "trivy") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "trivy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "trivy") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.trivy.podSecurityContext | nindent 8 }}
+      containers:
+        - name: trivy
+          image: {{ include "security-posture.image" .Values.images.trivy | quote }}
+          imagePullPolicy: {{ .Values.images.trivy.pullPolicy }}
+          args:
+            - server
+            - --listen
+            - 0.0.0.0:4954
+            - --cache-dir
+            - /cache
+          env:
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 4954
+              protocol: TCP
+          # First start downloads the vulnerability DB before listening.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.trivy.resources | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: cache
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-cache
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.trivy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trivy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.trivy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "trivy") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 4954
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "trivy") | nindent 4 }}
+{{- end }}

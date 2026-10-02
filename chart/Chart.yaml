@@ -1,0 +1,25 @@
+apiVersion: v2
+name: nebari-security-posture-pack
+description: >-
+  Admin-only Nebari software pack that inventories every container in the
+  cluster, scans each image with Trivy, Grype and Clair, audits workload
+  configuration, and presents a single Security Posture rating.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - nebari
+  - security
+  - vulnerability
+  - trivy
+  - grype
+  - clair
+home: https://github.com/geraci/nebari-security-posture-pack
+sources:
+  - https://github.com/geraci/nebari-security-posture-pack
+maintainers:
+  - name: geraci
+dependencies:
+  - name: nebari-app
+    repository: oci://quay.io/nebari/charts
+    version: ">=0.1.1"

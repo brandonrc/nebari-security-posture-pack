@@ -1,0 +1,60 @@
+# Grace (single-node MicroK8s) overrides for nebari-security-posture-pack.
+# Used by deploy/grace/deploy.sh, which also --set's the image tags to the
+# tag produced by build-push.sh.
+
+images:
+  api:
+    repository: localhost:32000/security-posture-api
+    tag: dev
+    pullPolicy: Always
+  worker:
+    repository: localhost:32000/security-posture-worker
+    tag: dev
+    pullPolicy: Always
+  ui:
+    repository: localhost:32000/security-posture-ui
+    tag: dev
+    pullPolicy: Always
+
+# Exists in grace's `nebari` realm; grace's operator emits groups without
+# the leading "/".
+adminGroups:
+  - admin
+
+auth:
+  mode: oidc
+  jwksUrl: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari/protocol/openid-connect/certs
+  issuers:
+    - https://grace.possum-fujita.ts.net:8443/auth/realms/nebari
+    - http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
+    - http://keycloak.100-89-230-107.sslip.io/auth/realms/nebari
+
+scanner:
+  mirror:
+    enabled: true
+    registry: registry.container-registry.svc.cluster.local:5000
+    insecure: true
+    rewrite:
+      "localhost:32000": registry.container-registry.svc.cluster.local:5000
+
+persistence:
+  storageClass: microk8s-hostpath
+
+networkPolicy:
+  enabled: true
+  gatewayNamespaces:
+    - envoy-gateway-system
+  # Landing-page health prober / operator, which call the ui directly.
+  uiAllowedNamespaces:
+    - nebari-landing
+    - nebari-operator-system
+
+# Grace's operator enforces auth.groups at the gateway, so the chart's own
+# SecurityPolicy stays off here (layer 1 + layer 3).
+adminGate:
+  securityPolicy:
+    enabled: false
+
+nebariapp:
+  enabled: true
+  hostname: security.100-89-230-107.sslip.io

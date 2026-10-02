@@ -1,0 +1,41 @@
+# pack-metadata.yaml — consumed hourly by nebari-dev/software-pack-dashboard.
+# Schema: https://github.com/nebari-dev/software-pack-dashboard/blob/main/schema/pack-metadata.schema.json
+# Validate: check-jsonschema --schemafile pack-metadata.schema.json pack-metadata.yaml
+#
+# NOTE: `name` must equal the GitHub repo name exactly.
+
+name: nebari-security-posture-pack
+display_name: Security Posture Pack
+description: >-
+  Admin-only cluster security posture: inventories every running container,
+  scans each image with Trivy, Grype and Clair, correlates the findings,
+  audits workload configuration, and rates the cluster 0–100 / A–F.
+level: experimental
+owner: geraci
+deprecated: false
+
+# May be null below ga.
+product_owner: null
+
+nebariapp_integration: full
+
+# No docs site yet; the README is the documentation.
+docs_site: false
+
+scope:
+  # Installs on a bare cluster with nebariapp.enabled=false (port-forward the
+  # ui; auth.mode=disabled for local development). Bundles its own Postgres,
+  # Trivy server and Clair.
+  standalone-supported: yes
+
+demo_notes: |
+  Admin-gated three ways: NebariApp auth.groups (enforced at the gateway by
+  grace's operator), an optional chart-rendered Envoy SecurityPolicy for
+  upstream operators (adminGate.securityPolicy.enabled), and in-API JWT +
+  group verification. Default admin group `admin`. The worker mirrors each
+  image digest into the in-cluster registry with skopeo so all three
+  scanners see identical bytes. Grace: deploy/grace/build-push.sh then
+  deploy/grace/deploy.sh; https://security.100-89-230-107.sslip.io.
+
+links:
+  docs: https://github.com/geraci/nebari-security-posture-pack/blob/main/README.md
