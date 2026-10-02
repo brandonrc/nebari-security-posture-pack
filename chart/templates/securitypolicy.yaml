@@ -18,7 +18,7 @@
 {{- $sp := .Values.adminGate.securityPolicy }}
 {{- $fullname := include "security-posture.fullname" . }}
 {{- $hostname := tpl .Values.nebariapp.hostname . | trimAll "\"" }}
-{{- $ext := trimSuffix "/" $sp.externalIssuer }}
+{{- $ext := trimSuffix "/" (required "adminGate.securityPolicy.externalIssuer is required when the SecurityPolicy is enabled" $sp.externalIssuer) }}
 {{- $int := trimSuffix "/" $sp.internalIssuer }}
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy

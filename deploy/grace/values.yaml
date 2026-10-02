@@ -71,6 +71,7 @@ networkPolicy:
 adminGate:
   securityPolicy:
     enabled: false
+    externalIssuer: https://grace.possum-fujita.ts.net:8443/auth/realms/nebari
 
 nebariapp:
   enabled: true

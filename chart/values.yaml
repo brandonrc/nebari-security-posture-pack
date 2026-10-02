@@ -72,7 +72,8 @@ adminGate:
     enabled: false
     # Token issuer as stamped into the `iss` claim (public Keycloak URL).
     # Also used as oidc.provider.issuer (EG >= 1.9 requires https there).
-    externalIssuer: https://grace.possum-fujita.ts.net:8443/auth/realms/nebari
+    # Example: https://keycloak.example.com/auth/realms/nebari (required when enabled)
+    externalIssuer: ""
     # In-cluster Keycloak realm URL, used for the back-channel token and
     # JWKS endpoints (Envoy may not resolve the public FQDN).
     internalIssuer: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
