@@ -201,7 +201,9 @@ DB_PASSWORD env entry (must precede any env referencing $(DB_PASSWORD)).
 {{- end }}
 
 {{/*
-wait-for-db init container (uses the Postgres image's pg_isready).
+wait-for-db init container (uses the Postgres image's pg_isready). `-U` is
+required: without it pg_isready looks up the OS user, which does not exist for
+uid 10001 in the postgres image, and reports "no attempt" forever.
 */}}
 {{- define "security-posture.waitForDb" -}}
 - name: wait-for-db
@@ -212,7 +214,7 @@ wait-for-db init container (uses the Postgres image's pg_isready).
     - -c
     - |
       deadline=$(( $(date +%s) + {{ .Values.database.waitTimeoutSeconds }} ))
-      until pg_isready -h "$DB_HOST" -p "$DB_PORT" -t 5; do
+      until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -t 5; do
         if [ "$(date +%s)" -ge "$deadline" ]; then
           echo "database $DB_HOST:$DB_PORT not ready, giving up" >&2
           exit 1
@@ -225,6 +227,8 @@ wait-for-db init container (uses the Postgres image's pg_isready).
       value: {{ include "security-posture.db.host" . | quote }}
     - name: DB_PORT
       value: {{ include "security-posture.db.port" . | quote }}
+    - name: DB_USER
+      value: {{ include "security-posture.db.user" . | quote }}
   securityContext:
     {{- toYaml .Values.containerSecurityContext | nindent 4 }}
   resources:
