@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Assessment Report - {{ system.name }}</title>
+<style>
+  :root {
+    --magenta: #9547c0;
+    --ink: #0f1015;
+    --muted: #5b5d66;
+    --line: #e3e3e8;
+    --soft: #f6f6f8;
+    --crit: #b42318; --crit-bg: #fde2e1;
+    --high: #d9480f; --high-bg: #ffe8d9;
+    --med: #a16207;  --med-bg: #fef3c7;
+    --low: #1d4ed8;  --low-bg: #dbeafe;
+    --neg: #5b5d66;  --neg-bg: #eeeef1;
+    --ok: #15803d;   --ok-bg: #dcfce7;
+  }
+  @page {
+    size: Letter;
+    margin: 18mm 15mm 18mm 15mm;
+    @top-center { content: "{{ system.classification | upper }}"; font: 600 8pt/1 sans-serif; color: #15803d; }
+    @bottom-left { content: "{{ system.name }} - Security Assessment Report - scan {{ scan.id }}"; font: 8pt/1 sans-serif; color: #5b5d66; }
+    @bottom-right { content: "Page " counter(page) " of " counter(pages); font: 8pt/1 sans-serif; color: #5b5d66; }
+    @bottom-center { content: "{{ system.classification | upper }}"; font: 600 8pt/1 sans-serif; color: #15803d; }
+  }
+  @page :first { @bottom-left { content: none; } }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0; color: var(--ink); background: #fff;
+    font-family: "Geist", "Geist Variable", system-ui, -apple-system, "Segoe UI", "Inter", "DejaVu Sans", Helvetica, Arial, sans-serif;
+    font-size: 9.5pt; line-height: 1.45;
+  }
+  main { max-width: 190mm; margin: 0 auto; padding: 0 12px; }
+  h1, h2 { color: var(--magenta); font-weight: 650; letter-spacing: -0.01em; }
+  h1 { font-size: 22pt; margin: 0 0 4px; }
+  h2 { font-size: 14pt; margin: 22px 0 8px; padding-bottom: 4px; border-bottom: 1.5px solid var(--line); break-after: avoid; }
+  h3 { font-size: 11pt; margin: 14px 0 6px; break-after: avoid; }
+  p { margin: 4px 0 8px; }
+  a { color: inherit; }
+  code, .mono { font-family: "IBM Plex Mono", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 8pt; }
+  .muted { color: var(--muted); }
+  .small { font-size: 8pt; }
+  .page-break { break-before: page; }
+  .avoid { break-inside: avoid; }
+
+  .cover { padding-top: 10mm; }
+  .cover .logo svg { width: 170px; height: auto; display: block; margin-bottom: 18mm; }
+  .cover .kicker { text-transform: uppercase; letter-spacing: .12em; font-size: 8.5pt; color: var(--muted); margin-bottom: 6px; }
+  .meta { display: grid; grid-template-columns: 38mm 1fr; gap: 3px 10px; margin-top: 10mm; font-size: 9.5pt; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; }
+  .notice { margin-top: 14mm; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--magenta); background: var(--soft); font-size: 8.5pt; }
+
+  .summary { display: flex; gap: 14px; align-items: stretch; margin: 10px 0 6px; }
+  .grade { width: 46mm; border-radius: 10px; padding: 12px; text-align: center; border: 1px solid var(--line); }
+  .grade .letter { font-size: 44pt; font-weight: 700; line-height: 1; }
+  .grade .score { font-size: 11pt; margin-top: 4px; }
+  .g-a { background: var(--ok-bg); color: var(--ok); }
+  .g-b { background: #ecfdf3; color: #166534; }
+  .g-c { background: var(--med-bg); color: var(--med); }
+  .g-d { background: var(--high-bg); color: var(--high); }
+  .g-f { background: var(--crit-bg); color: var(--crit); }
+  .g-u { background: var(--neg-bg); color: var(--neg); }
+  .tiles { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .tile { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .tile .k { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .tile .val { font-size: 15pt; font-weight: 650; }
+
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 8.5pt; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  th { text-align: left; font-weight: 600; background: var(--soft); border-bottom: 1px solid var(--line); padding: 4px 6px; }
+  td { border-bottom: 1px solid var(--line); padding: 3.5px 6px; vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .wrap { word-break: break-all; }
+
+  .sev { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 7.5pt; font-weight: 600; text-transform: capitalize; white-space: nowrap; }
+  .sev-critical { background: var(--crit-bg); color: var(--crit); }
+  .sev-high { background: var(--high-bg); color: var(--high); }
+  .sev-medium { background: var(--med-bg); color: var(--med); }
+  .sev-low { background: var(--low-bg); color: var(--low); }
+  .sev-negligible, .sev-unknown { background: var(--neg-bg); color: var(--neg); }
+  .badge { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 7.5pt; border: 1px solid var(--line); white-space: nowrap; }
+  .overdue { color: var(--crit); font-weight: 600; }
+  .ok { color: var(--ok); }
+  .warn { color: var(--crit); }
+  .callout { border: 1px solid #f5c2c0; background: #fff6f5; padding: 8px 10px; border-radius: 6px; margin: 8px 0; }
+  .callout ul { margin: 2px 0 0 16px; padding: 0; }
+  .chart { border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+  .chart svg { width: 100%; height: auto; display: block; }
+  ul.tight { margin: 4px 0 8px 18px; padding: 0; }
+  ul.tight li { margin: 2px 0; }
+  @media screen {
+    body { background: #f4f4f6; }
+    main { background: #fff; padding: 28px 36px; margin: 24px auto; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .page-break { border-top: 1px dashed var(--line); margin-top: 28px; padding-top: 8px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<section class="cover">
+  <div class="logo">{{ logo_svg | safe }}</div>
+  <div class="kicker">Security Assessment Report</div>
+  <h1>{{ system.name }}</h1>
+  <p class="muted">Automated continuous-monitoring assessment of container images and Kubernetes workload configuration.</p>
+  <dl class="meta">
+    {% if system.organization %}<dt>Organization</dt><dd>{{ system.organization }}</dd>{% endif %}
+    <dt>Scope</dt><dd>{{ scope_label }}{% if not include_system %} (Kubernetes system namespaces excluded){% endif %}</dd>
+    <dt>Assessment (scan)</dt><dd>#{{ scan.id }} &middot; {{ scan.started_at | dt }} &ndash; {{ scan.finished_at | dt }}</dd>
+    <dt>Report generated</dt><dd>{{ generated_at | dt }}</dd>
+    <dt>Overall result</dt><dd><strong>{{ scan.grade }}</strong> ({{ scan.score | num }} / 100)</dd>
+    {% if system.poc_name or system.poc_email %}<dt>Point of contact</dt><dd>{{ system.poc_name }}{% if system.poc_email %} &lt;{{ system.poc_email }}&gt;{% endif %}</dd>{% endif %}
+    {% if system.emass_system_id %}<dt>eMASS system ID</dt><dd>{{ system.emass_system_id }}</dd>{% endif %}
+    <dt>Generated by</dt><dd>{{ tool }}</dd>
+  </dl>
+  <div class="notice">
+    This report is machine-generated from automated scan data. It is a starting point for the
+    Information System Security Officer (ISSO) and Security Control Assessor (SCA); it does not replace
+    an independent assessment, and its findings must be validated before risk decisions are made.
+  </div>
+</section>
+
+<section class="page-break">
+  <h2>1. Executive summary</h2>
+  <div class="summary avoid">
+    <div class="grade {{ grade_class }}">
+      <div class="letter">{{ scan.grade }}</div>
+      <div class="score">{{ scan.score | num }} / 100</div>
+      <div class="small">vulnerability {{ scan.vuln_score | num }} &middot; posture {{ scan.posture_score | num }}</div>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="k">Open findings</div><div class="val">{{ total_open }}</div></div>
+      <div class="tile"><div class="k">Critical / High</div><div class="val">{{ counts.critical }} / {{ counts.high }}</div></div>
+      <div class="tile"><div class="k">Past SLA</div><div class="val {% if overdue.values() | sum %}overdue{% endif %}">{{ overdue.values() | sum }}</div></div>
+      <div class="tile"><div class="k">Images</div><div class="val">{{ images | length }}</div></div>
+      <div class="tile"><div class="k">Workloads</div><div class="val">{{ workloads | length }}</div></div>
+      <div class="tile"><div class="k">Posture checks failing</div><div class="val">{{ checks | selectattr('failed') | list | length }} / {{ checks | length }}</div></div>
+    </div>
+  </div>
+  <p>
+    The assessed scope contains {{ images | length }} unique container image(s) used by {{ workloads | length }} workload(s)
+    in {{ namespaces | length }} namespace(s). Consensus across the enabled scanners identified
+    <strong>{{ total_open }}</strong> open vulnerability finding(s) (unique image &times; vulnerability &times; package),
+    of which {{ counts.critical }} critical and {{ counts.high }} high; {{ fixable.critical + fixable.high }} of the
+    critical/high findings have a fixed version available.
+    {% if overdue.values() | sum %}<span class="overdue">{{ overdue.values() | sum }} finding(s) are past their remediation SLA.</span>{% endif %}
+  </p>
+  {% if warnings %}
+  <div class="callout avoid"><strong>Data quality warnings</strong>
+    <ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+    {% if failed_images %}<li>{{ failed_images | length }} image(s) could not be scanned by any scanner and are excluded from the score.</li>{% endif %}</ul>
+  </div>
+  {% endif %}
+  {% if trend %}
+  <h3>Score trend (last {{ trend.points | length }} scans)</h3>
+  <div class="chart avoid">
+    <svg viewBox="0 0 {{ trend.w }} {{ trend.h }}" role="img" aria-label="Score trend">
+      {% for g in trend.grid %}
+      <line x1="18" x2="{{ trend.w - 18 }}" y1="{{ g.y }}" y2="{{ g.y }}" stroke="#e3e3e8" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="{{ trend.w - 16 }}" y="{{ g.y + 3 }}" font-size="8" fill="#5b5d66">{{ g.label }}</text>
+      {% endfor %}
+      <polygon points="{{ trend.area }}" fill="#9547c0" fill-opacity="0.10"/>
+      <polyline points="{{ trend.line }}" fill="none" stroke="#9547c0" stroke-width="2" stroke-linejoin="round"/>
+      <circle cx="{{ trend.last[0] }}" cy="{{ trend.last[1] }}" r="3.5" fill="#9547c0"/>
+    </svg>
+    <div class="small muted">From {{ trend.first.score | num }} ({{ trend.first.grade }}, {{ trend.first.finished_at | dt('%Y-%m-%d') }}) to {{ trend.final.score | num }} ({{ trend.final.grade }}, {{ trend.final.finished_at | dt('%Y-%m-%d') }}). Dashed lines mark the axis range and the grade thresholds (D 50, C 65, B 80, A 90).</div>
+  </div>
+  {% endif %}
+
+  <h2>2. System and assessment scope</h2>
+  <table class="avoid">
+    <tr><th style="width:42mm">System</th><td>{{ system.name }}{% if system.cluster_name and system.cluster_name != system.name %} (cluster {{ system.cluster_name }}){% endif %}</td></tr>
+    {% if system.description %}<tr><th>Description</th><td>{{ system.description }}</td></tr>{% endif %}
+    <tr><th>Scope</th><td>{{ scope_label }}</td></tr>
+    <tr><th>Namespaces</th><td>{{ namespaces | map(attribute='name') | join(', ') or '-' }}</td></tr>
+    <tr><th>Assessment window</th><td>{{ scan.started_at | dt }} &ndash; {{ scan.finished_at | dt }} (scan #{{ scan.id }}, {{ scan.trigger or 'scheduled' }}{% if scan.requested_by %}, requested by {{ scan.requested_by }}{% endif %})</td></tr>
+    <tr><th>Assessment type</th><td>Automated, continuous monitoring (no manual testing)</td></tr>
+  </table>
+
+  <h2>3. Methodology</h2>
+  <ul class="tight">
+    <li><strong>Inventory.</strong> Every pod in the cluster (all phases) is read from the Kubernetes API; each container's image is resolved to its digest and the owning workload (Deployment, StatefulSet, DaemonSet, Job, ...) and Nebari pack are recorded.</li>
+    <li><strong>Vulnerability scanning.</strong> Each unique image digest is mirrored once to an in-cluster registry and scanned by up to three independent scanners ({% for s in scanners %}{{ s.title }}{% if s.version %} {{ s.version }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}).</li>
+    <li><strong>Consensus.</strong> Results are normalized and correlated by (vulnerability ID, package). Consensus severity is the highest severity reported; <em>agreement</em> is the fraction of successful scanners that reported the finding. Single-scanner findings are retained but weighted lower in the score.</li>
+    <li><strong>Configuration posture.</strong> Sixteen Kubernetes workload checks (privileged containers, host namespaces, root users, capabilities, seccomp, resource limits, probes, NetworkPolicy coverage, ...) are evaluated per container and mapped to NIST SP 800-53 controls and DISA Kubernetes STIG / Container Platform SRG rules.</li>
+    <li><strong>Scoring.</strong> Image score = 100 &times; e<sup>&minus;penalty/40</sup> (severity weight &times; agreement &times; fixable multiplier); posture score = 100 &times; e<sup>&minus;failed weight/20</sup>; cluster score = 0.7 &times; vulnerability + 0.3 &times; posture, container-weighted. Grades: A &ge; 90, B &ge; 80, C &ge; 65, D &ge; 50, F &lt; 50.</li>
+    <li><strong>Remediation SLA.</strong> {% for s, d in sla_days.items() if s in ('critical','high','medium','low') %}{{ s }} {{ d }} days{% if not loop.last %}, {% endif %}{% endfor %} from first detection.</li>
+  </ul>
+
+  <h2>4. Vulnerability results</h2>
+  <table class="avoid">
+    <thead><tr><th>Severity</th><th class="num">Open</th><th class="num">Fixable</th><th class="num">Past SLA</th><th class="num">SLA (days)</th></tr></thead>
+    <tbody>
+    {% for s in severities %}
+      <tr><td><span class="sev sev-{{ s }}">{{ s }}</span></td><td class="num">{{ counts[s] }}</td><td class="num">{{ fixable[s] }}</td>
+      <td class="num {% if overdue[s] %}overdue{% endif %}">{{ overdue[s] }}</td><td class="num">{{ sla_days[s] }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <h3>Scanner agreement</h3>
+  <table class="avoid">
+    <thead><tr>{% for k in agreement %}<th class="num">Reported by {{ k }} of {{ n_enabled }}</th>{% endfor %}</tr></thead>
+    <tbody><tr>{% for k, n in agreement.items() %}<td class="num">{{ n }}</td>{% endfor %}</tr></tbody>
+  </table>
+
+  <h3>Critical and high vulnerabilities{% if top_cves | length == 60 %} (top 60){% endif %}</h3>
+  {% if top_cves %}
+  <table>
+    <thead><tr><th>Vulnerability</th><th>Severity</th><th>Package(s)</th><th class="num">Images</th><th>Scanners</th><th>Fix</th><th>SLA due</th></tr></thead>
+    <tbody>
+    {% for r in top_cves %}
+      <tr>
+        <td class="mono">{{ r.vuln_id }}{% if r.cvss %}<br><span class="muted">CVSS {{ r.cvss }}</span>{% endif %}</td>
+        <td><span class="sev sev-{{ r.severity }}">{{ r.severity }}</span></td>
+        <td class="wrap">{{ r.packages | join(', ') }}</td>
+        <td class="num">{{ r.images }}</td>
+        <td>{{ r.agreement }} <span class="muted small">{{ r.scanners | join(', ') }}</span></td>
+        <td class="wrap">{% if r.fixable %}{{ r.fixed | join(', ') }}{% else %}<span class="muted">none</span>{% endif %}</td>
+        <td class="{% if r.overdue %}overdue{% endif %}">{{ r.due | dt('%Y-%m-%d') }}{% if r.overdue %} (overdue){% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="ok">No open critical or high vulnerabilities.</p>{% endif %}
+
+  <h3>Riskiest images</h3>
+  <table>
+    <thead><tr><th>Image</th><th>Grade</th><th class="num">Score</th><th class="num">Crit</th><th class="num">High</th><th class="num">Med</th><th class="num">Low</th><th>Base OS</th></tr></thead>
+    <tbody>
+    {% for i in images[:15] %}
+      <tr><td class="wrap mono">{{ i.ref }}</td><td><span class="badge {{ grade_class_fn(i.grade) }}">{{ i.grade }}</span></td><td class="num">{{ i.score | num }}</td>
+      <td class="num">{{ i.counts.get('critical', 0) }}</td><td class="num">{{ i.counts.get('high', 0) }}</td><td class="num">{{ i.counts.get('medium', 0) }}</td><td class="num">{{ i.counts.get('low', 0) }}</td><td>{{ i.os or '-' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2 class="page-break">5. Configuration (posture) results</h2>
+  <table>
+    <thead><tr><th>Check</th><th>Severity</th><th>Controls</th><th>STIG / SRG</th><th class="num">Pass</th><th class="num">Fail</th></tr></thead>
+    <tbody>
+    {% for c in checks %}
+      <tr><td><strong>{{ c.title }}</strong><br><span class="mono muted">{{ c.id }}</span></td><td><span class="sev sev-{{ c.severity }}">{{ c.severity }}</span></td>
+      <td>{{ c.controls | join(', ') }}</td><td class="small">{{ c.stig | join(', ') or '-' }}</td>
+      <td class="num">{{ c.passed }}</td><td class="num {% if c.failed %}warn{% endif %}">{{ c.failed }}{% if c.system_only %}<br><span class="small muted">system ns</span>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% for c in checks if c.failed %}
+  <div class="avoid">
+    <h3>{{ c.title }} <span class="sev sev-{{ c.severity }}">{{ c.severity }}</span></h3>
+    {% if c.description %}<p>{{ c.description }}</p>{% endif %}
+    <p class="small"><strong>Failing workloads ({{ c.offenders | length }}):</strong> <span class="mono">{{ c.offenders[:40] | join(', ') }}{% if c.offenders | length > 40 %} ...{% endif %}</span></p>
+    {% if c.remediation %}<p class="small"><strong>Remediation:</strong> {{ c.remediation }}</p>{% endif %}
+  </div>
+  {% endfor %}
+
+  <h2>6. Control and STIG coverage</h2>
+  <h3>NIST SP 800-53 controls with open items</h3>
+  {% if controls %}
+  <table class="avoid">
+    <thead><tr><th>Control</th><th>Title</th><th class="num">Open vulnerability findings</th><th class="num">Failing checks</th></tr></thead>
+    <tbody>{% for c in controls %}<tr><td class="mono">{{ c.id }}</td><td>{{ c.title }}</td><td class="num">{{ c.findings }}</td><td class="num">{{ c.checks }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p class="ok">No open items map to NIST controls.</p>{% endif %}
+  <h3>DISA STIG checklist status (Kubernetes STIG + Container Platform SRG)</h3>
+  <table class="avoid">
+    <thead><tr><th>Status</th><th class="num">CAT I</th><th class="num">CAT II</th><th class="num">CAT III</th></tr></thead>
+    <tbody>
+    {% for st in ['Open', 'NotAFinding', 'Not_Reviewed', 'Not_Applicable'] if st in stig.by_status %}
+      <tr><td>{{ st }}</td><td class="num">{{ stig.by_status[st]['I'] }}</td><td class="num">{{ stig.by_status[st]['II'] }}</td><td class="num">{{ stig.by_status[st]['III'] }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if stig.open %}
+  <table>
+    <thead><tr><th>Vuln ID</th><th>CAT</th><th>Rule</th><th class="num">Offenders</th></tr></thead>
+    <tbody>{% for r in stig.open %}<tr><td class="mono">{{ r.vuln_id }}</td><td>{{ r.cat }}</td><td>{{ r.title }}</td><td class="num">{{ r.offenders }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+  <p class="small muted">Not_Reviewed rules are control-plane or host-level requirements this tool cannot observe; they require manual review in STIG Viewer.</p>
+
+  <h2>7. Scanner versions and database freshness</h2>
+  <table class="avoid">
+    <thead><tr><th>Scanner</th><th>Version</th><th>Vulnerability DB updated</th><th class="num">DB age (days)</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for s in scanners %}
+      <tr><td>{{ s.title }}</td><td class="mono">{{ s.version or '-' }}</td><td>{{ s.db_updated_at | dt }}</td>
+      <td class="num {% if s.stale %}warn{% endif %}">{{ s.age_days | num }}</td>
+      <td>{% if not s.enabled %}<span class="muted">disabled</span>{% elif s.healthy %}<span class="ok">healthy</span>{% else %}<span class="warn">unhealthy</span>{% if s.last_error %}: <span class="small">{{ s.last_error }}</span>{% endif %}{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted">Databases older than {{ freshness_hours }} hours are flagged; staleness does not change the score but reduces confidence in "no finding" results.</p>
+
+  <h2>8. Limitations</h2>
+  <ul class="tight">
+    <li>Results are machine-generated and unvalidated; scanners produce false positives (e.g. back-ported fixes) and false negatives (unpackaged binaries, language dependencies not in a lockfile).</li>
+    <li>Only container images and pod specifications are assessed. Nodes, the Kubernetes control plane, etcd, RBAC, Secrets handling, admission configuration and network devices are out of scope; the corresponding STIG rules are reported as Not_Reviewed.</li>
+    <li>Images pulled with imagePullSecrets that the scanner cannot access, and images that no scanner could analyze, are not covered{% if failed_images %} ({{ failed_images | length }} image(s) in this scan){% endif %}.</li>
+    <li>Posture checks evaluate declared configuration, not runtime behavior; Kubernetes system namespaces ({{ system_namespaces | join(', ') }}) are {% if include_system %}included and weighted &times;0.5 in the score{% else %}excluded from this report{% endif %}.</li>
+    <li>Risk-analysis fields (likelihood, impact, residual risk) are not determined by the tool and must be completed by the ISSO.</li>
+    <li>The SLA dates are computed from first detection by this tool, which may be later than the vulnerability's publication date.</li>
+  </ul>
+
+  <h2 class="page-break">Appendix A. Inventory</h2>
+  <h3>Namespaces</h3>
+  <table>
+    <thead><tr><th>Namespace</th><th>Pack</th><th class="num">Workloads</th><th class="num">Images</th><th>Grade</th></tr></thead>
+    <tbody>{% for n in namespaces %}<tr><td>{{ n.name }}{% if n.system_namespace %} <span class="muted small">(system)</span>{% endif %}</td><td>{{ n.pack or '-' }}</td><td class="num">{{ n.workloads }}</td><td class="num">{{ n.images }}</td><td>{{ n.grade }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <h3>Container images</h3>
+  <table>
+    <thead><tr><th>Image</th><th>Digest</th><th>Used by</th><th class="num">Containers</th><th>Scanners</th><th>Grade</th></tr></thead>
+    <tbody>
+    {% for i in images | sort(attribute='ref') %}
+      <tr><td class="wrap mono">{{ i.ref }}</td><td class="mono">{{ i.digest | shortdigest }}</td><td class="small wrap">{{ i.workloads[:6] | join(', ') }}{% if i.workloads | length > 6 %} +{{ i.workloads | length - 6 }}{% endif %}</td>
+      <td class="num">{{ i.running_containers }}/{{ i.containers }}</td>
+      <td class="small">{% for k, st in i.scanner_status.items() %}{{ k }}:{{ st }}{% if not loop.last %} {% endif %}{% endfor %}</td><td>{{ i.grade }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2 class="page-break">Appendix B. All open vulnerability findings</h2>
+  {% if appendix_truncated %}<p class="small muted">Showing the first {{ appendix | length }} findings by severity; {{ appendix_truncated }} more are in the vuln-export report.</p>{% endif %}
+  <table>
+    <thead><tr><th>Vulnerability</th><th>Sev.</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Image</th><th>Agreement</th></tr></thead>
+    <tbody>
+    {% for f in appendix %}
+      <tr><td class="mono">{{ f.vuln_id }}</td><td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span></td><td class="wrap">{{ f.package }}</td><td class="wrap mono">{{ f.installed_version }}</td><td class="wrap mono">{{ f.fixed_version or '-' }}</td>
+      <td class="wrap small">{{ img_refs[f.image_id].ref if f.image_id in img_refs else f.image_id }}</td><td>{{ f.scanners | length }}/{{ n_enabled }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+</main>
+</body>
+</html>

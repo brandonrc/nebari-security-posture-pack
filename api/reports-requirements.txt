@@ -1,0 +1,22 @@
+# Extra dependencies for posture.reports (compliance report generators).
+# Integrator: merge into api/pyproject.toml. Versions match the existing pin style.
+#
+# [project.dependencies]
+openpyxl==3.1.5        # POA&M / inventory xlsx
+jinja2==3.1.6          # SAR HTML template
+weasyprint==70.0       # SAR PDF (needs system libs, see below)
+pyyaml==6.0.3          # data/stig_mapping.yaml (already a dependency)
+#
+# [project.optional-dependencies] dev
+jsonschema==4.26.0     # OSCAL assessment-results schema validation in tests/reports
+#
+# System packages for WeasyPrint in Dockerfile.api (python:3.12-slim, currently Debian 13 trixie):
+#   RUN apt-get update && apt-get install -y --no-install-recommends \
+#         libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core \
+#       && rm -rf /var/lib/apt/lists/*
+# fonts-dejavu-core is required: python:3.12-slim ships no fonts, so text would not render.
+# libharfbuzz-subset0 silences WeasyPrint's "HarfBuzz-Subset will be required" DeprecationWarning.
+# Verified 2026-10-02: all 47 tests/reports tests pass in python:3.12-slim with exactly these packages
+# (WeasyPrint 70.0 renders the 12-page sample SAR).
+# Without these libraries the PDF format raises posture.reports.registry.ReportDependencyMissing
+# (map to HTTP 503); every other format keeps working.
