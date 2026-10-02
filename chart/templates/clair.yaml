@@ -75,7 +75,12 @@ spec:
         - name: clair
           image: {{ include "security-posture.image" .Values.images.clair | quote }}
           imagePullPolicy: {{ .Values.images.clair.pullPolicy }}
+          # claircore's layer fetcher writes relative to the working directory
+          # (image WORKDIR /run is on the read-only root fs): run from /tmp.
+          workingDir: /tmp
           env:
+            - name: TMPDIR
+              value: /tmp
             - name: CLAIR_MODE
               value: combo
             - name: CLAIR_CONF
