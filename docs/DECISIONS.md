@@ -389,3 +389,25 @@
       application defaults (4Mi, 120, 2). Already wired: GRYPE_MAX_CONCURRENT, SCAN_MAX_IMAGE_GB,
       MIRROR_MODE, IMAGE_CACHE_MAX_BYTES, EVENT_SCANS_*, REPORT_WORKER_EMBEDDED / ISOLATION /
       TIMEOUT, REPORTS_RETENTION_*, HISTORY_RETAIN_SCANS.
+
+## 2026-10-03: scoring edge cases and Windows pods (quality m5, B2)
+
+**Scoring edge cases (quality m5), for the scoring/compliance owner.** `api/tests/test_q_scoring_edges.py`
+records each case. Strict `xfail` tests describe the recommended behaviour: when it lands, the
+test XPASSes, CI fails on the strict marker, and the marker has to be removed.
+
+| Case | Today | Recommendation | Test |
+|---|---|---|---|
+| GHSA vs CVE alias for the same issue | Two findings, each at 1/3 agreement (with 3 scanners succeeded). This lowers the agreement multiplier and double-counts the penalty. | Carry aliases on `Finding` (trivy `VendorIDs`, grype `relatedVulnerabilities`) and key on the CVE when one exists. | xfail |
+| GHSA id case | `GHSA-abcd-…` is upper-cased to `GHSA-ABCD-…`. Merging still works, but the id no longer matches GitHub's canonical form (`GHSA-` plus lowercase segments). | Canonicalise to `GHSA-` plus lowercase segments. | xfail |
+| A scanner not in `succeeded` reports a finding | It still counts toward agreement. For example, trivy and clair report it with succeeded = {trivy, grype}, which gives 1.0. | Count only scanners in `succeeded` (and keep the stray result out of `per_scanner`). | xfail |
+| `finding_penalty` receives a non-normalized severity (`"CRITICAL"`) | It is treated as `unknown` (0.05 instead of 10.0). Harmless today because every parser calls `normalize_severity`. | Normalize inside `finding_penalty`, or raise. | xfail |
+| Debian `unimportant` | Maps to `unknown`. | Map to `negligible`. | xfail |
+| `normalize_package("a_")` vs `"a"` | `"a-"` ≠ `"a"`. | Keep as is: this is PEP 503 normalization, and PEP 508 names cannot end with a separator. | pinned |
+
+**Windows pods (quality B2).** The inventory adapter now records `pod.os` (from `spec.os.name`, falling
+back to the `kubernetes.io/os` nodeSelector) and the effective `windowsOptions.hostProcess`.
+- On Windows pods, five checks are n/a (not fail): `privilege-escalation`, `added-capabilities`, `capabilities-not-dropped`, `writable-rootfs` and `seccomp-unconfined`. The kubelet ignores these Linux-only fields, or the API rejects them.
+- `run-as-root` fails only for an explicit `runAsUserName: ContainerAdministrator`. It is n/a when the image default user applies, because `runAsUser` does not exist on Windows.
+- `privileged` fails on `hostProcess: true`, which is the Windows equivalent of privileged.
+- SCORING.md's check table still describes Linux semantics only. Add a Windows column when the doc is next revised.
