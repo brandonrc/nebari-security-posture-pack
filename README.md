@@ -10,6 +10,8 @@ Status: **experimental** (v0.1). Design contract: [docs/DESIGN.md](docs/DESIGN.m
 
 ## How it works
 
+> The 30,000-foot view, with diagrams of the three evidence layers, the control-inheritance model and the continuous-ATO loop, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ```
 inventory (K8s API) -> unique images by digest -> mirror (skopeo) -> trivy + grype + clair
    -> normalise -> correlate (consensus per CVE+package) -> score -> Postgres -> UI
