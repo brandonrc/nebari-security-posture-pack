@@ -91,7 +91,7 @@ async def test_trivy_adapter_runs_binary(tmp_path, fixtures_dir):
     assert r.status == "ok" and len(r.findings) == 3 and r.version == "0.75.0" and r.raw
     args = (tmp_path / "args").read_text()
     assert "--server http://trivy:4954" in args and "--insecure" in args and "--scanners vuln" in args
-    assert args.strip().endswith("reg:5000/a:b")
+    assert args.strip().endswith("-- reg:5000/a:b")
 
 
 async def test_grype_adapter_env_and_registry_scheme(tmp_path, fixtures_dir):
@@ -101,7 +101,7 @@ async def test_grype_adapter_env_and_registry_scheme(tmp_path, fixtures_dir):
     r = await GrypeScanner(binary, str(tmp_path)).scan("reg:5000/a:b", insecure=True, timeout=30)
     assert r.status == "ok" and len(r.findings) == 4
     args = (tmp_path / "args").read_text()
-    assert args.startswith("registry:reg:5000/a:b -o json")
+    assert args.startswith("-o json -- registry:reg:5000/a:b")
     assert f"{tmp_path}/grype true false" in args
 
 
@@ -118,7 +118,8 @@ async def test_clair_adapter_uses_config_and_host(tmp_path, fixtures_dir):
     assert r.status == "ok" and len(r.findings) == 3
     args = (tmp_path / "args").read_text().split()
     assert args[:3] == ["-q", "-c", str(tmp_path / "clairctl" / "config.yaml")]
-    assert args[3:9] == ["report", "--host", "http://clair:6060/", "--out", "json", "registry.local:5000/x@sha256:" + "a" * 64]
+    assert args[3:10] == ["report", "--host", "http://clair:6060/", "--out", "json", "--",
+                          "registry.local:5000/x@sha256:" + "a" * 64]
     assert os.path.exists(tmp_path / "clairctl" / "config.yaml")
 
 

@@ -8,6 +8,14 @@ from dataclasses import dataclass
 DEFAULT_REGISTRY = "docker.io"
 _DIGEST_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:[+._-][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,}$")
 _ID_PREFIXES = ("docker-pullable://", "docker://", "containerd://", "cri-o://")
+# OCI distribution reference grammar (github.com/distribution/reference): domain components,
+# optional port, or a bracketed IPv6 literal; tags `[\w][\w.-]{0,127}`.
+_DOMAIN_COMPONENT = r"(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])"
+_REGISTRY_RE = re.compile(rf"^(?:{_DOMAIN_COMPONENT}(?:\.{_DOMAIN_COMPONENT})*|\[[0-9A-Fa-f:.]+\])(?::[0-9]{{1,5}})?$")
+_TAG_RE = re.compile(r"^[\w][\w.-]{0,127}$")
+_REPO_RE = re.compile(r"^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)*$")
+_SAFE_ARG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]*$")
+MAX_NAME_LEN = 255
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,8 @@ def parse_image_ref(ref: str) -> ImageRef:
             ref = ref[len(prefix):]
     if not ref:
         raise ValueError("empty image reference")
+    if ref.startswith("-") or any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F for c in ref):
+        raise ValueError("invalid image reference (leading '-' or whitespace/control characters)")
     digest: str | None = None
     if "@" in ref:
         ref, digest = ref.split("@", 1)
@@ -72,18 +82,32 @@ def parse_image_ref(ref: str) -> ImageRef:
         ref, tag = ref.rsplit(":", 1)
         if not tag:
             tag = None
+        elif not _TAG_RE.match(tag):
+            raise ValueError(f"invalid tag in image reference: {tag!r}")
     parts = ref.split("/")
     if len(parts) > 1 and _looks_like_registry(parts[0]):
         registry, repo = parts[0], "/".join(parts[1:])
     else:
         registry, repo = DEFAULT_REGISTRY, ref
+    if not _REGISTRY_RE.match(registry):
+        raise ValueError(f"invalid registry in image reference: {registry!r}")
     if registry in ("index.docker.io", "registry-1.docker.io", "registry.hub.docker.com"):
         registry = DEFAULT_REGISTRY
     if registry == DEFAULT_REGISTRY and "/" not in repo:
         repo = f"library/{repo}"
-    if not repo or not re.match(r"^[a-z0-9]+(?:[._/-]+[a-z0-9]+|__[a-z0-9]+)*$", repo):
+    if not repo or not _REPO_RE.match(repo):
         raise ValueError(f"invalid repository in image reference: {repo!r}")
+    if len(registry) + 1 + len(repo) > MAX_NAME_LEN:
+        raise ValueError("image name too long")
     return ImageRef(registry=registry.lower(), repository=repo, tag=tag, digest=digest)
+
+
+def safe_ref_arg(ref: str) -> str:
+    """Defence in depth before an image ref becomes a CLI argument: no leading `-`, no
+    whitespace/control characters, only reference characters. Raises ValueError."""
+    if not ref or not _SAFE_ARG_RE.match(ref):
+        raise ValueError(f"refusing unsafe image reference argument: {ref[:80]!r}")
+    return ref
 
 
 def normalize_image_id(image_id: str | None) -> tuple[str | None, str | None]:

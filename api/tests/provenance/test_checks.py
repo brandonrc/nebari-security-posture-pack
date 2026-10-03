@@ -218,6 +218,18 @@ def test_cosign_cli_argv_key_and_keyless(tmp_path):
     assert not CosignConfig().enabled and not CosignConfig(certificate_identity_regexp="x").enabled
 
 
+def test_cosign_cli_double_dash_and_unsafe_ref():
+    cli = CosignCli(CosignConfig(public_key="/k.pub"))
+    assert cli.argv("reg.io/app@sha256:1")[-2:] == ["--", "reg.io/app@sha256:1"]
+    with pytest.raises(ValueError):
+        cli.argv("--key=/etc/passwd")
+
+
+async def test_cosign_cli_refuses_flag_like_ref():
+    ok, err = await CosignCli(CosignConfig(public_key="/k.pub"), binary="/nonexistent").verify("-x")
+    assert ok is False and "unsafe" in err
+
+
 async def test_cosign_cli_missing_binary_is_verification_failure():
     cli = CosignCli(CosignConfig(public_key="/nonexistent/key.pub"), binary="/nonexistent/cosign")
     ok, err = await cli.verify("ghcr.io/org/app@sha256:1")

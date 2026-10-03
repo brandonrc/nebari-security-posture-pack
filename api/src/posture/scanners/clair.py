@@ -14,7 +14,11 @@ from typing import Any
 import httpx
 
 from ..severity import normalize_severity
-from .base import Finding, ScanResult, Scanner, extract_cve, first_float, parse_time, run_proc, tail
+import tempfile
+
+from ..images import safe_ref_arg
+from .base import (Finding, ScanResult, Scanner, extract_cve, first_float, parse_time, read_capped, run_proc,
+                   scratch_dir, tail)
 
 NAME = "clair"
 
@@ -235,25 +239,39 @@ class ClairScanner(Scanner):
 
     def argv(self, ref: str) -> list[str]:
         return [self.binary, "-q", "-c", self.config_path(), "report", "--host", self.clair_url + "/",
-                "--out", "json", ref]
+                "--out", "json", "--", safe_ref_arg(ref)]
 
     async def scan(self, ref: str, *, insecure: bool = False, timeout: float = 600) -> ScanResult:
         env = {}
         if self.docker_config:
             env["DOCKER_CONFIG"] = self.docker_config
-        if insecure:
-            ref = await asyncio.to_thread(pin_insecure_host, ref)
-        res = await run_proc(self.argv(ref), timeout, env)
-        if res.timed_out:
-            return ScanResult(NAME, "timeout", error=f"timed out after {int(timeout)}s", duration_ms=res.duration_ms)
-        if res.returncode != 0 or not res.stdout.strip():
-            return ScanResult(NAME, "error", error=tail(res.stderr or res.stdout) or f"exit {res.returncode}",
+        try:
+            safe_ref_arg(ref)
+            if insecure:
+                ref = await asyncio.to_thread(pin_insecure_host, ref)
+            argv = self.argv(ref)
+        except ValueError as e:
+            return ScanResult(NAME, "error", error=str(e))
+        with tempfile.TemporaryDirectory(dir=scratch_dir(self.cache_dir)) as d:
+            out = os.path.join(d, "clair.json")
+            res = await run_proc(argv, timeout, env, stdout_file=out)
+            if res.timed_out:
+                return ScanResult(NAME, "timeout", error=f"timed out after {int(timeout)}s",
+                                  duration_ms=res.duration_ms)
+            if res.truncated:
+                return ScanResult(NAME, "error", error="clairctl output exceeded the size cap",
+                                  duration_ms=res.duration_ms)
+            with open(out, "rb") as fh:
+                text = fh.read().decode("utf-8", "replace")
+            raw = read_capped(out)
+        if res.returncode != 0 or not text.strip():
+            return ScanResult(NAME, "error", error=tail(res.stderr or text) or f"exit {res.returncode}",
                               duration_ms=res.duration_ms)
         try:
-            doc = _first_json_object(res.stdout)
+            doc = _first_json_object(text)
         except json.JSONDecodeError as e:
             return ScanResult(NAME, "error", error=f"invalid JSON from clairctl: {e}", duration_ms=res.duration_ms,
-                              raw=res.stdout)
+                              raw=raw)
         findings, meta = parse_clair_json(doc)
-        return ScanResult(NAME, "ok", findings=findings, duration_ms=res.duration_ms, raw=res.stdout,
+        return ScanResult(NAME, "ok", findings=findings, duration_ms=res.duration_ms, raw=raw,
                           os_family=meta.get("os_family"), os_name=meta.get("os_name"))

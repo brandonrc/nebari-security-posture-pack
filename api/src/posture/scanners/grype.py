@@ -8,7 +8,11 @@ from datetime import datetime
 from typing import Any
 
 from ..severity import normalize_severity
-from .base import Finding, ScanResult, Scanner, extract_cve, first_float, parse_time, run_proc, tail
+import tempfile
+
+from ..images import safe_ref_arg
+from .base import (Finding, ScanResult, Scanner, extract_cve, first_float, parse_time, read_capped, run_proc,
+                   scratch_dir, tail)
 
 NAME = "grype"
 
@@ -78,6 +82,7 @@ class GrypeScanner(Scanner):
     def __init__(self, binary: str = "grype", cache_dir: str = "/cache", docker_config: str | None = None):
         self.binary = binary
         self.db_dir = os.path.join(cache_dir, "grype")
+        self.scratch = cache_dir
         self.docker_config = docker_config
 
     def env(self, insecure: bool = False) -> dict[str, str]:
@@ -124,20 +129,32 @@ class GrypeScanner(Scanner):
 
     async def scan(self, ref: str, *, insecure: bool = False, timeout: float = 600) -> ScanResult:
         # force the registry source: never consult a local docker daemon
-        source = ref if ref.startswith("registry:") else f"registry:{ref}"
-        res = await run_proc([self.binary, source, "-o", "json"], timeout, self.env(insecure))
-        if res.timed_out:
-            return ScanResult(NAME, "timeout", error=f"timed out after {int(timeout)}s", duration_ms=res.duration_ms)
-        if res.returncode != 0:
-            err = tail(res.stderr or res.stdout) or f"exit {res.returncode}"
-            status = "unsupported" if "unable to detect" in err.lower() else "error"
-            return ScanResult(NAME, status, error=err, duration_ms=res.duration_ms)
         try:
-            doc = json.loads(res.stdout)
-        except json.JSONDecodeError as e:
-            return ScanResult(NAME, "error", error=f"invalid JSON from grype: {e}", duration_ms=res.duration_ms,
-                              raw=res.stdout)
+            source = "registry:" + safe_ref_arg(ref[len("registry:"):] if ref.startswith("registry:") else ref)
+        except ValueError as e:
+            return ScanResult(NAME, "error", error=str(e))
+        with tempfile.TemporaryDirectory(dir=scratch_dir(self.scratch)) as d:
+            out = os.path.join(d, "grype.json")
+            res = await run_proc([self.binary, "-o", "json", "--", source], timeout, self.env(insecure),
+                                 stdout_file=out)
+            if res.timed_out:
+                return ScanResult(NAME, "timeout", error=f"timed out after {int(timeout)}s",
+                                  duration_ms=res.duration_ms)
+            if res.returncode != 0:
+                err = tail(res.stderr) or f"exit {res.returncode}"
+                status = "unsupported" if "unable to detect" in err.lower() else "error"
+                return ScanResult(NAME, status, error=err, duration_ms=res.duration_ms)
+            if res.truncated:
+                return ScanResult(NAME, "error", error="grype output exceeded the size cap",
+                                  duration_ms=res.duration_ms)
+            try:
+                with open(out, "rb") as fh:
+                    doc = json.load(fh)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                return ScanResult(NAME, "error", error=f"invalid JSON from grype: {e}", duration_ms=res.duration_ms,
+                                  raw=read_capped(out))
+            raw = read_capped(out)
         findings, meta = parse_grype_json(doc)
         return ScanResult(NAME, "ok", version=meta.get("version"), db_updated_at=meta.get("db_built"),
-                          findings=findings, duration_ms=res.duration_ms, raw=res.stdout,
+                          findings=findings, duration_ms=res.duration_ms, raw=raw,
                           os_family=meta.get("os_family"), os_name=meta.get("os_name"))

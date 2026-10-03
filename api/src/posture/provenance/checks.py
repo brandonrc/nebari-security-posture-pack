@@ -26,6 +26,7 @@ from typing import Any, Protocol
 
 from ..images import ImageRef
 from ..logs import get_logger
+from ..images import safe_ref_arg
 from ..scanners.base import run_proc, tail
 from .registry import Manifest, Registry, RegistryError
 
@@ -271,8 +272,8 @@ async def collect_attestations(reg: Registry, ref: ImageRef, *, want_att: bool =
                         out.att_payloads.append(dsse_statement(blob) or blob)
         sbom = await _get_if_exists(digest_tag(digest, ".sbom"))
         if sbom is not None:
-            out.sbom_tag_format = next((f for f in (sbom_format_from_media_type(l.get("mediaType", ""))
-                                                     for l in sbom.layers) if f), "")
+            out.sbom_tag_format = next((f for f in (sbom_format_from_media_type(layer.get("mediaType", ""))
+                                                     for layer in sbom.layers) if f), "")
     return out
 
 
@@ -384,12 +385,16 @@ class CosignCli:
         if insecure:
             argv.append("--allow-insecure-registry")
             argv.append("--allow-http-registry")
-        argv.append(image_ref)
+        argv += ["--", safe_ref_arg(image_ref)]  # security review M2
         return argv
 
     async def verify(self, image_ref: str, insecure: bool = False) -> tuple[bool, str]:
         env = {"COSIGN_EXPERIMENTAL": "1", **self.env}
-        res = await run_proc(self.argv(image_ref, insecure), self.timeout, env)
+        try:
+            argv = self.argv(image_ref, insecure)
+        except ValueError as e:
+            return False, f"verification failed: {e}"
+        res = await run_proc(argv, self.timeout, env)
         if res.timed_out:
             return False, f"verification failed: timed out after {int(self.timeout)}s"
         if res.returncode == 0:

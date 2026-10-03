@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -71,13 +73,99 @@ class ProcResult:
     stderr: str
     timed_out: bool
     duration_ms: int
+    stdout_path: str | None = None  # set when the caller asked for stdout in a file
+    truncated: bool = False  # stdout or stderr exceeded its cap (the excess was discarded)
 
 
-async def run_proc(argv: list[str], timeout: float, env: dict[str, str] | None = None) -> ProcResult:
-    """Run a subprocess with a hard timeout (kills the process on expiry)."""
-    full_env = dict(os.environ)
-    if env:
-        full_env.update(env)
+# ---------------------------------------------------------------- subprocess hardening (security M2/M3)
+# Only these variables reach scanner / skopeo / cosign subprocesses, which parse untrusted
+# registry content. DATABASE_URL, DB_PASSWORD, OIDC_*, KEYCLOAK_* and similar never do.
+ENV_ALLOW = frozenset({
+    "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "USER",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "DOCKER_CONFIG", "REGISTRY_AUTH_FILE", "XDG_RUNTIME_DIR",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "TUF_ROOT", "GOMEMLIMIT", "GOMAXPROCS",
+})
+ENV_ALLOW_PREFIXES = ("TRIVY_", "GRYPE_", "COSIGN_", "SIGSTORE_")
+_ENV_DENY_RE = re.compile(r"PASSWORD|SECRET|PRIVATE_KEY|DATABASE_URL|^OIDC_|^KEYCLOAK_|^PROVENANCE_COMPAT_TOKEN",
+                          re.IGNORECASE)
+STDOUT_MAX_BYTES = 256 * 1024 * 1024  # file-backed stdout (scanner JSON)
+MEM_STDOUT_MAX_BYTES = 4 * 1024 * 1024  # in-memory stdout (version / status commands)
+STDERR_MAX_BYTES = 256 * 1024  # stderr keeps the tail only
+KILL_GRACE_SECONDS = 10.0  # SIGTERM -> SIGKILL
+
+
+def subprocess_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Minimal allowlisted environment for a child process plus `extra` (caller-chosen)."""
+    env = {k: v for k, v in os.environ.items()
+           if (k in ENV_ALLOW or k.startswith(ENV_ALLOW_PREFIXES)) and not _ENV_DENY_RE.search(k)}
+    env.setdefault("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
+    try:
+        os.killpg(proc.pid, sig)  # start_new_session=True: pgid == pid
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.send_signal(sig)
+        except ProcessLookupError:
+            pass
+
+
+async def terminate_group(proc: asyncio.subprocess.Process, grace: float | None = None) -> None:
+    """SIGTERM the whole process group, SIGKILL after `grace` seconds; always reaps."""
+    grace = KILL_GRACE_SECONDS if grace is None else grace
+    if proc.returncode is None:
+        _signal_group(proc, signal.SIGTERM)
+        try:
+            await asyncio.wait_for(asyncio.shield(proc.wait()), grace)
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+    _signal_group(proc, signal.SIGKILL)  # stragglers in the group (grandchildren) too
+    await proc.wait()
+
+
+async def _drain(stream: asyncio.StreamReader, sink: Any, cap: int, keep_tail: bool) -> bool:
+    """Copy `stream` into `sink` (file or bytearray) up to `cap` bytes; returns True when capped.
+    Keeps draining past the cap so the child never blocks on a full pipe."""
+    written = 0
+    capped = False
+    while True:
+        chunk = await stream.read(65536)
+        if not chunk:
+            return capped
+        if keep_tail:  # bytearray sink: keep the last `cap` bytes
+            sink.extend(chunk)
+            if len(sink) > cap:
+                del sink[: len(sink) - cap]
+                capped = True
+            continue
+        room = cap - written
+        if room <= 0:
+            capped = True
+            continue
+        part = chunk[:room]
+        if isinstance(sink, bytearray):
+            sink.extend(part)
+        else:
+            sink.write(part)
+        written += len(part)
+        if len(chunk) > room:
+            capped = True
+
+
+async def run_proc(argv: list[str], timeout: float, env: dict[str, str] | None = None, *,
+                   stdout_file: str | None = None, stdout_max: int | None = None) -> ProcResult:
+    """Run a subprocess safely: allowlisted env (`env` is added on top), stdin=/dev/null, own
+    process group, bounded capture, hard timeout and cancellation that kill the whole group
+    (SIGTERM, then SIGKILL after KILL_GRACE_SECONDS).
+
+    With `stdout_file`, stdout is streamed to that file (capped at `stdout_max`, default
+    STDOUT_MAX_BYTES) and `ProcResult.stdout` is empty: parse the file. Otherwise stdout is kept
+    in memory up to MEM_STDOUT_MAX_BYTES. stderr keeps its last STDERR_MAX_BYTES."""
     start = time.monotonic()
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -85,28 +173,76 @@ async def run_proc(argv: list[str], timeout: float, env: dict[str, str] | None =
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
-            env=full_env,
+            env=subprocess_env(env),
+            start_new_session=True,
         )
     except FileNotFoundError:
         return ProcResult(None, "", f"executable not found: {argv[0]}", False, 0)
+    err_buf = bytearray()
+    out_buf = bytearray()
+    out_fh = open(stdout_file, "wb") if stdout_file else None  # noqa: SIM115
+    timed_out = False
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        timed_out = False
-    except (TimeoutError, asyncio.TimeoutError):
-        proc.kill()
-        out, err = await proc.communicate()
-        timed_out = True
-    except asyncio.CancelledError:
-        proc.kill()
-        await proc.wait()
-        raise
+        out_task = asyncio.ensure_future(_drain(proc.stdout, out_fh if out_fh else out_buf,
+                                                (stdout_max or STDOUT_MAX_BYTES) if out_fh
+                                                else (stdout_max or MEM_STDOUT_MAX_BYTES), False))
+        err_task = asyncio.ensure_future(_drain(proc.stderr, err_buf, STDERR_MAX_BYTES, True))
+        readers = asyncio.gather(out_task, err_task)
+        try:
+            capped = await asyncio.wait_for(asyncio.shield(_wait_all(proc, readers)), timeout=timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            timed_out = True
+            await terminate_group(proc)
+            capped = await _finish_readers(readers)
+        except asyncio.CancelledError:
+            await terminate_group(proc)
+            await _finish_readers(readers)
+            raise
+    finally:
+        if out_fh:
+            out_fh.close()
     return ProcResult(
         proc.returncode,
-        out.decode("utf-8", "replace"),
-        err.decode("utf-8", "replace"),
+        out_buf.decode("utf-8", "replace"),
+        err_buf.decode("utf-8", "replace"),
         timed_out,
         int((time.monotonic() - start) * 1000),
+        stdout_path=stdout_file,
+        truncated=any(capped),
     )
+
+
+async def _wait_all(proc: asyncio.subprocess.Process, readers: asyncio.Future) -> tuple[bool, bool]:
+    capped = await readers
+    await proc.wait()
+    return capped
+
+
+async def _finish_readers(readers: asyncio.Future) -> tuple[bool, bool]:
+    try:
+        return await asyncio.wait_for(asyncio.shield(readers), 5)
+    except (TimeoutError, asyncio.TimeoutError):
+        readers.cancel()
+        return (True, True)
+    except Exception:  # noqa: BLE001
+        return (True, True)
+
+
+def scratch_dir(cache_dir: str) -> str:
+    """Directory for subprocess output files: on the cache volume (not the tmpfs), so large
+    scanner JSON neither lives in memory nor fills /tmp."""
+    d = os.path.join(cache_dir, "tmp")
+    try:
+        os.makedirs(d, exist_ok=True)
+        return d
+    except OSError:
+        return tempfile.gettempdir()
+
+
+def read_capped(path: str, limit: int = RAW_MAX_BYTES + 1) -> str:
+    """First `limit` bytes of a file as text (raw scanner output for the DB)."""
+    with open(path, "rb") as fh:
+        return fh.read(limit).decode("utf-8", "replace")
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
