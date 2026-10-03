@@ -875,8 +875,15 @@ class Worker:
                              "pkg_type": (f.pkg_type or "")[:64] or None, "cvss": f.cvss, "title": f.title, "url": f.url}
                             for f in r.findings])
             if analysis.succeeded:
-                prev = {(c.vuln_id, c.package): c.first_seen_at for c in (await s.execute(
-                    select(ConsensusFindingRow).where(ConsensusFindingRow.image_id == image_id))).scalars()}
+                # SLA clock (compliance review M5): first seen per (repository, vulnId, package) across
+                # every digest of the repository, so a rebuild / retag that still carries the CVE keeps
+                # the original first-seen date instead of restarting the remediation clock.
+                prev = {(v, p): t for v, p, t in (await s.execute(
+                    select(ConsensusFindingRow.vuln_id, ConsensusFindingRow.package,
+                           func.min(ConsensusFindingRow.first_seen_at))
+                    .join(Image, Image.id == ConsensusFindingRow.image_id)
+                    .where(Image.registry_host == img.registry_host, Image.repository == img.repository)
+                    .group_by(ConsensusFindingRow.vuln_id, ConsensusFindingRow.package))).all()}
                 await s.execute(delete(ConsensusFindingRow).where(ConsensusFindingRow.image_id == image_id))
                 rows = []
                 seen: set[tuple[str, str]] = set()

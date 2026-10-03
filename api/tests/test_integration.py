@@ -339,3 +339,42 @@ async def test_05_summary_images_match_latest_scan(env):
         await s.execute(update(Image).where(Image.ref.like("%busybox%")).values(
             score=None, scanners={"trivy": {"status": "error"}, "grype": {"status": "error"}}))
     assert (await c.get("/summary")).json()["images"] == {"total": 3, "scanned": 2, "failed": 1, "running": 2}
+
+
+async def test_06_sla_clock_survives_a_rebuilt_digest(env):
+    """Compliance review M5: first seen is keyed on (repository, vulnId, package) across digests, so
+    rebuilding or retagging an image that still carries the CVE does not restart the SLA clock."""
+    from sqlalchemy import select, update
+
+    from posture.analysis import analyze
+    from posture.db.models import ConsensusFindingRow, Image
+    from posture.mirror import ScanTarget
+    from posture.worker import ScanContext
+
+    old = datetime.now(UTC) - timedelta(days=90)
+    async with env["sm"]() as s, s.begin():
+        src = (await s.execute(select(Image).join(ConsensusFindingRow, ConsensusFindingRow.image_id == Image.id)
+                               .limit(1))).scalars().first()
+        await s.execute(update(ConsensusFindingRow).where(ConsensusFindingRow.image_id == src.id)
+                        .values(first_seen_at=old))
+        new = Image(key=f"{src.repository}@sha256:" + "7" * 64, ref=f"{src.registry_host}/{src.repository}:rebuilt",
+                    registry_host=src.registry_host, repository=src.repository, tag="rebuilt", running=True,
+                    counts={}, fixable={}, scanners={}, warnings=[], tags=[], namespaces=[])
+        s.add(new)
+        await s.flush()
+        new_id, scan_id = new.id, src.last_scan_id
+    w = make_worker(env)
+    results = [await w.scanners["trivy"].scan("alpine:3.19")]
+    assert results[0].findings
+    from posture import app_settings
+
+    async with env["sm"]() as s:
+        st = await app_settings.load(s)
+    ctx = ScanContext(scan_id=scan_id, settings=st, enabled=["trivy"])
+    await w._persist_image(ctx, new_id, ScanTarget("mirror/x@sha256:" + "7" * 64, True, True, "src"),
+                           results, analyze(results), datetime.now(UTC))
+    async with env["sm"]() as s:
+        rows = (await s.execute(select(ConsensusFindingRow).where(ConsensusFindingRow.image_id == new_id))
+                ).scalars().all()
+    carried = [r for r in rows if r.first_seen_at <= old + timedelta(seconds=1)]
+    assert rows and carried, "a CVE already seen on another digest of the repository keeps its first-seen date"
