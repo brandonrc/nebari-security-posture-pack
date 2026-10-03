@@ -68,7 +68,7 @@ async def test_01_before_any_scan(env):
     c = env["client"]
     types = (await c.get("/reports/types")).json()
     assert {t["type"] for t in types} == {"poam", "stig-checklist", "sar", "oscal-ar", "inventory", "vuln-export",
-                                         "oscal-ssp", "oscal-component-definition", "crm"}
+                                         "oscal-ssp", "oscal-component-definition", "crm", "oscal-poam"}
     t = next(x for x in types if x["type"] == "stig-checklist")
     assert t["formats"] == ["ckl", "cklb"] and t["scopes"] == ["cluster", "namespace", "workload"]
     assert t["defaultFormat"] == "cklb" and t["description"]

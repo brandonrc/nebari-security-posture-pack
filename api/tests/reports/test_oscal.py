@@ -45,17 +45,22 @@ def test_content(snapshot, opts):
     titles = [c["title"] for c in ar["results"][0]["local-definitions"]["components"]]
     assert {"Trivy", "Grype", "Clair"} <= set(titles)
     (res,) = ar["results"]
-    n_findings = len([f for f in snapshot.findings])
     failing = {r.check_id for r in snapshot.posture_results if r.status == "fail"}
-    assert len(res["observations"]) == n_findings + len(failing)
+    images = {f.image_id for f in snapshot.findings}
+    # S3: one observation per image (not per finding) plus one per failing check
+    assert len(res["observations"]) == len(images) + len(failing)
     assert len(res["risks"]) == len({f.vuln_id for f in snapshot.findings}) + len(failing)
     by_target = {f["target"]["target-id"]: f for f in res["findings"]}
-    assert by_target["si-2_smt"]["target"]["status"]["state"] == "not-satisfied"
-    assert by_target["si-2_smt"]["related-risks"]
-    # M4: findings are SI-2 flaws, not RA-5 / SI-2(2) weaknesses; AC-6(10) is no longer tagged
-    assert "ra-5_smt" not in by_target and "si-2.2_smt" not in by_target and "ac-6.10_smt" not in by_target
-    assert "sc-39_smt" in by_target
+    assert {f["target"]["type"] for f in res["findings"]} == {"objective-id"}
+    # open fixable findings -> SI-2 objective a-3 (flaws corrected); overdue ones -> c-1
+    assert by_target["si-2_obj.a-3"]["target"]["status"]["state"] == "not-satisfied"
+    assert by_target["si-2_obj.c-1"]["related-risks"]
+    assert "si-2_obj.b-1" not in by_target  # no evidence, no determination
+    assert not any(t.startswith(("ra-5_", "si-2.2_", "ac-6.10_")) for t in by_target)  # M4
+    assert "sc-39_obj" in by_target
     risk = next(r for r in res["risks"] if r["title"].startswith("CVE-2024-6387"))
+    facets = {f["name"]: f["value"] for f in risk["characterizations"][0]["facets"]}
+    assert facets["severity"] == "critical" and facets["likelihood"] == "not-assessed"
     assert risk["deadline"].startswith("2026-09-06")  # first seen 2026-08-22 + 15 days
     obs_ids = {o["uuid"] for o in res["observations"]}
     for r in res["risks"]:
@@ -77,3 +82,38 @@ def test_control_ids():
     assert control_id("SI-2(2)") == "si-2.2"
     assert control_id("AC-6(10)") == "ac-6.10"
     assert control_id("RA-5") == "ra-5"
+
+
+def test_embedded_assessment_plan_validates(snapshot, opts):
+    import base64
+
+    ap_schema = _fix_patterns(json.loads((Path(__file__).parent / "fixtures" / "oscal_assessment-plan_schema.json")
+                                         .read_text()))
+    cls = jsonschema.validators.validator_for(ap_schema)
+    ap_validator = cls(ap_schema, format_checker=cls.FORMAT_CHECKER)
+    ar = json.loads(generate("oscal-ar", "json", snapshot, opts).content)["assessment-results"]
+    href = ar["import-ap"]["href"]
+    res = next(r for r in ar["back-matter"]["resources"] if r["uuid"] == href[1:])
+    ap = json.loads(base64.b64decode(res["base64"]["value"]))
+    assert _errors(ap_validator, ap) == []
+    assert ap["assessment-plan"]["import-ssp"]["href"].endswith("-oscal-ssp-scan42-20261001.json")
+
+
+def test_oscal_poam_validates_and_matches_the_workbook(snapshot, opts):
+    schema = _fix_patterns(json.loads((Path(__file__).parent / "fixtures" / "oscal_poam_schema.json").read_text()))
+    assert schema["$id"].endswith("/1.1.2/oscal-poam-schema.json")
+    cls = jsonschema.validators.validator_for(schema)
+    val = cls(schema, format_checker=cls.FORMAT_CHECKER)
+    rep = generate("oscal-poam", "json", snapshot, opts)
+    doc = json.loads(rep.content)
+    assert _errors(val, doc) == [] and rep.filename.endswith(".json")
+    from posture.reports._common import normalize
+    from posture.reports.poam import build_items
+
+    items = build_items(normalize(snapshot, opts))
+    poam = doc["plan-of-action-and-milestones"]
+    uids = [next(p["value"] for p in i["props"] if p["name"] == "external-uid") for i in poam["poam-items"]]
+    assert uids == [i.poam_id for i in items]
+    assert json.loads(generate("oscal-poam", "json", snapshot, opts).content) == doc  # deterministic
+    empty = make_snapshot(images=[], findings=[], workloads=[], posture_results=[])
+    assert _errors(val, json.loads(generate("oscal-poam", "json", empty, opts).content)) == []

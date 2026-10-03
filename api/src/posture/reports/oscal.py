@@ -19,6 +19,7 @@ UUIDs are deterministic (v5) so regenerating the same scan yields identical docu
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import uuid
@@ -105,62 +106,98 @@ def build(v: View) -> dict[str, Any]:
                           "props": [{"name": "asset-type", "value": "appliance"}, _prop("workload", key)]})
 
     observations, risks = [], []
-    control_obs: dict[str, list[str]] = {}
-    control_risks: dict[str, list[str]] = {}
-    control_fail: set[str] = set()
+    # objective id -> evidence (S3: findings target SP 800-53A objectives, not whole controls)
+    objective: dict[str, dict[str, Any]] = {}
 
-    # ---- vulnerability observations / risks
+    def touch(obj_id: str, *, bad: bool = False, good: bool = False, obs: str | None = None,
+              risk: str | None = None) -> None:
+        e = objective.setdefault(obj_id, {"bad": False, "good": False, "obs": [], "risks": []})
+        e["bad"] |= bad
+        e["good"] |= good
+        if obs and obs not in e["obs"]:
+            e["obs"].append(obs)
+        if risk and risk not in e["risks"]:
+            e["risks"].append(risk)
+
+    def objectives_for(control: str, kind: str) -> list[str]:
+        """Objectives scan evidence counts against (controls.yaml scanObjectives; else all of the control)."""
+        from ..controls import scan_objectives
+        from ..controls_engine.catalog import get_catalog
+
+        cat = get_catalog().get(control)
+        if cat is None:
+            return []
+        refs = scan_objectives(kind, cat.label)
+        return cat.expand_objectives(refs) if refs else list(cat.objective_ids)
+
+    # ---- vulnerability observations, grouped per image (S3: tens, not tens of thousands)
+    by_image: dict[Any, list] = {}
+    for f in v.open_findings:
+        by_image.setdefault(f.image_id, []).append(f)
+    image_obs: dict[Any, str] = {}
+    for image_id, fs in sorted(by_image.items(), key=lambda kv: str(kv[0])):
+        img = v.images_by_id.get(image_id)
+        o_uuid = uid("obs-image", image_id)
+        image_obs[image_id] = o_uuid
+        sevc: dict[str, int] = {}
+        for f in fs:
+            sevc[f.severity] = sevc.get(f.severity, 0) + 1
+        ids = sorted({f.vuln_id for f in fs}, key=lambda i: (-max(sev_rank(f.severity) for f in fs if f.vuln_id == i), i))
+        kev = sorted({f.vuln_id for f in fs if f.kev})
+        props = [_prop("findings", len(fs)), *[_prop(f"findings-{k}", n) for k, n in sorted(sevc.items())],
+                 _prop("fixable", sum(1 for f in fs if f.fixable)), _prop("known-exploited", len(kev))]
+        obs = {
+            "uuid": o_uuid, "title": f"Vulnerabilities in {image_label(img) if img else image_id}",
+            "description": (f"{len(fs)} open finding(s), {len(ids)} vulnerability ID(s): " + ", ".join(ids[:200])
+                            + (f" ... +{len(ids) - 200} more (see vuln-export)" if len(ids) > 200 else "")
+                            + (f". CISA KEV: {', '.join(kev)}" if kev else "") + "."),
+            "props": props, "methods": ["TEST"], "types": ["finding"],
+            "origins": [{"actors": [{"type": "tool", "actor-uuid": scanner_uuid.get(sn, tool_uuid)}
+                                    for sn in sorted({sn for f in fs for sn in f.scanners}) or ["pack"]]}],
+            "collected": collected,
+        }
+        if image_id in img_uuid:
+            obs["subjects"] = [{"subject-uuid": img_uuid[image_id], "type": "inventory-item"}]
+        observations.append(obs)
+
     by_vuln: dict[str, list] = {}
     for f in v.open_findings:
         by_vuln.setdefault(f.vuln_id, []).append(f)
     for vid, fs in sorted(by_vuln.items()):
-        obs_ids = []
-        for f in fs:
-            o_uuid = uid("obs", f.image_id, f.vuln_id, f.package)
-            obs_ids.append(o_uuid)
-            img = v.images_by_id.get(f.image_id)
-            desc = (f"{f.vuln_id} ({f.severity}) in package {f.package} {f.installed_version}"
-                    + (f", fixed in {f.fixed_version}" if f.fixed_version else ", no fix available")
-                    + (f" - image {image_label(img)}" if img else "") + ".")
-            props = [_prop("severity", f.severity), _prop("package", f.package or "-"),
-                     _prop("fixable", str(bool(f.fixable)).lower())]
-            if f.agreement is not None:
-                props.append(_prop("agreement", round(f.agreement, 3)))
-            if f.cvss is not None:
-                props.append(_prop("cvss", f.cvss))
-            for s, sv in sorted(f.per_scanner.items()):
-                props.append(_prop(f"{s}-severity", sv))
-            obs = {
-                "uuid": o_uuid, "title": f"{f.vuln_id} in {f.package}", "description": desc, "props": props,
-                "methods": ["TEST"], "types": ["finding"],
-                "origins": [{"actors": [{"type": "tool", "actor-uuid": scanner_uuid.get(s, tool_uuid)}
-                                        for s in (f.scanners or ["pack"])]}],
-                "subjects": ([{"subject-uuid": img_uuid[f.image_id], "type": "inventory-item"}]
-                             if f.image_id in img_uuid else []),
-                "collected": collected,
-            }
-            if f.url:
-                obs["relevant-evidence"] = [{"href": f.url, "description": f"Advisory for {f.vuln_id}"}]
-            if not obs["subjects"]:
-                del obs["subjects"]
-            observations.append(obs)
-            for c in f.controls:
-                control_obs.setdefault(control_id(c), []).append(o_uuid)
         f0 = max(fs, key=lambda f: sev_rank(f.severity))
         first = min(f.first_seen_at for f in fs)
+        due = min((d for d in (v.finding_due(f) for f in fs) if d), default=None)
+        overdue = bool(due and due < v.now)
         r_uuid = uid("risk", vid)
         fixed = sorted({f"{f.package} {f.fixed_version}" for f in fs if f.fixed_version})
+        kev = any(f.kev for f in fs)
+        facets = [{"name": "severity", "system": NS, "value": f0.severity},
+                  {"name": "known-exploited", "system": NS, "value": str(kev).lower()},
+                  {"name": "likelihood", "system": NS, "value": "not-assessed"},
+                  {"name": "impact", "system": NS, "value": "not-assessed"}]
+        cvss = max((f.cvss for f in fs if f.cvss is not None), default=None)
+        if cvss is not None:
+            facets.append({"name": "cvss-base-score", "system": NS, "value": str(cvss)})
+        obs_ids = list(dict.fromkeys(image_obs[f.image_id] for f in fs if f.image_id in image_obs))
         risk = {
             "uuid": r_uuid, "title": f"{vid}: {f0.title}" if f0.title else vid,
             "description": _clean(f0.description or f0.title or vid),
             "statement": (f"{vid} ({f0.severity}) affects {len({f.image_id for f in fs})} image(s). Remediation "
-                          f"is due within {v.sla_days.get(f0.severity)} days of first detection "
-                          f"({first:%Y-%m-%d})."),
-            "props": [_prop("severity", f0.severity), _prop("overdue", str(v.overdue(f0.severity, first)).lower())],
+                          f"is due by {due:%Y-%m-%d} (severity SLA from first detection {first:%Y-%m-%d}"
+                          + (", or the CISA KEV due date" if kev else "") + ")." if due else
+                          f"{vid} ({f0.severity}) affects {len({f.image_id for f in fs})} image(s)."),
+            "props": [_prop("severity", f0.severity), _prop("overdue", str(overdue).lower()),
+                      _prop("known-exploited", str(kev).lower())],
             "status": "open",
-            "deadline": iso(v.sla_due(f0.severity, first)),
+            "characterizations": [{"origin": {"actors": [{"type": "tool", "actor-uuid": tool_uuid}]},
+                                   "facets": facets}],
+            "deadline": iso(due),
             "related-observations": [{"observation-uuid": o} for o in obs_ids],
+            "risk-log": {"entries": [{"uuid": uid("risk-log", vid), "title": "Identified by automated scanning",
+                                      "start": iso(first), "status-change": "open"}]},
         }
+        if not risk["related-observations"]:
+            del risk["related-observations"]
         if fixed:
             risk["remediations"] = [{
                 "uuid": uid("remediation", vid), "lifecycle": "planned", "title": "Upgrade affected packages",
@@ -168,7 +205,9 @@ def build(v: View) -> dict[str, Any]:
             }]
         risks.append(risk)
         for c in {c for f in fs for c in f.controls}:
-            control_risks.setdefault(control_id(c), []).append(r_uuid)
+            for kind in ("open", *(("overdue",) if overdue else ())):
+                for o in objectives_for(c, kind):
+                    touch(o, bad=True, risk=r_uuid, obs=obs_ids[0] if obs_ids else None)
 
     # ---- posture observations / risks
     by_check: dict[str, list] = {}
@@ -196,6 +235,10 @@ def build(v: View) -> dict[str, Any]:
             "statement": f"{len(keys)} workload(s) fail posture check '{cid}' ({severity}).",
             "props": [_prop("severity", severity)],
             "status": "open",
+            "characterizations": [{"origin": {"actors": [{"type": "tool", "actor-uuid": tool_uuid}]},
+                                   "facets": [{"name": "severity", "system": NS, "value": severity},
+                                              {"name": "likelihood", "system": NS, "value": "not-assessed"},
+                                              {"name": "impact", "system": NS, "value": "not-assessed"}]}],
             "deadline": iso(v.sla_due(severity, first)),
             "related-observations": [{"observation-uuid": o_uuid}],
             **({"remediations": [{"uuid": uid("remediation-check", cid), "lifecycle": "planned",
@@ -203,14 +246,16 @@ def build(v: View) -> dict[str, Any]:
                                   "description": chk.remediation}]} if chk.remediation else {}),
         })
         for c in chk.controls:
-            control_obs.setdefault(control_id(c), []).append(o_uuid)
-            control_risks.setdefault(control_id(c), []).append(r_uuid)
+            for o in objectives_for(c, "posture"):
+                touch(o, bad=True, obs=o_uuid, risk=r_uuid)
 
     # ---- control assertion observations (M3: the same control evidence run as the SSP / POA&M)
     run = v.engine_run
+    assertion_obs: dict[str, str] = {}
     for r in sorted(v.engine_results, key=lambda r: r.get("id", "")):
         aid = r.get("id", "")
         o_uuid = uid("obs-assertion", aid, run.get("id"))
+        assertion_obs[aid] = o_uuid
         status = r.get("status", "unknown")
         observations.append({
             "uuid": o_uuid, "title": f"Control assertion {aid}: {r.get('title', '')}",
@@ -223,39 +268,41 @@ def build(v: View) -> dict[str, Any]:
                                    "description": "Raw evidence JSON and history of this assertion"}],
             "collected": r.get("checkedAt") or collected,
         })
-        for c in r.get("controls") or []:
-            control_obs.setdefault(control_id(c), []).append(o_uuid)
-            if status == "fail":
-                control_fail.add(control_id(c))
+    for st in v.engine_statuses:
+        for o in st.get("objectives") or []:
+            if o.get("state") not in ("satisfied", "not-satisfied"):
+                continue
+            real = [a for a in o.get("assertions") or [] if a in assertion_obs]
+            for a in real or [None]:
+                touch(o["id"], bad=o["state"] == "not-satisfied", good=o["state"] == "satisfied",
+                      obs=assertion_obs.get(a) if a else None)
 
-    # ---- findings per control: not-satisfied on failing evidence (scan risks, failing assertions or
-    # objectives); satisfied only when the control evidence run shows every objective passing (M3)
-    engine_status = {control_id(s["control"]): s for s in v.engine_statuses}
-    assessed = set(control_obs) | set(control_risks)
+    # ---- findings per SP 800-53A objective (S3): not-satisfied on any failing evidence, satisfied only
+    # when the control evidence run shows passing evidence and nothing fails; nothing else is determined
+    from ..controls_engine.catalog import objective_control
+
     findings = []
-    for cid in sorted(assessed):
-        obs, rks = control_obs.get(cid, []), control_risks.get(cid, [])
-        upper = cid.upper().replace(".", "(", 1) + (")" if "." in cid else "")
-        es = engine_status.get(cid) or {}
-        bad_obj = [o["id"] for o in es.get("objectives") or [] if o.get("state") == "not-satisfied"]
-        if rks or cid in control_fail or bad_obj or es.get("status") == "failing":
-            state = "not-satisfied"
-        elif es.get("status") == "passing":
-            state = "satisfied"
-        else:
-            continue  # partially evidenced: no determination is made
+    for oid in sorted(objective):
+        e = objective[oid]
+        if not (e["bad"] or e["good"]):
+            continue
+        state = "not-satisfied" if e["bad"] else "satisfied"
+        label = objective_control(oid).upper()
+        label = label.replace(".", "(", 1) + (")" if "." in label else "")
         fnd = {
-            "uuid": uid("finding", cid),
-            "title": f"{upper} {control_title(upper)}".strip(),
-            "description": (f"{len(rks)} open risk(s) and {len(obs)} observation(s) map to {upper}"
-                            + (f"; control evidence status {es['status']}" if es.get("status") else "") + "."),
-            "target": {"type": "statement-id", "target-id": f"{cid}_smt", "status": {"state": state}},
+            "uuid": uid("finding", oid),
+            "title": f"{label} objective {oid.split('_obj', 1)[1].lstrip('.-') or '(whole control)'}: "
+                     f"{control_title(label)}".strip(),
+            "description": (f"{len(e['risks'])} open risk(s) and {len(e['obs'])} observation(s) bear on "
+                            f"SP 800-53A objective {oid}."),
+            "target": {"type": "objective-id", "target-id": oid, "status": {"state": state}},
         }
-        if obs:
-            fnd["related-observations"] = [{"observation-uuid": o} for o in dict.fromkeys(obs)]
-        if rks:
-            fnd["related-risks"] = [{"risk-uuid": r} for r in dict.fromkeys(rks)]
+        if e["obs"]:
+            fnd["related-observations"] = [{"observation-uuid": o} for o in e["obs"]]
+        if e["risks"]:
+            fnd["related-risks"] = [{"risk-uuid": r} for r in e["risks"]]
         findings.append(fnd)
+    assessed = {objective_control(o) for o in objective} or {"ra-5"}
 
     ap_uuid = uid("resource", "assessment-plan")
     result: dict[str, Any] = {
@@ -273,7 +320,7 @@ def build(v: View) -> dict[str, Any]:
         "reviewed-controls": {"control-selections": [{
             "description": "NIST SP 800-53 Rev. 5 controls with automated evidence (scans, posture checks and "
                            "control assertions).",
-            "include-controls": [{"control-id": c} for c in sorted(assessed or {"ra-5"})],
+            "include-controls": [{"control-id": c} for c in sorted(assessed)],
         }]},
     }
     if v.scan.finished_at:
@@ -307,13 +354,39 @@ def build(v: View) -> dict[str, Any]:
         "import-ap": {"href": f"#{ap_uuid}"},
         "results": [result],
         "back-matter": {"resources": [{
-            "uuid": ap_uuid, "title": "Implicit assessment plan",
-            "description": "Continuous automated assessment: image inventory from the Kubernetes API, "
-                           "vulnerability scanning with Trivy, Grype and Clair (consensus by vulnerability "
-                           "and package), and Kubernetes workload posture checks, run on a schedule by "
-                           f"{TOOL_NAME}. No separate OSCAL assessment-plan document exists.",
+            "uuid": ap_uuid, "title": "Assessment plan (automated continuous monitoring)",
+            "description": "Minimal OSCAL assessment-plan for the automated assessment: the reviewed controls, "
+                           "the assessment subjects (every inventoried image and workload) and the tools. Embedded "
+                           "below; replace this resource with your assessment plan when an assessor uses one.",
+            "props": [_prop("document-type", "assessment-plan")],
+            "base64": {"filename": "assessment-plan.json", "media-type": "application/json",
+                       "value": base64.b64encode(json.dumps({"assessment-plan": assessment_plan(
+                           v, uid, sorted(assessed), components, inventory, parties)}).encode()).decode()},
         }]},
     }}
+
+
+def assessment_plan(v: View, uid: Any, controls: list[str], components: list[dict[str, Any]],
+                    inventory: list[dict[str, Any]], parties: list[dict[str, Any]]) -> dict[str, Any]:
+    """A real, minimal OSCAL 1.1.2 assessment-plan (S3) so tools that resolve import-ap find one."""
+    ap: dict[str, Any] = {
+        "uuid": uid("assessment-plan"),
+        "metadata": {"title": f"{v.system.name} - automated continuous-monitoring assessment plan",
+                     "last-modified": iso(v.generated_at), "version": str(v.scan.id), "oscal-version": OSCAL_VERSION,
+                     "parties": parties},
+        "import-ssp": {"href": filename(v, "oscal-ssp", "json"),
+                       "remarks": "The OSCAL SSP generated from the same scan and control evidence run."},
+        "local-definitions": {"components": components,
+                              "activities": [{"uuid": uid("activity", "scan"), "title": "Automated scan",
+                                              "description": "Image inventory, three-scanner vulnerability "
+                                                             "consensus, workload posture checks and live control "
+                                                             "assertions, on a schedule and on demand."}]},
+        "reviewed-controls": {"control-selections": [{"include-controls": [{"control-id": c} for c in controls]}]},
+        "assessment-subjects": [{"type": "inventory-item", "include-all": {}}],
+    }
+    if inventory:
+        ap["local-definitions"]["inventory-items"] = inventory
+    return ap
 
 
 def generate(fmt: str, snapshot: Any, options: dict[str, Any]) -> GeneratedReport:

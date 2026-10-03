@@ -23,6 +23,7 @@ def generate(fmt: str, snapshot: Any, options: dict[str, Any]) -> GeneratedRepor
                     not_applicable=ce.get("notApplicable") or {},
                     inherit_organizational=bool(ce.get("inheritOrganizationalControls", False)),
                     providers=ce.get("commonControlProviders") or [],
-                    poam_controls=poam_controls(v), scan_id=v.scan.id)
+                    poam_controls=poam_controls(v), scan_id=v.scan.id,
+                    parameters=ce.get("parameters"), parameter_extra=ce.get("parameterExtra"))
     data = json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8")
     return GeneratedReport(data, filename(v, "oscal-ssp", "json"), "application/json")

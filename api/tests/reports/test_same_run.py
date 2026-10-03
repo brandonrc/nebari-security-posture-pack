@@ -40,9 +40,10 @@ def test_ar_has_assertion_observations_and_engine_based_findings():
     assert {o["title"].split(":")[0] for o in obs} == {"Control assertion kc-brute-force-protection",
                                                        "Control assertion kc-remember-me-disabled"}
     find = {f["target"]["target-id"]: f["target"]["status"]["state"] for f in res["findings"]}
-    assert find["ac-7_smt"] == "not-satisfied" and find["ac-12_smt"] == "satisfied"
-    # scan-only controls without failures get no `satisfied` determination
-    assert all(state == "not-satisfied" for cid, state in find.items() if cid not in ("ac-12_smt",))
+    assert find["ac-7_obj.a"] == "not-satisfied" and find["ac-7_obj.b"] == "not-satisfied"
+    assert find["ac-12_obj"] == "satisfied"
+    # scan-only evidence never yields a `satisfied` determination
+    assert all(state == "not-satisfied" for oid, state in find.items() if oid != "ac-12_obj")
 
 
 def test_ar_without_engine_never_claims_satisfied():

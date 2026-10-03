@@ -351,16 +351,38 @@ v1.1.2 release (`api/tests/reports/fixtures/`).
 | OSCAL element | Content |
 |---|---|
 | `metadata` | Title, version = scan ID, parties (organization, POC), props `system-name`, `scope`, `generator` |
-| `import-ap` | `#<uuid>` of a back-matter resource that describes the implicit continuous-monitoring assessment plan. No separate AP document exists; replace this with your AP's href if you have one |
-| `results[0]` | One result per scan: `start`/`end` = scan times, props `scan-id`, `score`, `grade` |
+| `import-ap` | `#<uuid>` of a back-matter resource that embeds a minimal, schema-valid OSCAL `assessment-plan` (reviewed controls, assessment subjects = every inventory item, the tools, `import-ssp` = the SSP of the same scan). Replace it with your assessor's plan when there is one |
+| `results[0]` | One result per scan: `start`/`end` = scan times, props `scan-id`, `control-evidence-run`, `hygiene-index`, `hygiene-grade` |
 | `results[0].local-definitions` | `components`: the pack plus each scanner (with version and DB date). `inventory-items`: each image (ref, digest, base OS) and each workload |
-| `reviewed-controls` | Every control touched (`ra-5`, `si-2`, `si-2.2`, `ac-6`, `cm-7`, ...) |
-| `observations` | One per open (image, vuln, package) finding and one per failing posture check. Methods `TEST`, type `finding`, origin actors = the scanners (tool), subjects = inventory items. Props carry severity, per-scanner severity, agreement, CVSS, fixable |
-| `risks` | One per CVE and one per failing check. Status `open`, `deadline` = SLA due date, planned `remediations` when a fix exists |
-| `findings` | One per control, target `<control>_smt` with state `not-satisfied` when open risks map to it, otherwise `satisfied` |
+| `reviewed-controls` | Every control with evidence in this result |
+| `observations` | **One per image** with open findings (counts by severity, fixable, CISA KEV, the vulnerability IDs), one per failing posture check, and one per control assertion of the same control evidence run (type `control-objective`, link to the raw evidence). Grouping keeps the document importable (the per-finding layout produced 84 MB on grace) |
+| `risks` | One per CVE and one per failing check. Status `open`, `deadline` = the SLA due date (or the KEV due date when earlier), `characterizations` facets (severity, known-exploited, CVSS; likelihood and impact `not-assessed`), a `risk-log` entry, planned `remediations` when a fix exists |
+| `findings` | One per **SP 800-53A objective** with evidence (target type `objective-id`, e.g. `si-2_obj.a-3`): `not-satisfied` on any failing evidence (scan risks via `controls.yaml` `scanObjectives`, failing assertions), `satisfied` only when the control evidence run shows passing evidence and nothing fails. Objectives without evidence get no finding: no determination is made for controls that are only partly tested |
 
 Custom props use the namespace `https://nebari.dev/ns/oscal`. UUIDs are deterministic
 (v5), so regenerating the same scan yields an identical document.
+
+## OSCAL POA&M (`oscal-poam`)
+
+NIST OSCAL **1.1.2** `plan-of-action-and-milestones` JSON with exactly the items of the `poam`
+workbook (same granularity option, baseline filtering and External UIDs): one `risk` per item
+(deadline, characterizations, a planned remediation with a milestone task) and one `poam-item`
+pointing at it, with props `external-uid`, `control`, `cci`, `raw-severity` and the KEV due date.
+`import-ssp` names the SSP of the same scan. UUIDs derive from the External UID, so regenerated
+documents update items instead of duplicating them. Validated against the official schema in tests.
+
+## OSCAL SSP (`oscal-ssp`), component definition, CRM
+
+Generated from the control evidence run of the scan (see [CONTROLS.md](CONTROLS.md)). The SSP is
+a **draft**: metadata remarks and a `document-status: draft` prop mark the placeholders
+(information types, impact levels, boundary, ISSO / AO roles, diagrams). It carries
+`set-parameters` for the ODPs the engine evaluates (with the cited source of each value),
+statement-level responses per SP 800-53A objective, FedRAMP `control-origination` props
+(`https://fedramp.gov/ns/oscal`), the program's residual responsibilities
+(`by-component.export.responsibilities`), `leveraged-authorizations` for configured common control
+providers, and imports the selected profile (NIST, FedRAMP, or a back-matter resource that
+documents the CNSSI 1253 approximation). The component definition carries statements and
+set-parameters too. The `crm` report (xlsx, csv) is the draft Customer Responsibility Matrix.
 
 ## Hardware/Software inventory (`inventory`)
 

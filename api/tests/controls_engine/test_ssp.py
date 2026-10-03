@@ -60,7 +60,9 @@ async def engine_data(world=None):
             "results": [o.as_dict() for o in outs],
             "statuses": [{"control": r.control, "id": r.id, "family": r.family, "baseline": r.baseline,
                           "inBaseline": r.in_baseline, "status": r.status, "components": r.components,
-                          "assertions": r.assertions, "detail": r.detail, "score": r.score} for r in rows]}
+                          "assertions": r.assertions, "detail": r.detail, "score": r.score,
+                          "responsibility": r.responsibility, "provider": r.provider, "objectives": r.objectives}
+                         for r in rows]}
 
 
 async def test_ssp_validates_and_carries_statuses(ssp_validator):
@@ -191,3 +193,42 @@ def test_ssp_imports_the_selected_profile(ssp_validator):
     ref = ssp["import-profile"]["href"]
     assert ref.startswith("#") and any(r["uuid"] == ref[1:] and "APPROXIMATION" in r["description"]
                                        for r in ssp["back-matter"]["resources"])
+
+
+async def test_ssp_set_parameters_statements_origination_and_draft(ssp_validator, comp_validator):
+    """S3: ODPs as set-parameters (with their cited source), statement-level responses, FedRAMP
+    control-origination props, a draft marker on the placeholders."""
+    from posture.controls_engine.catalog import odp_profile
+
+    params = {k: v["value"] for k, v in odp_profile("cnssi-1253-mod-mod-mod").items()}
+    doc = build_ssp(await engine_data(), system_name="grace", baseline="moderate", parameters=params,
+                    parameter_extra={"adminSubjects": ["alice"], "approvedIssuers": ["org-ca"],
+                                     "slaDays": {"critical": 15, "high": 30}})
+    assert _errors(ssp_validator, doc) == []
+    ssp = doc["system-security-plan"]
+    sp = {p["param-id"]: p for p in ssp["control-implementation"]["set-parameters"]}
+    assert sp["ac-07_odp.01"]["values"] == ["3"] and "administrator" in sp["ac-07_odp.03"]["values"][0]
+    assert sp["ia-05.01_odp.02"]["values"][0].startswith("minimum length 15")
+    assert sp["au-11_odp"]["values"] == ["365 days"] and "Source:" in sp["au-11_odp"]["remarks"]
+    assert sp["sc-17_odp"]["values"][0].endswith("org-ca") and "KEV" in sp["si-02_odp"]["values"][0]
+    reqs = {r["control-id"]: r for r in ssp["control-implementation"]["implemented-requirements"]}
+    ac7 = reqs["ac-7"]
+    assert {s["statement-id"] for s in ac7["statements"]} == {"ac-7_smt.a", "ac-7_smt.b"}
+    assert ac7["statements"][0]["by-components"][0]["implementation-status"]["state"] == "implemented"
+    orig = [p["value"] for p in reqs["ac-2"]["props"] if p["name"] == "control-origination"]
+    assert orig == ["sp-system", "customer-configured"]
+    assert any(p["ns"] == "https://fedramp.gov/ns/oscal" for p in reqs["ac-7"]["props"]
+               if p["name"] == "control-origination")
+    md = ssp["metadata"]
+    assert "DRAFT" in md["remarks"] and {"name": "document-status", "ns": "https://nebari.dev/ns/oscal",
+                                         "value": "draft"} in md["props"]
+    assert any(r["id"] == "authorizing-official" for r in md["roles"])
+    info = ssp["system-characteristics"]["system-information"]["information-types"][0]
+    assert info["title"].startswith("PLACEHOLDER")
+    comp = build_component_definition()
+    assert _errors(comp_validator, comp) == []
+    kc = next(c for c in comp["component-definition"]["components"] if c["title"] == "Keycloak")
+    ci = kc["control-implementations"][0]
+    assert {p["param-id"] for p in ci["set-parameters"]} >= {"ac-07_odp.01", "ia-05.01_odp.02"}
+    ac7c = next(r for r in ci["implemented-requirements"] if r["control-id"] == "ac-7")
+    assert {s["statement-id"] for s in ac7c["statements"]} == {"ac-7_smt.a", "ac-7_smt.b"}

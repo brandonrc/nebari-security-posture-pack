@@ -73,6 +73,16 @@ REPORT_TYPES: list[dict[str, Any]] = [
                        "risks with SLA deadlines, findings per NIST 800-53 control.",
     },
     {
+        "type": "oscal-poam",
+        "title": "OSCAL Plan of Action and Milestones",
+        "formats": ["json"],
+        "scopes": SCOPES,
+        "options": ["poamGranularity", "systemName", "includeSystemNamespaces", "baseline", "kevDueDates"],
+        "description": "NIST OSCAL 1.1.2 plan-of-action-and-milestones with the same items as the POA&M workbook: "
+                       "one risk (deadline, characterizations, milestone) and one poam-item per item, stable "
+                       "External UIDs.",
+    },
+    {
         "type": "inventory",
         "title": "Hardware/Software inventory",
         "formats": ["xlsx", "csv"],
@@ -133,6 +143,7 @@ _MODULES = {
     "oscal-ssp": "oscal_ssp",
     "oscal-component-definition": "oscal_component",
     "crm": "crm",
+    "oscal-poam": "oscal_poam",
 }
 
 
