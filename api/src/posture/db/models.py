@@ -16,6 +16,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -67,6 +68,7 @@ class Scan(Base):
     log: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
     error: Mapped[str | None] = mapped_column(Text)
     inventory_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    vuln_rollup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # vuln_rollup written
 
 
 class Image(Base):
@@ -100,6 +102,7 @@ class Image(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_scan_id: Mapped[int | None] = mapped_column(BigInteger)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)  # compressed layers + config (admission)
 
 
 class ImageScan(Base):
@@ -273,7 +276,8 @@ class Report(Base):
     """Compliance report metadata (DESIGN §11); generators are in posture.reports."""
 
     __tablename__ = "reports"
-    __table_args__ = (Index("ix_reports_type_created", "type", "created_at"),)
+    __table_args__ = (Index("ix_reports_type_created", "type", "created_at"),
+                      Index("ix_reports_status_created", "status", "created_at"))
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"), index=True)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -289,3 +293,53 @@ class Report(Base):
     error: Mapped[str | None] = mapped_column(Text)
     path: Mapped[str | None] = mapped_column(Text)
     options: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    # report-worker queue (lease + heartbeat; posture.report_worker)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    worker_id: Mapped[str | None] = mapped_column(String(255))
+
+
+class VulnRollupRow(Base):
+    """CVE-centric rollup of the running images' consensus findings, written once per scan
+    (`/vulnerabilities` is served from it with SQL filter / sort / keyset pagination)."""
+
+    __tablename__ = "vuln_rollup"
+    __table_args__ = (
+        UniqueConstraint("scan_id", "vuln_id", name="uq_vuln_rollup_scan_vuln"),
+        Index("ix_vuln_rollup_scan_sev", "scan_id", "severity_rank"),
+        Index("ix_vuln_rollup_search_trgm", "search", postgresql_using="gin",
+              postgresql_ops={"search": "gin_trgm_ops"}),
+    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"), nullable=False)
+    vuln_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    severity_rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    scanners: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
+    agreement: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    images_affected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    workloads_affected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fix_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cvss: Mapped[float | None] = mapped_column(Float)
+    kev: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    title: Mapped[str | None] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(Text)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    packages: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
+    search: Mapped[str] = mapped_column(Text, nullable=False, default="")  # lower(vulnId title packages) for `q`
+
+
+class CompatReportRow(Base):
+    """provenance-collector-pack report JSON (Go-identical bytes), materialized once per scan."""
+
+    __tablename__ = "compat_reports"
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(64), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cluster_name: Mapped[str | None] = mapped_column(String(255))
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    body: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = _now_col()
