@@ -174,3 +174,148 @@ def test_report_routes_are_admin_only():
         assert r.status_code == 403 and r.json() == {"detail": "admin group required"}, path
     admin = {"Authorization": f"Bearer {token()}"}
     assert client.get("/api/v1/reports/types", headers=admin).status_code == 200
+
+
+# ---------------------------------------------------------------- security review H1 / L3 / L4
+def _get(client, tok):
+    return client.get("/admin", headers={"Authorization": f"Bearer {tok}"})
+
+
+def test_oidc_without_issuers_refuses_to_start():
+    from posture.auth import AuthConfigError
+
+    with pytest.raises(AuthConfigError, match="OIDC_ISSUERS"):
+        Authenticator(Settings(auth_mode="oidc", oidc_issuers=[]))
+
+
+def test_auth_disabled_requires_posture_dev(monkeypatch):
+    from posture.auth import AuthConfigError
+
+    monkeypatch.delenv("POSTURE_DEV", raising=False)
+    with pytest.raises(AuthConfigError, match="POSTURE_DEV"):
+        Authenticator(Settings(auth_mode="disabled"))
+    Authenticator(Settings(auth_mode="disabled", posture_dev=True))  # allowed
+
+
+def test_unknown_auth_mode_refuses_to_start():
+    from posture.auth import AuthConfigError
+
+    with pytest.raises(AuthConfigError):
+        Authenticator(Settings(auth_mode="none", oidc_issuers=[ISS]))
+
+
+def test_audience_wrong_and_missing_rejected():
+    client, _, _ = make_client(oidc_client_ids=["security-posture-security-posture"])
+    assert _get(client, token(aud="other-app", azp="other-app")).status_code == 401
+    assert _get(client, token()).status_code == 401  # no aud, no azp
+    # access token: aud=account, azp=our client -> accepted
+    assert _get(client, token(aud="account", azp="security-posture-security-posture")).status_code == 200
+    # id token: aud=our client
+    assert _get(client, token(aud="security-posture-security-posture")).status_code == 200
+    assert _get(client, token(aud=["account", "security-posture-security-posture"], azp="x")).status_code == 200
+
+
+def test_oidc_audiences_and_legacy_audience_merge():
+    s = Settings(auth_mode="oidc", oidc_issuers=[ISS], oidc_audiences=["a"], oidc_client_ids=["b"],
+                 oidc_audience="c")
+    assert s.accepted_audiences == ["a", "b", "c"]
+    client, _, _ = make_client(oidc_audiences=["grafana"])
+    assert _get(client, token(azp="grafana")).status_code == 200
+    assert _get(client, token(azp="jupyterhub")).status_code == 401
+
+
+def test_no_audience_configured_skips_check_with_warning():
+    client, _, auth = make_client()
+    assert auth.audiences == set()
+    assert _get(client, token(aud="anything")).status_code == 200
+
+
+def test_alg_confusion_hs256_with_rsa_public_key_rejected():
+    from cryptography.hazmat.primitives import serialization
+
+    client, _, _ = make_client()
+    pem = KEY1.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    claims = {"iss": ISS, "exp": int(time.time()) + 300, "groups": ["admin"]}
+    # PyJWT refuses PEM keys as HMAC secrets, so sign the HS256 token by hand
+    import hashlib
+    import hmac
+    import json as _json
+
+    def b64u(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    head = b64u(_json.dumps({"alg": "HS256", "typ": "JWT", "kid": "k1"}).encode())
+    body = b64u(_json.dumps(claims).encode())
+    sig = b64u(hmac.new(pem, f"{head}.{body}".encode(), hashlib.sha256).digest())
+    assert _get(client, f"{head}.{body}.{sig}").status_code == 401
+
+
+def test_alg_mismatch_with_jwk_alg_rejected():
+    client, _, _ = make_client()
+    t = jwt.encode({"iss": ISS, "exp": int(time.time()) + 300, "groups": ["admin"]}, KEY1, algorithm="PS256",
+                   headers={"kid": "k1"})
+    assert _get(client, t).status_code == 401  # JWK pins RS256
+
+
+def test_missing_exp_iss_and_future_nbf_rejected():
+    client, _, _ = make_client()
+    now = int(time.time())
+    no_exp = jwt.encode({"iss": ISS, "groups": ["admin"]}, KEY1, algorithm="RS256", headers={"kid": "k1"})
+    no_iss = jwt.encode({"exp": now + 300, "groups": ["admin"]}, KEY1, algorithm="RS256", headers={"kid": "k1"})
+    assert _get(client, no_exp).status_code == 401
+    assert _get(client, no_iss).status_code == 401
+    assert _get(client, token(nbf=now + 3600)).status_code == 401
+    assert _get(client, token(nbf=now - 10)).status_code == 200
+
+
+def _client_with_jwks(handler):
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    settings = Settings(auth_mode="oidc", oidc_issuers=[ISS], oidc_jwks_url="http://jwks")
+    set_authenticator(Authenticator(settings, JWKSCache("http://jwks", 600, http=http)))
+    app = FastAPI()
+
+    @app.get("/admin")
+    async def admin(user: User = Depends(require_admin)):
+        return {"ok": True}
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_jwks_http_500_is_401():
+    client = _client_with_jwks(lambda r: httpx.Response(500, text="boom"))
+    assert _get(client, token()).status_code == 401
+
+
+def test_jwks_non_json_is_401():
+    client = _client_with_jwks(lambda r: httpx.Response(200, text="<html>login</html>"))
+    assert _get(client, token()).status_code == 401
+    client = _client_with_jwks(lambda r: httpx.Response(200, json=["not", "an", "object"]))
+    assert _get(client, token()).status_code == 401
+
+
+async def test_jwks_lock_not_held_during_fetch(monkeypatch):
+    """Concurrent callers share one in-flight fetch; once cached, an expired TTL refreshes in the
+    background and does not block requests on a slow JWKS endpoint."""
+    import asyncio
+
+    release = asyncio.Event()
+    calls = 0
+
+    async def slow(request):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            await release.wait()
+        return httpx.Response(200, json={"keys": [JWK1]})
+
+    cache = JWKSCache("http://jwks", ttl=0, http=httpx.AsyncClient(transport=httpx.MockTransport(slow)))
+    monkeypatch.setattr("posture.auth.REFETCH_MIN_INTERVAL", 0)
+    await asyncio.gather(*(cache.get_key("k1") for _ in range(5)))
+    assert calls == 1  # single flight
+    # TTL expired, background refresh hangs: callers still get the cached key immediately
+    key = await asyncio.wait_for(cache.get_key("k1"), timeout=1)
+    assert key is not None
+    await asyncio.sleep(0)
+    assert calls == 2 and not cache._lock.locked()
+    release.set()
+    await cache._inflight

@@ -21,7 +21,7 @@ docker run -d --name posture-pg -p 127.0.0.1:55432:5432 \
 # 2. venv (uv or plain pip)
 uv sync --extra dev            # or: python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 export DATABASE_URL=postgresql://posture:posture@127.0.0.1:55432/posture
-export AUTH_MODE=disabled      # dev only: every request is admin (a warning is logged)
+export AUTH_MODE=disabled POSTURE_DEV=1   # dev only: every request is admin; refused without POSTURE_DEV=1
 
 # 3. schema + API
 .venv/bin/python -m posture.migrate
@@ -66,10 +66,13 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | var | default | used by | meaning |
 |---|---|---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://posture:posture@localhost:5432/posture` | both | `postgresql://` is rewritten to `+asyncpg` |
-| `AUTH_MODE` | `oidc` | api | `disabled` = no auth (dev only) |
+| `AUTH_MODE` | `oidc` | api | `disabled` = no auth (dev only; the API refuses to start unless `POSTURE_DEV=1`) |
+| `POSTURE_DEV` | unset | api | `1` permits `AUTH_MODE=disabled`; never set in a cluster |
 | `OIDC_JWKS_URL` | in-cluster Keycloak `.../realms/nebari/protocol/openid-connect/certs` | api | JWKS (cached 10 min, refetched on unknown `kid`) |
-| `OIDC_ISSUERS` | empty | api | comma list of accepted `iss`; empty = any issuer signed by the JWKS (warning logged) |
-| `OIDC_AUDIENCE` | unset | api | when set, `aud` is verified |
+| `OIDC_ISSUERS` | empty | api | **required** with `AUTH_MODE=oidc`: comma list of accepted `iss`; empty = the API refuses to start |
+| `OIDC_CLIENT_IDS` | empty | api | comma list; the chart sets the operator-provisioned client id `<namespace>-<fullname>`. A token is accepted when its `aud` contains, or its `azp` equals, one of `OIDC_CLIENT_IDS` ∪ `OIDC_AUDIENCES` ∪ `OIDC_AUDIENCE` |
+| `OIDC_AUDIENCES` | empty | api | extra accepted audiences / authorized parties (comma list). All three empty = aud/azp not checked (warning logged at startup) |
+| `OIDC_AUDIENCE` | unset | api | legacy single value, merged into the list above |
 | `ADMIN_GROUPS` | `admin` | api | comma list; leading `/` stripped on both sides |
 | `TRIVY_SERVER_URL` / `CLAIR_URL` | `http://trivy:4954` / `http://clair:6060` | worker | scanner backends |
 | `TRIVY_ENABLED` / `GRYPE_ENABLED` / `CLAIR_ENABLED` | `true` | both | initial scanner toggles (then `PUT /settings`) |

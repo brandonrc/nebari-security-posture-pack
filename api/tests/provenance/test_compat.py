@@ -57,7 +57,8 @@ def stub_db(monkeypatch):
 
 
 def _app(auth_mode="disabled"):
-    set_authenticator(Authenticator(Settings(auth_mode=auth_mode, admin_groups=["admin"])))
+    set_authenticator(Authenticator(Settings(auth_mode=auth_mode, admin_groups=["admin"],
+                                             oidc_issuers=["https://kc/realms/nebari"])))
     app = FastAPI()
     compat.include(app)
 
@@ -159,7 +160,7 @@ async def test_reads_require_admin_on_main_listener(stub_db):
 
 
 async def test_internal_app_is_unauthenticated_and_read_only(stub_db):
-    set_authenticator(Authenticator(Settings(auth_mode="oidc")))
+    set_authenticator(Authenticator(Settings(auth_mode="oidc", oidc_issuers=["https://kc/realms/nebari"])))
     app = compat.internal_app()
 
     async def no_session():

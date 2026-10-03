@@ -31,8 +31,13 @@ class Settings(BaseSettings):
         "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80"
         "/auth/realms/nebari/protocol/openid-connect/certs"
     )
-    oidc_issuers: CsvList = []
-    oidc_audience: str | None = None
+    oidc_issuers: CsvList = []  # REQUIRED with auth_mode=oidc (the API refuses to start without it)
+    oidc_audience: str | None = None  # legacy single value; merged into accepted_audiences
+    # `aud` must contain, or `azp` equal, one of these (security review H1). The chart sets
+    # OIDC_CLIENT_IDS to the operator-provisioned client id `<namespace>-<fullname>`.
+    oidc_audiences: CsvList = []
+    oidc_client_ids: CsvList = []
+    posture_dev: bool = False  # POSTURE_DEV=1 is required for AUTH_MODE=disabled
     admin_groups: CsvList = ["admin"]
     jwks_cache_seconds: int = 600
 
@@ -127,7 +132,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cluster_name: str = "nebari"
 
-    @field_validator("oidc_issuers", "admin_groups", "excluded_namespaces", "mirror_rewrite", "reports_auto_generate",
+    @field_validator("oidc_issuers", "oidc_audiences", "oidc_client_ids", "admin_groups", "excluded_namespaces", "mirror_rewrite", "reports_auto_generate",
                      "clair_ready_updaters", "provenance_helm_chart_repos",
                      mode="before")
     @classmethod
@@ -150,6 +155,13 @@ class Settings(BaseSettings):
     @property
     def auth_disabled(self) -> bool:
         return self.auth_mode.lower() == "disabled"
+
+    @property
+    def accepted_audiences(self) -> list[str]:
+        out = [*self.oidc_audiences, *self.oidc_client_ids]
+        if self.oidc_audience:
+            out.append(self.oidc_audience)
+        return list(dict.fromkeys(a for a in out if a))
 
     @property
     def admin_group_set(self) -> set[str]:
