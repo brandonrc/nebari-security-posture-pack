@@ -22,6 +22,7 @@ from typing import Any
 
 from ._common import (SEVERITIES, TOOL_NAME, View, filename, image_label, mdy, normalize, sev_rank,
                       short_hash)
+from .cells import safe_row
 from .registry import GeneratedReport
 
 XLSX_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -285,7 +286,7 @@ def _csv(v: View, items: list, variant: str) -> bytes:
     w = csv.writer(buf, lineterminator="\r\n")
     w.writerow(cols)
     for i in items:
-        w.writerow(rowf(i, v, False))
+        w.writerow(safe_row(rowf(i, v, False)))
     return buf.getvalue().encode("utf-8-sig")
 
 
@@ -331,7 +332,7 @@ def _xlsx(v: View, items: list) -> bytes:
         # the row number, fetch cells with ws.cell (a dict lookup) and copy pre-registered
         # StyleArrays instead.
         for r, i in enumerate(items, start=2):
-            ws.append(rowf(i, v, True))
+            ws.append(safe_row(rowf(i, v, True)))
             for idx, col in enumerate(cols, start=1):
                 cell = ws.cell(row=r, column=idx)
                 cell._style = copy(styles[(col in date_cols and bool(cell.value), bool(i.overdue))])
@@ -369,7 +370,7 @@ def _xlsx(v: View, items: list) -> bytes:
                   "for the ISSO. Overdue rows are shaded red."),
     ]
     for k, val in rows:
-        info.append([k, val])
+        info.append(safe_row([k, val]))
         info.cell(row=info.max_row, column=1).font = bold
         if isinstance(val, datetime):
             info.cell(row=info.max_row, column=2).number_format = "yyyy-mm-dd hh:mm"

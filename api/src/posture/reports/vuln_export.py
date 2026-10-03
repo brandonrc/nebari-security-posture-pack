@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 from ._common import SCANNERS, TOOL_NAME, View, filename, image_label, iso, normalize, sev_rank, ymd
+from .cells import safe_row
 from .registry import GeneratedReport
 
 CSV_COLUMNS = [
@@ -60,14 +61,14 @@ def _csv(v: View) -> bytes:
     w = csv.writer(buf, lineterminator="\r\n")
     w.writerow(CSV_COLUMNS)
     for r in _records(v):
-        w.writerow([
+        w.writerow(safe_row([
             r["imageRef"], r["imageDigest"], "; ".join(r["namespaces"]), "; ".join(r["workloads"]), r["vulnId"],
             r["package"], r["installedVersion"], r["fixedVersion"], r["pkgType"], r["severity"],
             r["perScanner"]["trivy"], r["perScanner"]["grype"], r["perScanner"]["clair"], "; ".join(r["scanners"]),
             "" if r["agreement"] is None else round(r["agreement"], 3), "" if r["cvss"] is None else r["cvss"],
             "Yes" if r["fixable"] else "No", r["title"], r["url"], "; ".join(r["controls"]),
             r["firstSeenAt"][:10], r["slaDueAt"][:10], "Yes" if r["overdue"] else "No", r["status"],
-        ])
+        ]))
     return buf.getvalue().encode("utf-8-sig")
 
 
