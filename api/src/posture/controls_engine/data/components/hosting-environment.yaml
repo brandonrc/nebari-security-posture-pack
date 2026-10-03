@@ -13,19 +13,24 @@ implemented-requirements:
     statement: Physical access authorizations for the nodes are provided by the hosting facility or cloud provider.
     responsibility: org
     customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+    assigned: rest
   - control: PE-3
     statement: Physical access control to the nodes is provided by the hosting facility or cloud provider.
     responsibility: org
     customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+    assigned: rest
   - control: PE-6
     statement: Physical access monitoring is provided by the hosting facility or cloud provider.
     responsibility: org
     customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+    assigned: rest
   - control: PE-13
     statement: Fire protection is provided by the hosting facility or cloud provider.
     responsibility: org
     customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+    assigned: rest
   - control: PE-14
     statement: Environmental controls are provided by the hosting facility or cloud provider.
     responsibility: org
     customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+    assigned: rest

@@ -9,10 +9,10 @@ import { filterControls } from '@/lib/controls';
 import { ControlsTable, evidenceLine } from './controls-table';
 
 const controls: ControlCoverage[] = [
-  { control: 'AC-7', title: 'Unsuccessful Logon Attempts', family: 'AC', baseline: 'low', status: 'implemented', components: ['Keycloak'], findingsOpen: 0, checksFailed: 0, assertions: [{ id: 'keycloak.brute-force-detection', title: 'Brute-force detection enabled', status: 'pass', checkedAt: new Date().toISOString(), detail: 'bruteForceProtected=true', evidence: { bruteForceProtected: true } }] },
+  { control: 'AC-7', title: 'Unsuccessful Logon Attempts', family: 'AC', baseline: 'low', status: 'passing', components: ['Keycloak'], findingsOpen: 0, checksFailed: 0, assertions: [{ id: 'keycloak.brute-force-detection', title: 'Brute-force detection enabled', status: 'pass', checkedAt: new Date().toISOString(), detail: 'bruteForceProtected=true', evidence: { bruteForceProtected: true } }] },
   { control: 'AC-6', title: 'Least Privilege', family: 'AC', baseline: 'moderate', status: 'partial', components: ['Kubernetes'], findingsOpen: 0, checksFailed: 12, assertions: [] },
-  { control: 'AU-2', title: 'Event Logging', family: 'AU', baseline: 'low', status: 'not-implemented', components: ['Keycloak', 'Loki / Promtail'], findingsOpen: 0, checksFailed: 0, assertions: [{ id: 'keycloak.event-logging', title: 'Events recorded', status: 'fail', checkedAt: null, evidence: { adminEventsEnabled: false } }] },
-  { control: 'SC-12(1)', title: 'Availability', family: 'SC', baseline: 'high', status: 'implemented', components: ['cert-manager'], findingsOpen: 0, checksFailed: 0 },
+  { control: 'AU-2', title: 'Event Logging', family: 'AU', baseline: 'low', status: 'failing', components: ['Keycloak', 'Loki / Promtail'], findingsOpen: 0, checksFailed: 0, assertions: [{ id: 'keycloak.event-logging', title: 'Events recorded', status: 'fail', checkedAt: null, evidence: { adminEventsEnabled: false } }] },
+  { control: 'SC-12(1)', title: 'Availability', family: 'SC', baseline: 'high', status: 'implemented', components: ['cert-manager'], objectives: [{ id: 'sc-12.1_obj', state: 'satisfied' }], findingsOpen: 0, checksFailed: 0 },
   // §11-only shape: no family/baseline/assertions, legacy status
   { control: 'RA-5', title: 'Vulnerability Monitoring and Scanning', findingsOpen: 140, checksFailed: 0, status: 'not-satisfied' },
 ];
@@ -31,11 +31,11 @@ const bodyRows = () => within(screen.getByRole('table', { name: 'Control catalog
 describe('filterControls', () => {
   it('filters by family, normalised status, nested baseline and text', () => {
     expect(filterControls(controls, { family: 'ac' }).map((c) => c.control)).toEqual(['AC-7', 'AC-6']);
-    expect(filterControls(controls, { status: 'not-implemented' }).map((c) => c.control)).toEqual(['AU-2', 'RA-5']);
+    expect(filterControls(controls, { status: 'failing' }).map((c) => c.control)).toEqual(['AU-2', 'RA-5']);
     expect(filterControls(controls, { baseline: 'moderate' }).map((c) => c.control)).toEqual(['AC-7', 'AC-6', 'AU-2']);
     expect(filterControls(controls, { q: 'loki' }).map((c) => c.control)).toEqual(['AU-2']);
     expect(filterControls(controls, { q: 'brute-force' }).map((c) => c.control)).toEqual(['AC-7']);
-    expect(filterControls(controls, { family: 'RA', status: 'implemented' })).toEqual([]);
+    expect(filterControls(controls, { family: 'RA', status: 'passing' })).toEqual([]);
   });
 });
 
@@ -45,7 +45,8 @@ describe('ControlsTable', () => {
     expect(bodyRows().map((r) => r.getAttribute('data-control'))).toEqual(['AC-6', 'AC-7', 'AU-2', 'RA-5', 'SC-12(1)']);
     const ra5 = bodyRows()[3];
     expect(within(ra5).getByText('RA')).toBeInTheDocument();
-    expect(within(ra5).getByText('Not implemented')).toBeInTheDocument();
+    expect(within(ra5).getByText('Evidence failing')).toBeInTheDocument();
+    expect(within(bodyRows()[4]).getByText('1 of 1 objectives')).toBeInTheDocument();
     expect(within(ra5).getByText('none')).toBeInTheDocument();
   });
 

@@ -29,7 +29,7 @@ def _active_pod_namespaces(pods: list[dict[str, Any]]) -> set[str]:
 
 
 @assertion(id="k8s-pod-security-admission", title="Namespaces enforce a Pod Security Standard",
-           controls=["CM-6", "CM-7"], component=C, severity="high")
+           controls=["CM-6", "CM-7"], objectives=["cm-6_obj.b", "cm-7_obj.a"], component=C, severity="high")
 async def pod_security(ctx: EngineContext) -> Result:
     """Every non-system namespace carries `pod-security.kubernetes.io/enforce` = baseline or restricted."""
     nss = await ctx.app_namespaces()
@@ -56,7 +56,7 @@ def is_default_deny_ingress(np: dict[str, Any]) -> bool:
 
 
 @assertion(id="k8s-default-deny-ingress", title="Each app namespace has a default-deny ingress NetworkPolicy",
-           controls=["SC-7", "SC-7(5)"], component=C, severity="high")
+           controls=["SC-7", "SC-7(5)"], objectives=["sc-7_obj.a-4", "sc-7.5_obj-1", "sc-7.5_obj-2"], component=C, severity="high")
 async def default_deny(ctx: EngineContext) -> Result:
     """Every non-system namespace with pods has a NetworkPolicy selecting all pods (`podSelector: {}`)
     for Ingress, so traffic not explicitly allowed is denied."""
@@ -96,7 +96,7 @@ def is_system_subject(s: dict[str, Any]) -> bool:
 
 
 @assertion(id="k8s-cluster-admin-bindings", title="cluster-admin bound only to system or approved subjects",
-           controls=["AC-6(1)"], component=C, severity="critical")
+           controls=["AC-6(1)"], objectives=["ac-6.1_obj.a"], component=C, severity="critical")
 async def cluster_admin(ctx: EngineContext) -> Result:
     """ClusterRoleBindings to `cluster-admin` have only `system:*` users/groups or subjects listed in
     `controlsEngine.adminSubjects` (`User:alice`, `Group:ops`, `ServiceAccount:ns/name`)."""
@@ -119,7 +119,7 @@ async def cluster_admin(ctx: EngineContext) -> Result:
 
 
 @assertion(id="k8s-default-sa-automount", title="Default ServiceAccounts do not automount API tokens",
-           controls=["AC-6(10)"], component=C, severity="medium")
+           controls=["AC-6(10)"], objectives=["ac-6.10_obj"], component=C, severity="medium")
 async def default_sa(ctx: EngineContext) -> Result:
     """The `default` ServiceAccount of every non-system namespace sets `automountServiceAccountToken: false`."""
     app_ns = {n["metadata"]["name"] for n in await ctx.app_namespaces()}
@@ -137,7 +137,7 @@ async def default_sa(ctx: EngineContext) -> Result:
 
 
 @assertion(id="k8s-no-anonymous-access", title="No RBAC grants to anonymous/unauthenticated users",
-           controls=["AC-14"], component=C, severity="critical")
+           controls=["AC-14"], objectives=["ac-14_obj.a"], component=C, severity="critical")
 async def anonymous(ctx: EngineContext) -> Result:
     """No (Cluster)RoleBinding grants a role to `system:anonymous` or `system:unauthenticated`,
     except upstream public discovery roles (`system:public-info-viewer`)."""
@@ -165,7 +165,7 @@ def _minor(version: str) -> int | None:
     return int(m.group(2)) if m and m.group(1) == "1" else None
 
 
-@assertion(id="k8s-supported-version", title="Kubernetes version is still supported upstream", controls=["SI-2"],
+@assertion(id="k8s-supported-version", title="Kubernetes version is still supported upstream", controls=["SI-2"], objectives=["si-2_obj.c-1"],
            component=C, severity="high")
 async def supported_version(ctx: EngineContext) -> Result:
     """API server and every kubelet run a Kubernetes minor version before its upstream end-of-life date."""
@@ -198,7 +198,7 @@ async def supported_version(ctx: EngineContext) -> Result:
 
 
 @assertion(id="k8s-api-audit-logging", title="Kubernetes API server audit logging is enabled",
-           controls=["AU-2", "AU-12"], component=C, severity="high")
+           controls=["AU-2", "AU-12"], objectives=["au-2_obj.c-2", "au-12_obj.a", "au-12_obj.c"], component=C, severity="high")
 async def api_audit(ctx: EngineContext) -> Result:
     """A visible kube-apiserver pod runs with `--audit-policy-file` and a log or webhook backend.
     Managed / snap / systemd control planes do not expose their flags: the result is `unknown`."""
@@ -224,7 +224,7 @@ async def api_audit(ctx: EngineContext) -> Result:
 
 
 @assertion(id="k8s-workload-least-privilege", title="Workloads avoid privileged settings",
-           controls=["AC-6", "CM-7"], component=C, severity="high")
+           controls=["AC-6", "CM-7"], objectives=["ac-6_obj", "cm-7_obj.a"], component=C, severity="high")
 async def workload_least_privilege(ctx: EngineContext) -> Result:
     """From the latest scan's posture checks: no non-system workload fails `privileged`,
     `host-namespaces`, `host-path`, `added-capabilities` or `privilege-escalation`."""

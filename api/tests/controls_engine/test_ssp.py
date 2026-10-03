@@ -78,9 +78,15 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     def status(cid):
         return next(p["value"] for p in reqs[cid]["props"] if p["name"] == "implementation-status")
 
-    assert status("ac-7") == "not-implemented" and status("ia-2.1") == "hybrid"
+    assert status("ac-7") == "failing" and status("ia-2.1") == "passing" and status("ac-2") == "hybrid"
     ac7 = reqs["ac-7"]
-    assert ac7["by-components"][0]["implementation-status"]["state"] == "planned"
+    # M2: failing is `planned` only when a POA&M item tracks it
+    assert ac7["by-components"][0]["implementation-status"]["state"] == "not-implemented"
+    with_poam = build_ssp(data, system_name="grace", generated_at=datetime(2026, 10, 3, tzinfo=UTC),
+                          poam_controls={"AC-7"})
+    ac7p = next(r for r in with_poam["system-security-plan"]["control-implementation"]["implemented-requirements"]
+                if r["control-id"] == "ac-7")
+    assert ac7p["by-components"][0]["implementation-status"]["state"] == "planned"
     link = ac7["links"][0]
     assert link["rel"] == "evidence" and link["text"] == "kc-brute-force-protection"
     res = {r["uuid"]: r for r in ssp["back-matter"]["resources"]}
@@ -90,15 +96,16 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     # M1: nothing is inherited without a configured provider; org-level controls carry no OSCAL state
     this = next(c["uuid"] for c in ssp["system-implementation"]["components"] if c["type"] == "this-system")
     at2 = reqs["at-2"]["by-components"][0]
-    assert at2["component-uuid"] == this and status("at-2") == "not-implemented"
+    assert at2["component-uuid"] == this and status("at-2") == "not-assessed"
+    assert "implementation-status" not in at2
     assert not any(status(c) == "inherited" for c in reqs)
     pe3 = reqs["pe-3"]["by-components"][0]
     assert status("pe-3") == "org-provided-unverified" and "implementation-status" not in pe3
     assert "leveraged-authorizations" not in ssp["system-implementation"]
     # hybrid controls export the program's residual responsibility (CRM in OSCAL)
-    ia21 = reqs["ia-2.1"]["by-components"][0]
-    assert ia21["implementation-status"]["state"] == "partial"
-    assert "IA-2(12)" in ia21["export"]["responsibilities"][0]["description"]
+    ac2 = reqs["ac-2"]["by-components"][0]
+    assert ac2["implementation-status"]["state"] == "partial"
+    assert "AC-2 a-l" in ac2["export"]["responsibilities"][0]["description"]
     # deterministic
     again = build_ssp(data, system_name="grace", organization="Quansight", generated_at=datetime(2026, 10, 3, tzinfo=UTC))
     assert again == doc

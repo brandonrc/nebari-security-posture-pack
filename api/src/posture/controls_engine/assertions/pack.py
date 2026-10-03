@@ -32,7 +32,7 @@ def _age_h(v: Any) -> float | None:
 
 
 @assertion(id="pack-scan-recent", title="Vulnerability scan completed within 2x the scan interval",
-           controls=["RA-5", "RA-5(2)", "CA-7"], component=C, severity="high")
+           controls=["RA-5", "RA-5(2)", "CA-7"], objectives=["ra-5_obj.a-2", "ra-5.2_obj", "ca-7_obj.d"], component=C, severity="high")
 async def scan_recent(ctx: EngineContext) -> Result:
     """The latest completed scan finished less than 2 x `scanIntervalHours` ago."""
     snap = _snap(ctx)
@@ -49,7 +49,7 @@ async def scan_recent(ctx: EngineContext) -> Result:
 
 
 @assertion(id="pack-scanner-db-fresh", title="Scanner vulnerability databases are current",
-           controls=["RA-5(2)", "SI-5"], component=C, severity="medium")
+           controls=["RA-5(2)", "SI-5"], objectives=["ra-5.2_obj", "si-5_obj.a"], component=C, severity="medium")
 async def scanner_db_fresh(ctx: EngineContext) -> Result:
     """Every enabled scanner reports a vulnerability DB updated within 72 hours."""
     scanners = [s for s in _snap(ctx).get("scanners") or [] if s.get("enabled", True)]
@@ -70,7 +70,7 @@ async def scanner_db_fresh(ctx: EngineContext) -> Result:
     return passed("DBs fresh: " + ", ".join(f"{r['scanner']} {r['ageHours']}h" for r in rows), **ev)
 
 
-@assertion(id="pack-poam-current", title="A POA&M exists for the latest scan's open findings", controls=["CA-5"],
+@assertion(id="pack-poam-current", title="A POA&M exists for the latest scan's open findings", controls=["CA-5"], objectives=["ca-5_obj.a"],
            component=C, severity="medium")
 async def poam_current(ctx: EngineContext) -> Result:
     """When the latest scan has open findings or failing checks, a POA&M report was generated from it."""
@@ -92,7 +92,7 @@ async def poam_current(ctx: EngineContext) -> Result:
     return passed(f"POA&M {poam.get('id')} generated from scan {last.get('id')}", **ev)
 
 
-@assertion(id="pack-sla-overdue", title="No findings past their remediation SLA", controls=["SI-2"], component=C,
+@assertion(id="pack-sla-overdue", title="No findings past their remediation SLA", controls=["SI-2"], objectives=["si-2_obj.a-3", "si-2_obj.c-1"], component=C,
            severity="high")
 async def sla_overdue(ctx: EngineContext) -> Result:
     """Count of open consensus findings on running images past `firstSeen + SLA(severity)` is zero."""
@@ -107,7 +107,7 @@ async def sla_overdue(ctx: EngineContext) -> Result:
     return passed("no findings past their remediation SLA", **ev)
 
 
-@assertion(id="pack-inventory-current", title="Component inventory refreshed by the latest scan", controls=["CM-8"],
+@assertion(id="pack-inventory-current", title="Component inventory refreshed by the latest scan", controls=["CM-8"], objectives=["cm-8_obj.a.1", "cm-8_obj.a.2", "cm-8_obj.b"],
            component=C, severity="medium")
 async def inventory_current(ctx: EngineContext) -> Result:
     """The latest completed scan captured a complete inventory less than 2 x `scanIntervalHours` ago."""

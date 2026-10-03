@@ -89,29 +89,30 @@ describe('Compliance & reports', () => {
 
   it('uses baseline numbers on every tile, with the full catalog in a tooltip', async () => {
     const totals = {
-      baseline: { name: 'moderate', total: 287, implemented: 20, partial: 6, notImplemented: 62, inherited: 199, notApplicable: 0, unknown: 0 },
-      catalog: { total: 292, implemented: 20, partial: 6, notImplemented: 64, inherited: 200, notApplicable: 0, unknown: 2 },
+      baseline: { name: 'moderate', total: 287, passing: 20, hybrid: 9, partial: 6, failing: 62, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 190 },
+      catalog: { total: 292, passing: 20, hybrid: 9, partial: 6, failing: 64, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 193 },
     };
     server.use(http.get('*/api/v1/compliance/families', () => HttpResponse.json({ baseline: 'moderate', items: [], totals })));
     const user = userEvent.setup();
     renderApp('/compliance');
-    const impl = await screen.findByTestId('tile-implemented');
+    const impl = await screen.findByTestId('tile-passing');
     await waitFor(() => expect(impl).toHaveTextContent('20/287'));
-    expect(impl).toHaveTextContent('Implemented (moderate baseline)');
-    const ni = screen.getByTestId('tile-not-implemented');
-    expect(ni).toHaveTextContent('Not implemented (moderate baseline)');
+    expect(impl).toHaveTextContent('Controls with passing evidence (moderate baseline)');
+    expect(impl).toHaveTextContent('9 hybrid');
+    const ni = screen.getByTestId('tile-failing');
+    expect(ni).toHaveTextContent('Evidence failing (moderate baseline)');
     expect(ni).toHaveTextContent('62');
     expect(ni).toHaveTextContent('of 287 moderate baseline controls');
     expect(ni).not.toHaveTextContent('292');
-    expect(screen.getByTestId('tile-unknown')).toHaveTextContent(/^Unknown \(moderate baseline\)0of 287/);
+    expect(screen.getByTestId('tile-not-assessed')).toHaveTextContent(/^Not assessed \(moderate baseline\)190of 287/);
     await user.hover(within(ni).getByText('of 287 moderate baseline controls'));
-    expect(await screen.findByText('Full catalog: 64 not implemented of 292 controls (incl. 5 outside the baseline)')).toBeInTheDocument();
+    expect(await screen.findByText('Full catalog: 64 evidence failing of 292 controls (incl. 5 outside the baseline)')).toBeInTheDocument();
   });
 
   it('shows the same baseline numbers on the Overview controls tile', async () => {
     const totals = {
-      baseline: { name: 'moderate', total: 287, implemented: 20, partial: 6, notImplemented: 62, inherited: 199, notApplicable: 0, unknown: 0 },
-      catalog: { total: 292, implemented: 20, partial: 6, notImplemented: 64, inherited: 200, notApplicable: 0, unknown: 2 },
+      baseline: { name: 'moderate', total: 287, passing: 20, hybrid: 9, partial: 6, failing: 62, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 190 },
+      catalog: { total: 292, passing: 20, hybrid: 9, partial: 6, failing: 64, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 193 },
     };
     server.use(http.get('*/api/v1/compliance/families', () => HttpResponse.json({ baseline: 'moderate', items: [], totals })));
     renderApp('/');
@@ -119,12 +120,12 @@ describe('Compliance & reports', () => {
     // totals once that query settles; the Overview is heavy enough under a loaded
     // runner that the default 1 s findBy timeout races it. Wait for the settled text.
     expect(
-      await screen.findByRole('link', { name: 'Controls implemented 20 of 287 (moderate baseline)' }, { timeout: 5000 }),
+      await screen.findByRole('link', { name: 'Controls with passing evidence 20 of 287 (moderate baseline)' }, { timeout: 5000 }),
     ).toBeInTheDocument();
     await waitFor(
       () => {
-        const line = screen.getByText(/62 not implemented/);
-        expect(line).toHaveTextContent('6 partial · 62 not implemented · 199 inherited · 0 unknown (moderate baseline)');
+        const line = screen.getByText(/62 failing/);
+        expect(line).toHaveTextContent('9 hybrid · 6 partial · 62 failing · 0 inherited · 190 not assessed (moderate baseline)');
         expect(line).toHaveAttribute('title', expect.stringContaining('Full catalog (292 controls)'));
       },
       { timeout: 5000 },
@@ -225,7 +226,7 @@ describe('Overview §12/§13 tiles', () => {
     expect(await screen.findByText('Vulnerability (×0.6)')).toBeInTheDocument();
     expect(screen.getByText('Configuration (×0.25)')).toBeInTheDocument();
     expect(screen.getByText('Supply chain (×0.15)')).toBeInTheDocument();
-    expect(await screen.findByRole('link', { name: /Controls implemented \d+ of \d+ \(moderate baseline\)/ })).toHaveAttribute('href', '/compliance');
+    expect(await screen.findByRole('link', { name: /Controls with passing evidence \d+ of \d+ \(moderate baseline\)/ })).toHaveAttribute('href', '/compliance');
     expect(await screen.findByRole('link', { name: /Details/ })).toHaveAttribute('href', '/supply-chain');
   });
 });

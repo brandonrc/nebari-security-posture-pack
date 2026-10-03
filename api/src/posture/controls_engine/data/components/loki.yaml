@@ -12,23 +12,28 @@ implemented-requirements:
     assertions: [log-ingest-all-namespaces]
     responsibility: shared
     customer: Decide which events are logged (AU-2 is an organizational selection).
+    assigned: rest
   - control: AU-4
     statement: Log storage is sized and retained per the configured Loki retention period.
     assertions: [log-retention]
     responsibility: shared
     customer: Allocate audit storage capacity per the retention requirement.
+    assigned: rest
   - control: AU-6
     statement: Collected logs are searchable from Grafana for review and analysis.
     assertions: [log-ingest-all-namespaces]
     responsibility: customer
     customer: Review and analyze audit records at the defined frequency and report findings (AU-6 is a process control).
+    assigned: rest
   - control: AU-11
     statement: Logs are retained for at least the organization-defined period (`controlsEngine.minLogRetentionDays`).
     assertions: [log-retention]
     responsibility: shared
     customer: Set the retention ODP (e.g. OMB M-21-31) and ensure off-cluster archival where required.
+    assigned: rest
   - control: AU-12
     statement: Every running namespace produces log records that reach Loki.
     assertions: [log-ingest-all-namespaces]
     responsibility: shared
     customer: Ensure applications write audit-relevant events to stdout/stderr so they reach Loki.
+    assigned: rest

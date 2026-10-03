@@ -16,7 +16,7 @@ const COMPONENT = {
   registry: 'Container registry',
   pack: 'Security Posture pack',
   operator: 'nebari-operator',
-  org: 'Organization (inherited)',
+  org: 'Organization (unverified)',
 } as const;
 
 interface AssertionSeed {
@@ -68,11 +68,11 @@ const ASSERTION_SEEDS: AssertionSeed[] = [
   { id: 'posture.provenance-coverage', title: 'Running images carry SLSA provenance', controls: ['SR-3', 'SR-4', 'SA-10'], component: COMPONENT.pack, severity: 'low', status: 'fail', detail: '7 of 27 images have a provenance attestation', evidence: { unique: 27, withProvenance: 7, predicateTypes: { 'https://slsa.dev/provenance/v1': 4, 'https://slsa.dev/provenance/v0.2': 3 } } },
 ];
 
-/** [id, title, lowest baseline | null, components, inherited?] */
-type CatalogSeed = [string, string, 'low' | 'moderate' | 'high' | null, string[], ('inherited' | 'not-applicable')?];
+/** [id, title, lowest baseline | null, components, fixed status?] */
+type CatalogSeed = [string, string, 'low' | 'moderate' | 'high' | null, string[], ('org-provided-unverified' | 'not-applicable')?];
 
 const CATALOG: CatalogSeed[] = [
-  ['AC-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'inherited'],
+  ['AC-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['AC-2', 'Account Management', 'low', [COMPONENT.keycloak]],
   ['AC-2(1)', 'Automated System Account Management', 'moderate', [COMPONENT.keycloak]],
   ['AC-3', 'Access Enforcement', 'low', [COMPONENT.gateway, COMPONENT.operator]],
@@ -85,21 +85,21 @@ const CATALOG: CatalogSeed[] = [
   ['AC-11', 'Device Lock', 'moderate', [COMPONENT.keycloak]],
   ['AC-12', 'Session Termination', 'moderate', [COMPONENT.keycloak]],
   ['AC-14', 'Permitted Actions Without Identification or Authentication', 'low', [COMPONENT.kubernetes]],
-  ['AC-17', 'Remote Access', 'low', [COMPONENT.org], 'inherited'],
-  ['AU-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'inherited'],
+  ['AC-17', 'Remote Access', 'low', [COMPONENT.org], 'org-provided-unverified'],
+  ['AU-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['AU-2', 'Event Logging', 'low', [COMPONENT.keycloak, COMPONENT.loki, COMPONENT.kubernetes]],
   ['AU-3', 'Content of Audit Records', 'low', [COMPONENT.loki]],
   ['AU-4', 'Audit Log Storage Capacity', 'low', [COMPONENT.loki]],
   ['AU-6', 'Audit Record Review, Analysis, and Reporting', 'low', [COMPONENT.prometheus]],
-  ['AU-8', 'Time Stamps', 'low', [COMPONENT.org], 'inherited'],
+  ['AU-8', 'Time Stamps', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['AU-9', 'Protection of Audit Information', 'low', [COMPONENT.kubernetes]],
-  ['AU-11', 'Audit Record Retention', 'low', [COMPONENT.org], 'inherited'],
+  ['AU-11', 'Audit Record Retention', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['AU-12', 'Audit Record Generation', 'low', [COMPONENT.keycloak, COMPONENT.loki]],
-  ['CA-2', 'Control Assessments', 'low', [COMPONENT.org], 'inherited'],
+  ['CA-2', 'Control Assessments', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['CA-5', 'Plan of Action and Milestones', 'low', [COMPONENT.pack]],
   ['CA-7', 'Continuous Monitoring', 'low', [COMPONENT.pack]],
   ['CA-9', 'Internal System Connections', 'low', [COMPONENT.kubernetes], 'not-applicable'],
-  ['CM-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'inherited'],
+  ['CM-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['CM-2', 'Baseline Configuration', 'low', [COMPONENT.kubernetes]],
   ['CM-3', 'Configuration Change Control', 'moderate', [COMPONENT.org]],
   ['CM-6', 'Configuration Settings', 'low', [COMPONENT.kubernetes]],
@@ -107,26 +107,26 @@ const CATALOG: CatalogSeed[] = [
   ['CM-8', 'System Component Inventory', 'low', [COMPONENT.pack]],
   ['CM-11', 'User-installed Software', 'low', [COMPONENT.kubernetes], 'not-applicable'],
   ['CM-14', 'Signed Components', null, [COMPONENT.registry, COMPONENT.pack]],
-  ['IA-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'inherited'],
+  ['IA-1', 'Policy and Procedures', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['IA-2', 'Identification and Authentication (Organizational Users)', 'low', [COMPONENT.keycloak, COMPONENT.gateway]],
   ['IA-2(1)', 'Multi-factor Authentication to Privileged Accounts', 'low', [COMPONENT.keycloak]],
   ['IA-2(2)', 'Multi-factor Authentication to Non-privileged Accounts', 'low', [COMPONENT.keycloak]],
   ['IA-5', 'Authenticator Management', 'low', [COMPONENT.keycloak, COMPONENT.kubernetes]],
   ['IA-5(1)', 'Password-based Authentication', 'low', [COMPONENT.keycloak]],
-  ['IA-8', 'Identification and Authentication (Non-organizational Users)', 'low', [COMPONENT.org], 'inherited'],
-  ['IR-4', 'Incident Handling', 'low', [COMPONENT.org], 'inherited'],
-  ['IR-5', 'Incident Monitoring', 'low', [COMPONENT.org], 'inherited'],
+  ['IA-8', 'Identification and Authentication (Non-organizational Users)', 'low', [COMPONENT.org], 'org-provided-unverified'],
+  ['IR-4', 'Incident Handling', 'low', [COMPONENT.org], 'org-provided-unverified'],
+  ['IR-5', 'Incident Monitoring', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['IR-6', 'Incident Reporting', 'low', [COMPONENT.prometheus]],
-  ['PL-2', 'System Security and Privacy Plans', 'low', [COMPONENT.org], 'inherited'],
-  ['RA-3', 'Risk Assessment', 'low', [COMPONENT.org], 'inherited'],
+  ['PL-2', 'System Security and Privacy Plans', 'low', [COMPONENT.org], 'org-provided-unverified'],
+  ['RA-3', 'Risk Assessment', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['RA-5', 'Vulnerability Monitoring and Scanning', 'low', [COMPONENT.pack]],
   ['RA-5(2)', 'Update Vulnerabilities to Be Scanned', 'low', [COMPONENT.pack]],
   ['RA-5(5)', 'Privileged Access', 'moderate', [COMPONENT.pack], 'not-applicable'],
-  ['SA-8', 'Security and Privacy Engineering Principles', 'low', [COMPONENT.org], 'inherited'],
+  ['SA-8', 'Security and Privacy Engineering Principles', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['SA-10', 'Developer Configuration Management', 'moderate', [COMPONENT.pack]],
-  ['SA-11', 'Developer Testing and Evaluation', 'moderate', [COMPONENT.org], 'inherited'],
+  ['SA-11', 'Developer Testing and Evaluation', 'moderate', [COMPONENT.org], 'org-provided-unverified'],
   ['SA-22', 'Unsupported System Components', 'low', [COMPONENT.kubernetes]],
-  ['SC-5', 'Denial-of-service Protection', 'low', [COMPONENT.org], 'inherited'],
+  ['SC-5', 'Denial-of-service Protection', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['SC-6', 'Resource Availability', null, [COMPONENT.kubernetes]],
   ['SC-7', 'Boundary Protection', 'low', [COMPONENT.gateway, COMPONENT.kubernetes]],
   ['SC-7(5)', 'Deny by Default — Allow by Exception', 'moderate', [COMPONENT.kubernetes]],
@@ -138,7 +138,7 @@ const CATALOG: CatalogSeed[] = [
   ['SC-17', 'Public Key Infrastructure Certificates', 'moderate', [COMPONENT.certManager]],
   ['SC-23', 'Session Authenticity', 'moderate', [COMPONENT.gateway]],
   ['SC-28', 'Protection of Information at Rest', 'moderate', [COMPONENT.kubernetes]],
-  ['SC-39', 'Process Isolation', 'low', [COMPONENT.org], 'inherited'],
+  ['SC-39', 'Process Isolation', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['SI-2', 'Flaw Remediation', 'low', [COMPONENT.pack, COMPONENT.kubernetes]],
   ['SI-2(2)', 'Automated Flaw Remediation Status', 'moderate', [COMPONENT.pack]],
   ['SI-3', 'Malicious Code Protection', 'low', [COMPONENT.pack]],
@@ -147,7 +147,7 @@ const CATALOG: CatalogSeed[] = [
   ['SI-5', 'Security Alerts, Advisories, and Directives', 'low', [COMPONENT.pack]],
   ['SI-13', 'Predictable Failure Prevention', null, [COMPONENT.kubernetes]],
   ['SI-16', 'Memory Protection', 'moderate', [COMPONENT.kubernetes]],
-  ['SR-2', 'Supply Chain Risk Management Plan', 'low', [COMPONENT.org], 'inherited'],
+  ['SR-2', 'Supply Chain Risk Management Plan', 'low', [COMPONENT.org], 'org-provided-unverified'],
   ['SR-3', 'Supply Chain Controls and Processes', 'low', [COMPONENT.pack]],
   ['SR-4', 'Provenance', null, [COMPONENT.pack, COMPONENT.registry]],
   ['SR-11', 'Component Authenticity', 'low', [COMPONENT.pack, COMPONENT.registry]],
@@ -176,17 +176,16 @@ export function assertions(): Assertion[] {
   }));
 }
 
-/** DESIGN §13 status derivation. */
+/** DESIGN §13 evidence-status derivation (simplified: one objective per assertion). */
 export function deriveStatus(statuses: string[]): ControlStatus {
   const s = statuses.filter((x) => x !== 'not-applicable');
-  if (!statuses.length) return 'not-implemented';
-  if (!s.length) return 'not-applicable';
+  if (!s.length) return 'not-assessed';
   const pass = s.filter((x) => x === 'pass').length;
   const fail = s.filter((x) => x === 'fail').length;
-  if (pass === s.length) return 'implemented';
+  if (pass === s.length) return 'passing';
   if (pass > 0) return 'partial';
-  if (fail > 0) return 'not-implemented';
-  return 'unknown';
+  if (fail > 0) return 'failing';
+  return 'not-assessed';
 }
 
 /**
@@ -200,8 +199,8 @@ export function controlCatalog(extra: Map<string, { findingsOpen: number; checks
     const mapped = all.filter((a) => a.controls.includes(control));
     const counts = extra.get(control) ?? { findingsOpen: 0, checksFailed: 0 };
     let status: ControlStatus = fixed ?? deriveStatus(mapped.map((a) => String(a.status)));
-    if (!fixed && !mapped.length && counts.findingsOpen + counts.checksFailed === 0 && extra.has(control)) status = 'implemented';
-    if (status === 'implemented' && counts.findingsOpen + counts.checksFailed > 0) status = 'partial';
+    if (!fixed && !mapped.length && counts.findingsOpen + counts.checksFailed === 0 && extra.has(control)) status = 'passing';
+    if (status === 'passing' && counts.findingsOpen + counts.checksFailed > 0) status = 'partial';
     if (!fixed && !mapped.length && counts.findingsOpen + counts.checksFailed > 0) status = 'partial';
     return {
       control,

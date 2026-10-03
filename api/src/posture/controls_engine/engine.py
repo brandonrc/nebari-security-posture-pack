@@ -1,30 +1,26 @@
 """Run assertions, derive per-control status, roll up per family, persist (DESIGN §13).
 
-Status derivation per control (label form, e.g. `AC-6(10)`):
+Status vocabulary (evidence status, never an assessment result; compliance review M2/M8):
 
-1. tailored out (`controlsEngine.notApplicable`)            -> not-applicable
-2. a configured common control provider lists it
-   (`controlsEngine.commonControlProviders[].controls`)     -> inherited (leveraged authorization)
-3. mapped assertions with a pass/fail/unknown result:
-   all pass                                                 -> implemented (hybrid when the
-                                                               responsibility is shared)
-   some pass                                                -> partial
-   none pass, some fail                                     -> not-implemented
-   only unknown                                             -> unknown
-4. mapped assertions not evaluated (engine never ran)       -> unknown
-5. every mapped assertion returned not-applicable           -> not-applicable
-6. provided outside the platform (component responsibility
-   `org`, e.g. the hosting facility's PE controls)          -> org-provided-unverified
-7. organization-level control in the catalog and
-   `inheritOrganizationalControls` (default off)            -> org-provided-unverified
-8. a component declares it without an assertion             -> unknown (manual evidence needed)
-9. nothing in the platform addresses it                     -> not-implemented
+  passing                  every SP 800-53A objective of the control is evidenced by passing
+                           assertions (responsibility `provider`)
+  hybrid                   the platform's objectives pass and every other objective is explicitly
+                           assigned to the program / organization (shared responsibility)
+  partial                  some objectives have passing evidence ("n of m objectives"), others
+                           fail, are unknown or have no evidence
+  failing                  evidence exists and none of it passes
+  not-assessed             no usable evidence (not run, unknown, not-applicable results, or nothing
+                           in the platform addresses the control)
+  org-provided-unverified  organization-level control assumed to be provided by the organization
+                           (`inheritOrganizationalControls`, default off) or declared as provided
+                           outside the platform (hosting facility); never counted as implemented
+  inherited                a named, authorized common control provider lists the control
+                           (`controlsEngine.commonControlProviders`)
+  not-applicable           tailored out by the AO-approved `controlsEngine.notApplicable` only
 
-`inherited` is never inferred: it needs a named, authorized provider (M1 of the compliance
-review). `org-provided-unverified` is an unverified assumption and never counts as implemented.
-
-Assertions map to controls both through their own `controls` and through component
-`implemented-requirements[].assertions`.
+Derivation order: tailoring, common control provider, objective evidence, org-provided, not-assessed.
+Assertions map to controls through their own `controls` (objective tags in `objectives`) and through
+component `implemented-requirements[].assertions`.
 """
 
 from __future__ import annotations
@@ -41,21 +37,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..logs import get_logger
 from .assertions import all_assertions
-from .catalog import Catalog, get_catalog, to_label, to_oscal_id
+from .catalog import Catalog, get_catalog, objective_control, to_label, to_oscal_id
 from .components import Component, load_components, requirements_by_control
 from .context import EngineConfig, EngineContext, EngineError, K8sForbidden, NotConfigured
 from .model import FAIL, NA, PASS, UNKNOWN, Assertion
 
 log = get_logger(__name__)
 
-IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED = "implemented", "partial", "not-implemented"
-INHERITED, NOT_APPLICABLE, STATUS_UNKNOWN = "inherited", "not-applicable", "unknown"
+PASSING, PARTIAL, FAILING, NOT_ASSESSED = "passing", "partial", "failing", "not-assessed"
+INHERITED, NOT_APPLICABLE = "inherited", "not-applicable"
 HYBRID, ORG_PROVIDED = "hybrid", "org-provided-unverified"
-CONTROL_STATUSES = (IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED, HYBRID, INHERITED, ORG_PROVIDED, NOT_APPLICABLE,
-                    STATUS_UNKNOWN)
-ROLLUP_KEYS = {IMPLEMENTED: "implemented", PARTIAL: "partial", NOT_IMPLEMENTED: "notImplemented",
-               HYBRID: "hybrid", INHERITED: "inherited", ORG_PROVIDED: "orgProvided",
-               NOT_APPLICABLE: "notApplicable", STATUS_UNKNOWN: "unknown"}
+CONTROL_STATUSES = (PASSING, PARTIAL, FAILING, NOT_ASSESSED, ORG_PROVIDED, INHERITED, HYBRID, NOT_APPLICABLE)
+ROLLUP_KEYS = {PASSING: "passing", PARTIAL: "partial", FAILING: "failing", HYBRID: "hybrid",
+               INHERITED: "inherited", ORG_PROVIDED: "orgProvided", NOT_APPLICABLE: "notApplicable",
+               NOT_ASSESSED: "notAssessed"}
+# objective evidence states
+OBJ_SATISFIED, OBJ_NOT_SATISFIED, OBJ_UNKNOWN, OBJ_ASSIGNED, OBJ_NONE = (
+    "satisfied", "not-satisfied", "unknown", "assigned", "no-evidence")
 KEEP_RUNS = 100
 DEFAULT_ORG_STATEMENT = ("Expected to be provided by the organization (policy, procedures, personnel, training or "
                          "physical safeguards). UNVERIFIED: no common control provider or authorization is "
@@ -99,6 +97,12 @@ class ControlResult:
     score: float | None = None
     responsibility: str = "customer"  # provider | shared | customer | org (CRM, S6)
     provider: str | None = None  # common control provider name when inherited
+    objectives: list[dict[str, Any]] = field(default_factory=list)  # [{id, state, assertions[]}]
+    inputs: dict[str, Any] = field(default_factory=dict)  # scan evidence used (M3)
+
+    @property
+    def objectives_evidenced(self) -> int:
+        return sum(o["state"] in (OBJ_SATISFIED,) for o in self.objectives)
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -187,6 +191,51 @@ def responsibility_of(label: str, reqs: list[tuple[Component, Any]], cat: Any) -
     return resp.pop() if len(resp) == 1 else "shared"
 
 
+def assertion_objectives(a: Assertion, catalog: Catalog) -> dict[str, list[str]]:
+    """control label -> leaf objectives the assertion evidences (all of a control's objectives when
+    the assertion carries no tag for it, i.e. custom assertions keep their whole-control meaning)."""
+    out: dict[str, list[str]] = {}
+    for c in a.controls:
+        cat = catalog.get(c)
+        if cat is None:
+            continue
+        refs = [o for o in a.objectives if objective_control(o) == cat.id]
+        out[cat.label] = cat.expand_objectives(refs) if refs else list(cat.objective_ids)
+    return out
+
+
+def _objective_states(label: str, cat: Any, results: list[Outcome], amap_obj: dict[str, dict[str, list[str]]],
+                      declared: list[tuple[Component, Any]]) -> list[dict[str, Any]]:
+    leaves = list(cat.objective_ids) if cat is not None else [f"{to_oscal_id(label)}_obj"]
+    ev: dict[str, list[Outcome]] = {o: [] for o in leaves}
+    for r in results:
+        for leaf in amap_obj.get(r.id, {}).get(label, []):
+            if leaf in ev:
+                ev[leaf].append(r)
+    assigned: set[str] = set()
+    for _, req in declared:
+        if "rest" in req.assigned:
+            assigned |= {o for o in leaves if not ev[o]}
+        elif req.assigned and cat is not None:
+            assigned |= set(cat.expand_objectives(req.assigned))
+    out = []
+    for leaf in leaves:
+        rs = ev[leaf]
+        sts = {r.status for r in rs}
+        if FAIL in sts:
+            state = OBJ_NOT_SATISFIED
+        elif sts == {PASS}:
+            state = OBJ_SATISFIED
+        elif sts:  # unknown (possibly next to a pass): not fully evidenced
+            state = OBJ_UNKNOWN
+        elif leaf in assigned:
+            state = OBJ_ASSIGNED
+        else:
+            state = OBJ_NONE
+        out.append({"id": leaf, "state": state, "assertions": sorted({r.id for r in rs})})
+    return out
+
+
 def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
                     components: dict[str, Component] | None = None, catalog: Catalog | None = None,
                     assertions: Iterable[Assertion] | None = None,
@@ -198,6 +247,7 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
     assertions = list(all_assertions() if assertions is None else assertions)
     by_id = {o.id: o for o in outcomes}
     amap = assertion_map(components, assertions)
+    amap_obj = {a.id: assertion_objectives(a, catalog) for a in assertions}
     reqs = requirements_by_control(components)
     tailored = {to_label(k): v for k, v in (not_applicable or {}).items()}
     ccp = providers_by_control(providers)
@@ -221,13 +271,13 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
         res = ControlResult(control=label, id=to_oscal_id(label), title=cat.full_title if cat else label,
                             family=cat.family if cat else label.split("-")[0].upper(),
                             baseline=cat.lowest_baseline if cat else None,
-                            in_baseline=bool(cat and cat.in_baseline(baseline)), status=STATUS_UNKNOWN,
+                            in_baseline=bool(cat and cat.in_baseline(baseline)), status=NOT_ASSESSED,
                             components=comps, assertions=ids, responsibility=responsibility_of(label, declared, cat))
         results = [by_id[i] for i in ids]
-        p = sum(r.status == PASS for r in results)
-        f = sum(r.status == FAIL for r in results)
-        u = sum(r.status == UNKNOWN for r in results)
+        evaluated = [r for r in results if r.status in (PASS, FAIL, UNKNOWN)]
         org_declared = [(comp, req) for comp, req in declared if req.responsibility == "org"]
+        if evaluated or results:
+            res.objectives = _objective_states(label, cat, evaluated, amap_obj, declared)
         if label in tailored:
             res.status, res.detail = NOT_APPLICABLE, f"tailored out: {tailored[label] or 'not applicable'}"
         elif label in ccp:
@@ -235,24 +285,12 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
             name, ref = _pget(prov, "name", "name"), _pget(prov, "authorizationRef", "authorization_ref")
             res.status, res.responsibility, res.provider = INHERITED, "org", name
             res.detail = f"inherited from common control provider {name}" + (f" ({ref})" if ref else "")
-            if f:
-                res.detail += f"; note: {f} platform assertion(s) fail"
-        elif p or f or u:
-            res.score = round(p / (p + f + u), 3)
-            if p and not f and not u:
-                if res.responsibility == "shared":
-                    res.status = HYBRID
-                    res.detail = f"platform part: all {p} assertion(s) pass; the program's part is not assessed"
-                else:
-                    res.status, res.detail = IMPLEMENTED, f"all {p} assertion(s) pass"
-            elif p:
-                res.status, res.detail = PARTIAL, f"{p} pass, {f} fail, {u} unknown"
-            elif f:
-                res.status, res.detail = NOT_IMPLEMENTED, f"{f} assertion(s) fail" + (f", {u} unknown" if u else "")
-            else:
-                res.status, res.detail = STATUS_UNKNOWN, f"{u} assertion(s) could not be evaluated"
+            if any(r.status == FAIL for r in results):
+                res.detail += f"; note: {sum(r.status == FAIL for r in results)} platform assertion(s) fail"
+        elif evaluated:
+            _status_from_objectives(res, evaluated)
         elif amap.get(label) and not results:
-            res.status = STATUS_UNKNOWN
+            res.status = NOT_ASSESSED
             res.detail = "assertion(s) not evaluated yet: " + ", ".join(amap[label])
         elif results:
             res.status, res.detail = NOT_APPLICABLE, "no applicable resources: " + "; ".join(
@@ -264,15 +302,45 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
         elif cat and cat.implementation_level == "organization" and inherit_organizational:
             res.status, res.detail = ORG_PROVIDED, "organization-level control, assumed organization-provided (unverified)"
         elif declared:
-            res.status = STATUS_UNKNOWN
+            res.status = NOT_ASSESSED
             res.detail = "declared by " + ", ".join(c.title for c, _ in declared) + "; no automated assertion " \
                          "(manual evidence required)"
         else:
-            res.status = NOT_IMPLEMENTED
-            res.detail = "not addressed by any platform component; system-specific implementation required"
+            res.status = NOT_ASSESSED
+            res.detail = "no platform evidence; system-specific implementation and assessment required"
         out.append(res)
     out.sort(key=lambda r: catalog.sort_key(r.control))
     return out
+
+
+def _status_from_objectives(res: ControlResult, evaluated: list[Outcome]) -> None:
+    objs = res.objectives
+    m = len(objs)
+    sat = sum(o["state"] == OBJ_SATISFIED for o in objs)
+    bad = sum(o["state"] == OBJ_NOT_SATISFIED for o in objs)
+    unk = sum(o["state"] == OBJ_UNKNOWN for o in objs)
+    asg = sum(o["state"] == OBJ_ASSIGNED for o in objs)
+    p = sum(r.status == PASS for r in evaluated)
+    f = sum(r.status == FAIL for r in evaluated)
+    u = sum(r.status == UNKNOWN for r in evaluated)
+    res.score = round(sat / m, 3) if m else None
+    cov = f"{sat} of {m} objective(s) with passing evidence"
+    if asg:
+        cov += f", {asg} assigned to the program/organization"
+    tail = f" ({p} assertion(s) pass, {f} fail, {u} unknown)"
+    if bad and not sat:
+        res.status, res.detail = FAILING, f"{cov}; {bad} objective(s) with failing evidence" + tail
+    elif not sat:
+        res.status = NOT_ASSESSED
+        res.detail = f"no passing evidence: {unk} objective(s) could not be evaluated" + tail
+    elif bad or unk or sat + asg < m:
+        res.status = PARTIAL
+        res.detail = f"partial: {cov}" + (f"; {bad} failing" if bad else "") + (f"; {unk} unknown" if unk else "") \
+            + tail
+    elif asg:
+        res.status, res.detail = HYBRID, f"platform part passing: {cov}" + tail
+    else:
+        res.status, res.detail = PASSING, f"evidence passing for all {m} objective(s)" + tail
 
 
 def family_rollup(statuses: Iterable[ControlResult | dict[str, Any]], catalog: Catalog | None = None,
@@ -286,7 +354,7 @@ def family_rollup(statuses: Iterable[ControlResult | dict[str, Any]], catalog: C
         fam = d["family"]
         row = rows.setdefault(fam, {"family": fam, "title": catalog.families.get(fam, fam), "total": 0,
                                     **{k: 0 for k in ROLLUP_KEYS.values()}})
-        row[ROLLUP_KEYS.get(d["status"], "unknown")] += 1
+        row[ROLLUP_KEYS.get(d["status"], "notAssessed")] += 1
         row["total"] += 1
     return sorted(rows.values(), key=lambda r: r["family"])
 
@@ -294,7 +362,12 @@ def family_rollup(statuses: Iterable[ControlResult | dict[str, Any]], catalog: C
 def summarize(statuses: list[ControlResult], outcomes: list[Outcome], baseline: str) -> dict[str, Any]:
     in_b = [s for s in statuses if s.in_baseline]
     counts = {k: sum(s.status == st for s in in_b) for st, k in ROLLUP_KEYS.items()}
+    objs = [o for s in in_b for o in s.objectives]
     return {"baseline": baseline, "controls": len(in_b), **counts,
+            "objectives": {"evidenced": sum(o["state"] == OBJ_SATISFIED for o in objs),
+                           "assessed": len(objs),
+                           "baseline": sum(len(get_catalog().get(s.control).objective_ids) for s in in_b
+                                           if get_catalog().get(s.control))},
             "assertions": {st: sum(o.status == st for o in outcomes) for st in (PASS, FAIL, UNKNOWN, NA)}}
 
 
@@ -477,13 +550,14 @@ async def execute(sm: async_sessionmaker[AsyncSession], env: Any, *, run_id: int
             s.add(ControlStatusRow(run_id=run_id, control=c.control, oscal_id=c.id, family=c.family,
                                    baseline=c.baseline, in_baseline=c.in_baseline, status=c.status,
                                    components=c.components, assertions=c.assertions, detail=c.detail[:4000],
-                                   score=c.score, responsibility=c.responsibility, provider=c.provider))
+                                   score=c.score, responsibility=c.responsibility, provider=c.provider,
+                                   objectives=c.objectives, inputs=c.inputs))
         row = await s.get(ControlAssertionRun, run_id)
         row.status, row.finished_at, row.summary = "done", datetime.now(UTC), summary
     await prune(sm)
     log.info("controls.run_done", run_id=run_id, trigger=trigger, baseline=cfg.baseline,
-             implemented=summary["implemented"], partial=summary["partial"],
-             not_implemented=summary["notImplemented"], unknown=summary["unknown"],
+             passing=summary["passing"], partial=summary["partial"],
+             failing=summary["failing"], not_assessed=summary["notAssessed"],
              assertions_failed=summary["assertions"][FAIL])
     return run_id
 
@@ -544,7 +618,8 @@ async def latest_data(session: AsyncSession) -> dict[str, Any] | None:
     statuses = [{"control": c.control, "id": c.oscal_id, "family": c.family, "baseline": c.baseline,
                  "inBaseline": c.in_baseline, "status": c.status, "components": c.components or [],
                  "assertions": c.assertions or [], "detail": c.detail, "score": c.score,
-                 "responsibility": c.responsibility, "provider": c.provider}
+                 "responsibility": c.responsibility, "provider": c.provider, "objectives": c.objectives or [],
+                 "inputs": c.inputs or {}}
                 for c in (await session.execute(select(ControlStatusRow).where(ControlStatusRow.run_id == run.id)))
                 .scalars()]
     return {"run": run_dict(run), "results": results, "statuses": statuses}

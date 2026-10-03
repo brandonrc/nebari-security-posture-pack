@@ -197,14 +197,14 @@ function ControlsTile() {
   const totals = families.data?.totals ?? complianceTotals(data, baseline);
   const inB = totals.baseline;
   const counts = totalsByStatus(inB);
-  const cov = { implemented: inB.implemented, total: applicableTotal(inB) };
+  const cov = { passing: inB.passing, total: applicableTotal(inB) };
   const cat = totals.catalog;
-  const catalogTitle = `Full catalog (${cat.total} controls): ${cat.implemented} implemented · ${cat.partial} partial · ${cat.notImplemented} not implemented · ${cat.inherited} inherited · ${cat.unknown} unknown`;
+  const catalogTitle = `Full catalog (${cat.total} controls): ${cat.passing} passing · ${cat.hybrid} hybrid · ${cat.partial} partial · ${cat.failing} failing · ${cat.inherited} inherited · ${cat.orgProvided} organization-provided (unverified) · ${cat.notAssessed} not assessed`;
   return (
     <Card>
       <CardHeader>
         <CardTitle>NIST 800-53 controls</CardTitle>
-        <CardDescription>Implementation proven by live assertions</CardDescription>
+        <CardDescription>Machine-collected evidence for an assessor, not an assessment result</CardDescription>
         <CardAction>
           <Button variant="ghost" size="sm" render={<Link to="/compliance" />}>
             Controls
@@ -213,14 +213,14 @@ function ControlsTile() {
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <Link to="/compliance" className="w-fit rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Controls implemented ${cov.implemented} of ${cov.total} (${baseline} baseline)`}>
-          <span className="font-semibold text-3xl tabular-nums">{cov.implemented}</span>
+        <Link to="/compliance" className="w-fit rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Controls with passing evidence ${cov.passing} of ${cov.total} (${baseline} baseline)`}>
+          <span className="font-semibold text-3xl tabular-nums">{cov.passing}</span>
           <span className="text-muted-foreground text-lg tabular-nums">/{cov.total}</span>
-          <span className="ml-2 text-muted-foreground text-sm">controls implemented ({baseline} baseline)</span>
+          <span className="ml-2 text-muted-foreground text-sm">controls with passing evidence ({baseline} baseline)</span>
         </Link>
         <FamilyRollupBar counts={counts} />
         <p className="w-fit text-muted-foreground text-xs tabular-nums" title={catalogTitle}>
-          {counts.partial} partial · {counts['not-implemented']} not implemented · {counts.inherited} inherited · {counts.unknown} unknown ({baseline} baseline)
+          {counts.hybrid} hybrid · {counts.partial} partial · {counts.failing} failing · {counts.inherited} inherited · {counts['not-assessed']} not assessed ({baseline} baseline)
         </p>
       </CardContent>
     </Card>

@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 DATA = Path(__file__).parent / "data"
@@ -24,6 +25,11 @@ def to_oscal_id(control: str) -> str:
         base = f"{m.group(1).lower()}-{int(m.group(2))}"
         return f"{base}.{int(m.group(3))}" if m.group(3) else base
     return control.strip().lower()
+
+
+def objective_control(objective: str) -> str:
+    """`si-2_obj.c-1` -> `si-2`; `ia-5.1_obj.a` -> `ia-5.1`."""
+    return objective.strip().lower().split("_obj", 1)[0]
 
 
 def to_label(control: str) -> str:
@@ -50,6 +56,26 @@ class Control:
     withdrawn: bool
     sort_id: str
     baselines: tuple[str, ...]
+    objectives: tuple[str, ...] = ()  # SP 800-53A leaf assessment-objective ids (ac-7_obj.a)
+    statements: tuple[str, ...] = ()  # statement part ids (ac-7_smt.a)
+    params: tuple[tuple[str, str], ...] = ()  # (odp id, label)
+
+    @property
+    def objective_ids(self) -> tuple[str, ...]:
+        """Leaf objectives; a control without published objectives counts as one (`<id>_obj`)."""
+        return self.objectives or (f"{self.id}_obj",)
+
+    def expand_objectives(self, refs: "Iterable[str]") -> list[str]:
+        """Objective references (a leaf, a parent such as `si-2_obj.c`, or `<id>_obj` for all) -> leaves."""
+        out: list[str] = []
+        for ref in refs:
+            ref = ref.strip().lower()
+            for leaf in self.objective_ids:
+                if leaf == ref or leaf.startswith(ref + "-") or leaf.startswith(ref + ".") or \
+                        ref == f"{self.id}_obj":
+                    if leaf not in out:
+                        out.append(leaf)
+        return out
 
     @property
     def lowest_baseline(self) -> str | None:
@@ -84,7 +110,9 @@ class Catalog:
                 id=c["id"], label=c["label"], title=c["title"], family=c["family"].upper(), cls=c.get("class"),
                 parent=c.get("parent"), implementation_level=c.get("implementationLevel"),
                 withdrawn=bool(c.get("withdrawn")), sort_id=c.get("sortId") or c["id"],
-                baselines=tuple(member.get(c["id"], ())))
+                baselines=tuple(member.get(c["id"], ())), objectives=tuple(c.get("objectives") or ()),
+                statements=tuple(c.get("statements") or ()),
+                params=tuple((p["id"], p.get("label", "")) for p in c.get("params") or ()))
 
     def get(self, control: str) -> Control | None:
         return self.controls.get(to_oscal_id(control))
@@ -124,4 +152,5 @@ def get_catalog() -> Catalog:
 def control_dict(c: Control) -> dict[str, Any]:
     return {"control": c.label, "id": c.id, "title": c.full_title, "family": c.family, "class": c.cls,
             "baseline": c.lowest_baseline, "baselines": list(c.baselines),
-            "implementationLevel": c.implementation_level, "withdrawn": c.withdrawn}
+            "implementationLevel": c.implementation_level, "withdrawn": c.withdrawn,
+            "objectives": list(c.objective_ids)}

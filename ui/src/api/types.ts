@@ -538,8 +538,19 @@ export interface ReportCreate {
   options?: { rollupByCve?: boolean; systemName?: string; includeSystemNamespaces?: boolean };
 }
 
-/** §13 control implementation status. Older APIs return `satisfied`/`not-satisfied`; normalised client-side. */
-export type ControlStatus = 'implemented' | 'partial' | 'not-implemented' | 'inherited' | 'not-applicable' | 'unknown';
+/**
+ * §13 control *evidence* status (compliance review M2/M8: evidence for an assessor, never an
+ * assessment result). Older APIs return `implemented`/`not-implemented`/`unknown`/`satisfied`; normalised client-side.
+ */
+export type ControlStatus =
+  | 'passing'
+  | 'partial'
+  | 'failing'
+  | 'hybrid'
+  | 'inherited'
+  | 'org-provided-unverified'
+  | 'not-applicable'
+  | 'not-assessed';
 export type AssertionStatus = 'pass' | 'fail' | 'unknown' | 'not-applicable';
 
 export interface ControlAssertion {
@@ -566,17 +577,25 @@ export interface ControlCoverage {
   inBaseline?: boolean;
   components?: string[];
   assertions?: ControlAssertion[];
+  /** CRM responsibility: provider | shared | customer | org. */
+  responsibility?: string | null;
+  /** Common control provider, when inherited. */
+  provider?: string | null;
+  /** SP 800-53A objectives with their evidence state (satisfied | not-satisfied | unknown | assigned | no-evidence). */
+  objectives?: Array<{ id: string; state: string; assertions?: string[] }>;
 }
 
 /** Control counts by status (`GET /compliance/families` `totals.*`). */
 export interface ComplianceTotals {
   total: number;
-  implemented: number;
+  passing: number;
   partial: number;
-  notImplemented: number;
+  failing: number;
+  hybrid: number;
   inherited: number;
+  orgProvided: number;
   notApplicable: number;
-  unknown: number;
+  notAssessed: number;
 }
 
 /**
@@ -594,12 +613,14 @@ export interface FamiliesRollup {
 export interface FamilyRollup {
   family: string;
   title: string;
-  implemented: number;
+  passing: number;
   partial: number;
-  notImplemented: number;
+  failing: number;
+  hybrid: number;
   inherited: number;
+  orgProvided: number;
   notApplicable: number;
-  unknown: number;
+  notAssessed: number;
 }
 
 /** `GET /compliance/assertions`. */

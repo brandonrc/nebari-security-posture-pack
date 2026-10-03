@@ -191,17 +191,19 @@ function ControlsTab() {
     <div className="flex flex-col gap-4 pt-2">
       {controls.error ? <ErrorAlert error={controls.error} onRetry={() => void controls.refetch()} /> : null}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <Card size="sm" data-testid="tile-implemented">
+        <Card size="sm" data-testid="tile-passing">
           <CardContent className="flex flex-col gap-1">
-            <span className="text-muted-foreground text-xs uppercase tracking-wide">Implemented ({baseline} baseline)</span>
+            <span className="text-muted-foreground text-xs uppercase tracking-wide">Controls with passing evidence ({baseline} baseline)</span>
             <span className="font-semibold text-3xl tabular-nums">
-              {loading ? '…' : inB.implemented}
+              {loading ? '…' : inB.passing}
               <span className="font-normal text-base text-muted-foreground">/{applicableTotal(inB)}</span>
             </span>
-            <CatalogHint hint={catalogHint(totals.catalog, inB.total, 'implemented')}>+ {inB.inherited} inherited from the organization</CatalogHint>
+            <CatalogHint hint={catalogHint(totals.catalog, inB.total, 'passing')}>
+              {inB.hybrid} hybrid · {inB.inherited} inherited (named provider) · {inB.orgProvided} organization-provided (unverified, not counted)
+            </CatalogHint>
           </CardContent>
         </Card>
-        {(['partial', 'not-implemented', 'unknown'] as const).map((s) => (
+        {(['partial', 'failing', 'not-assessed'] as const).map((s) => (
           <Card key={s} size="sm" data-testid={`tile-${s}`}>
             <CardContent className="flex flex-col gap-1">
               <span className="text-muted-foreground text-xs uppercase tracking-wide">
@@ -229,7 +231,7 @@ function ControlsTab() {
       <Card>
         <CardHeader>
           <CardTitle>Control catalog</CardTitle>
-          <CardDescription>Implementation status per control with live assertion evidence. Expand a row for the assertions behind it.</CardDescription>
+          <CardDescription>Evidence status per control (SP 800-53A objectives with passing evidence) from live assertions and scan results. Expand a row for the evidence behind it.</CardDescription>
         </CardHeader>
         <CardContent>
           <ControlsTable controls={list} loading={controls.isLoading} filter={state} onFilterChange={(patch) => update(patch)} />

@@ -168,7 +168,7 @@ async def test_01_empty_state_shapes(env):
     assert (await c.get("/export?format=csv")).status_code == 200
     assert (await c.get("/export?format=json")).json()["images"] == []
     ctl0 = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
-    assert ctl0["RA-5"]["findingStatus"] == "not_assessed" and ctl0["RA-5"]["status"] == "unknown"
+    assert ctl0["RA-5"]["findingStatus"] == "not_assessed" and ctl0["RA-5"]["status"] == "not-assessed"
     assert (await c.get("/images/123")).status_code == 404
     assert (await c.get("/me")).json()["isAdmin"] is True
     assert (await c.get("/openapi.json")).status_code == 200

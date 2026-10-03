@@ -29,6 +29,9 @@ class Requirement:
     assertions: tuple[str, ...] = ()
     responsibility: str = "provider"
     customer: str = ""  # residual responsibility of the program (CRM text); required unless `provider`
+    # 800-53A objectives explicitly assigned to the program / organization (described by `customer`);
+    # `rest` = every objective of the control this platform does not evidence (M2)
+    assigned: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,14 @@ class Component:
     requirements: tuple[Requirement, ...] = field(default_factory=tuple)
 
 
+def _assigned(v: object) -> tuple[str, ...]:
+    if not v:
+        return ()
+    if isinstance(v, str):
+        return (v.strip().lower(),)
+    return tuple(str(x).strip().lower() for x in v)  # type: ignore[union-attr]
+
+
 def parse_component(data: dict) -> Component:
     reqs = []
     for r in data.get("implemented-requirements") or []:
@@ -51,7 +62,8 @@ def parse_component(data: dict) -> Component:
             raise ValueError(f"component {data.get('id')} {r.get('control')}: unknown responsibility {resp!r}")
         reqs.append(Requirement(control=to_label(str(r["control"])), statement=str(r.get("statement") or "").strip(),
                                 inherited=inherited, assertions=tuple(r.get("assertions") or ()),
-                                responsibility=resp, customer=str(r.get("customer") or "").strip()))
+                                responsibility=resp, customer=str(r.get("customer") or "").strip(),
+                                assigned=_assigned(r.get("assigned"))))
     ctype = data.get("type", "software")
     if ctype not in COMPONENT_TYPES:
         raise ValueError(f"component {data.get('id')}: unknown type {ctype!r}")

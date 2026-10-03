@@ -58,7 +58,7 @@ def redirects_to_https(route: dict[str, Any]) -> bool:
     return True
 
 
-@assertion(id="gw-https-listener", title="Gateways serve HTTPS with a certificate", controls=["SC-8", "SC-23"],
+@assertion(id="gw-https-listener", title="Gateways serve HTTPS with a certificate", controls=["SC-8", "SC-23"], objectives=["sc-8_obj", "sc-23_obj"],
            component=GW, severity="high")
 async def https_listener(ctx: EngineContext) -> Result:
     """Every Gateway has a programmed HTTPS/TLS listener in Terminate mode with a certificate."""
@@ -84,7 +84,7 @@ async def https_listener(ctx: EngineContext) -> Result:
     return passed(f"{len(ok)} gateway(s) terminate TLS on a programmed HTTPS listener", gateways=ok)
 
 
-@assertion(id="gw-http-redirect", title="Plain-HTTP listeners only redirect to HTTPS", controls=["SC-8", "SC-23"],
+@assertion(id="gw-http-redirect", title="Plain-HTTP listeners only redirect to HTTPS", controls=["SC-8", "SC-23"], objectives=["sc-8_obj", "sc-23_obj"],
            component=GW, severity="high")
 async def http_redirect(ctx: EngineContext) -> Result:
     """Every HTTPRoute attached to an HTTP (port 80) listener redirects all rules to `https`."""
@@ -144,7 +144,7 @@ async def _tls_probe(host: str, port: int, max_version: ssl.TLSVersion | None, t
 
 
 @assertion(id="gw-tls-min-version", title="Gateway TLS minimum version is 1.2 or later",
-           controls=["SC-8(1)", "SC-13"], component=GW, severity="high")
+           controls=["SC-8(1)", "SC-13"], objectives=["sc-8.1_obj", "sc-13_obj.b"], component=GW, severity="high")
 async def tls_min_version(ctx: EngineContext) -> Result:
     """ClientTrafficPolicy `tls.minVersion` >= 1.2 for every Gateway; without a policy the Envoy
     Gateway default (1.2) applies and is confirmed by a live handshake probe (TLS 1.1 must be refused)."""
@@ -198,7 +198,7 @@ def _protected_route_names(app: dict[str, Any], routes: list[dict[str, Any]]) ->
 
 
 @assertion(id="app-gateway-auth", title="Authenticated NebariApps are enforced at the gateway",
-           controls=["AC-3", "IA-2"], component=OP, severity="critical")
+           controls=["AC-3", "IA-2"], objectives=["ac-3_obj", "ia-2_obj-1"], component=OP, severity="critical")
 async def app_gateway_auth(ctx: EngineContext) -> Result:
     """Each NebariApp with `auth.enabled` has a SecurityPolicy (oidc/jwt/extAuth) targeting its
     HTTPRoute, or `enforceAtGateway: false` plus annotation `posture.nebari.dev/in-app-auth`
@@ -245,7 +245,7 @@ async def app_gateway_auth(ctx: EngineContext) -> Result:
 
 
 @assertion(id="app-landing-visibility", title="Landing-page visibility matches app authorization",
-           controls=["AC-3", "AC-22"], component=OP, severity="medium")
+           controls=["AC-3", "AC-22"], objectives=["ac-3_obj", "ac-22_obj.d-1"], component=OP, severity="medium")
 async def app_landing_visibility(ctx: EngineContext) -> Result:
     """For NebariApps listed on the landing page with `auth.enabled`, the reconciled
     `status.serviceDiscovery.visibility` is not `public` and `requiredGroups` equals `auth.groups`."""

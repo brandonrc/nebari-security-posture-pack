@@ -24,7 +24,7 @@ def _subject_allowed(name: str, allow: list[str], kinds: tuple[str, ...] = ("use
 
 
 @assertion(id="kc-brute-force-protection", title="Keycloak brute-force detection locks accounts",
-           controls=["AC-7"], component=C, severity="high")
+           controls=["AC-7"], objectives=["ac-7_obj.a", "ac-7_obj.b"], component=C, severity="high")
 async def brute_force(ctx: EngineContext) -> Result:
     """Realm `bruteForceProtected` is on and `failureFactor` <= the organization-defined maximum."""
     r = await ctx.realm()
@@ -50,7 +50,7 @@ def parse_password_policy(policy: str | None) -> dict[str, str]:
 
 
 @assertion(id="kc-password-policy", title="Keycloak password policy enforces length and complexity",
-           controls=["IA-5(1)"], component=C, severity="high")
+           controls=["IA-5(1)"], objectives=["ia-5.1_obj.h"], component=C, severity="high")
 async def password_policy(ctx: EngineContext) -> Result:
     """Realm `passwordPolicy` sets `length` >= the minimum and at least one complexity rule."""
     r = await ctx.realm()
@@ -77,7 +77,7 @@ async def password_policy(ctx: EngineContext) -> Result:
 
 
 @assertion(id="kc-admin-mfa", title="Administrators must use multi-factor authentication",
-           controls=["IA-2(1)"], component=C, severity="critical")
+           controls=["IA-2(1)"], objectives=["ia-2.1_obj"], component=C, severity="critical")
 async def admin_mfa(ctx: EngineContext) -> Result:
     """Every member of the admin group has an OTP or WebAuthn credential (or the realm's browser
     flow requires OTP for everyone)."""
@@ -109,7 +109,7 @@ async def admin_mfa(ctx: EngineContext) -> Result:
 
 
 @assertion(id="kc-session-timeouts", title="SSO session idle and maximum lifetimes within policy",
-           controls=["AC-11", "AC-12"], component=C, severity="medium")
+           controls=["AC-11", "AC-12"], objectives=["ac-11_obj.a", "ac-12_obj"], component=C, severity="medium")
 async def session_timeouts(ctx: EngineContext) -> Result:
     """`ssoSessionIdleTimeout` and `ssoSessionMaxLifespan` are set and <= the policy values."""
     r = await ctx.realm()
@@ -128,7 +128,7 @@ async def session_timeouts(ctx: EngineContext) -> Result:
     return passed(f"idle {idle}s, max lifespan {life}s", **ev)
 
 
-@assertion(id="kc-remember-me-disabled", title="'Remember me' is disabled", controls=["AC-12"], component=C,
+@assertion(id="kc-remember-me-disabled", title="'Remember me' is disabled", controls=["AC-12"], objectives=["ac-12_obj"], component=C,
            severity="low")
 async def remember_me(ctx: EngineContext) -> Result:
     """Realm `rememberMe` is false (it would keep sessions alive across browser restarts)."""
@@ -138,7 +138,7 @@ async def remember_me(ctx: EngineContext) -> Result:
     return passed("'remember me' is disabled", rememberMe=False)
 
 
-@assertion(id="kc-self-registration-disabled", title="User self-registration is disabled", controls=["AC-2"],
+@assertion(id="kc-self-registration-disabled", title="User self-registration is disabled", controls=["AC-2"], objectives=["ac-2_obj.e", "ac-2_obj.f-1"],
            component=C, severity="high")
 async def registration(ctx: EngineContext) -> Result:
     """Realm `registrationAllowed` is false: accounts exist only when an administrator creates them."""
@@ -148,7 +148,7 @@ async def registration(ctx: EngineContext) -> Result:
     return passed("self-registration is disabled", registrationAllowed=False)
 
 
-@assertion(id="kc-login-events", title="Login events are recorded with retention", controls=["AU-2", "AU-12"],
+@assertion(id="kc-login-events", title="Login events are recorded with retention", controls=["AU-2", "AU-12"], objectives=["au-2_obj.c-2", "au-12_obj.a"],
            component=C, severity="medium")
 async def login_events(ctx: EngineContext) -> Result:
     """Events config: `eventsEnabled` with an expiration (stored-event retention)."""
@@ -162,7 +162,7 @@ async def login_events(ctx: EngineContext) -> Result:
     return passed(f"login events stored for {int(cfg['eventsExpiration']) // 86400} day(s)", **ev)
 
 
-@assertion(id="kc-admin-events", title="Admin events are recorded with details", controls=["AU-2", "AU-3", "AU-12"],
+@assertion(id="kc-admin-events", title="Admin events are recorded with details", controls=["AU-2", "AU-3", "AU-12"], objectives=["au-2_obj.c-2", "au-3_obj", "au-12_obj.c"],
            component=C, severity="medium")
 async def admin_events(ctx: EngineContext) -> Result:
     """Events config: `adminEventsEnabled` and `adminEventsDetailsEnabled`."""
@@ -176,7 +176,7 @@ async def admin_events(ctx: EngineContext) -> Result:
 
 
 @assertion(id="kc-admin-role-allowlist", title="Realm admin role limited to approved accounts",
-           controls=["AC-6(5)"], component=C, severity="high")
+           controls=["AC-6(5)"], objectives=["ac-6.5_obj"], component=C, severity="high")
 async def admin_role(ctx: EngineContext) -> Result:
     """Users holding the realm `admin` role (directly or through a group) are all in
     `controlsEngine.adminSubjects`."""
@@ -199,7 +199,7 @@ async def admin_role(ctx: EngineContext) -> Result:
     return passed(f"{len(holders)} account(s) hold the {role!r} role, all approved", **ev)
 
 
-@assertion(id="kc-ssl-required", title="Keycloak requires TLS for external requests", controls=["SC-8"],
+@assertion(id="kc-ssl-required", title="Keycloak requires TLS for external requests", controls=["SC-8"], objectives=["sc-8_obj"],
            component=C, severity="high")
 async def ssl_required(ctx: EngineContext) -> Result:
     """Realm `sslRequired` is `external` or `all` (not `none`)."""

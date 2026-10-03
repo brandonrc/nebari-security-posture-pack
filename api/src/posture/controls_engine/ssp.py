@@ -25,13 +25,14 @@ from .catalog import BASELINES, get_catalog, to_oscal_id
 from .components import Component, load_components, requirements_by_control
 from .engine import (
     DEFAULT_ORG_STATEMENT,
+    FAILING,
     HYBRID,
-    IMPLEMENTED,
     INHERITED,
     NOT_APPLICABLE,
-    NOT_IMPLEMENTED,
+    NOT_ASSESSED,
     ORG_PROVIDED,
     PARTIAL,
+    PASSING,
     derive_statuses,
     providers_by_control,
 )
@@ -43,9 +44,17 @@ PROFILE_URL = ("https://raw.githubusercontent.com/usnistgov/oscal-content/main/n
                "NIST_SP-800-53_rev5_{level}-baseline_profile.json")
 CATALOG_URL = ("https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/"
                "NIST_SP-800-53_rev5_catalog.json")
-# org-provided-unverified and unknown carry no OSCAL state: nothing is asserted for them.
-OSCAL_STATE = {IMPLEMENTED: "implemented", PARTIAL: "partial", HYBRID: "partial", NOT_IMPLEMENTED: "planned",
-               INHERITED: "implemented", NOT_APPLICABLE: "not-applicable"}
+# Evidence status -> OSCAL implementation-status (compliance review M2). org-provided-unverified and
+# not-assessed carry no OSCAL state: nothing is asserted for them. `failing` is `planned` only when a
+# POA&M item tracks it, otherwise `not-implemented`.
+OSCAL_STATE = {PASSING: "implemented", PARTIAL: "partial", HYBRID: "partial", INHERITED: "implemented",
+               NOT_APPLICABLE: "not-applicable"}
+
+
+def oscal_state(status: str, label: str, poam_controls: set[str] | None) -> str | None:
+    if status == FAILING:
+        return "planned" if poam_controls and label in poam_controls else "not-implemented"
+    return OSCAL_STATE.get(status)
 TOOL = "Nebari Security Posture Pack"
 
 
@@ -129,7 +138,8 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
               baseline: str = "moderate", generated_at: datetime | None = None, description: str = "",
               organization_statement: str = "", not_applicable: dict[str, str] | None = None,
               inherit_organizational: bool = False, providers: list[Any] | None = None,
-              components: dict[str, Component] | None = None) -> dict[str, Any]:
+              components: dict[str, Component] | None = None,
+              poam_controls: set[str] | None = None) -> dict[str, Any]:
     """`engine_data` = `engine.latest_data()` ({run, results[], statuses[]}) or None (engine never ran)."""
     if baseline not in BASELINES:
         raise ValueError(f"unknown baseline {baseline!r}")
@@ -151,7 +161,7 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
         present = {s["control"] for s in statuses}
         for c in catalog.baseline(baseline):
             if c.label not in present:
-                statuses.append({"control": c.label, "status": "unknown", "components": [], "assertions": [],
+                statuses.append({"control": c.label, "status": NOT_ASSESSED, "components": [], "assertions": [],
                                  "detail": "not evaluated by the latest engine run", "inBaseline": True})
     else:
         statuses = [{"control": r.control, "status": r.status, "components": r.components,
@@ -218,7 +228,7 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
         label = s["control"]
         cat = catalog.get(label)
         status = s["status"]
-        state = OSCAL_STATE.get(status)
+        state = oscal_state(status, label, poam_controls)
         by_components = []
         declared = reqs.get(label, [])
         claimed = {comp.id for comp, _ in declared}
@@ -276,7 +286,7 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
     level = f"fips-199-{baseline}"
     in_b = [s for s in statuses if s.get("inBaseline", True)]
     counts = {k: sum(s["status"] == k for s in in_b) for k in
-              (IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED, HYBRID, INHERITED, ORG_PROVIDED, NOT_APPLICABLE, "unknown")}
+              (PASSING, PARTIAL, FAILING, HYBRID, INHERITED, ORG_PROVIDED, NOT_APPLICABLE, NOT_ASSESSED)}
     doc = {
         "uuid": _uid(seed, "ssp"),
         "metadata": _metadata(f"System Security Plan: {system_name}", organization, generated_at,

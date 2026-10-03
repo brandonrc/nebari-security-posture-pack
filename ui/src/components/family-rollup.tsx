@@ -4,28 +4,33 @@ import { familyCounts } from '@/lib/controls';
 import { cn } from '@/lib/utils';
 
 /**
- * Status series for the family rollup. Status job, not identity: green/yellow/red
- * read as implemented/partial/not-implemented; inherited uses the blue chart
- * token, unknown the muted ink. Every segment also carries a text label (legend,
- * tooltip, aria-label, row total), so colour is never the only channel.
+ * Status series for the family rollup (evidence status, compliance review M2/M8). Status job,
+ * not identity: green/yellow/red read as passing/partial/failing evidence; hybrid and inherited
+ * (named provider) use the blue chart tokens, organization-provided (unverified) and not assessed
+ * the muted inks. Every segment also carries a text label (legend, tooltip, aria-label, row
+ * total), so colour is never the only channel.
  */
 export const ROLLUP_SERIES = [
-  { key: 'implemented', label: 'Implemented', color: 'var(--chart-5)' },
+  { key: 'passing', label: 'Evidence passing', color: 'var(--chart-5)' },
+  { key: 'hybrid', label: 'Hybrid', color: 'var(--chart-2)' },
   { key: 'partial', label: 'Partial', color: 'var(--chart-3)' },
-  { key: 'notImplemented', label: 'Not implemented', color: 'var(--destructive-foreground)' },
-  { key: 'inherited', label: 'Inherited', color: 'var(--chart-4)' },
-  { key: 'unknown', label: 'Unknown', color: 'var(--muted-foreground)' },
+  { key: 'failing', label: 'Failing', color: 'var(--destructive-foreground)' },
+  { key: 'inherited', label: 'Inherited (named provider)', color: 'var(--chart-4)' },
+  { key: 'orgProvided', label: 'Organization-provided (unverified)', color: 'var(--border-strong)' },
+  { key: 'notAssessed', label: 'Not assessed', color: 'var(--muted-foreground)' },
 ] as const;
 
 export type RollupKey = (typeof ROLLUP_SERIES)[number]['key'];
 
 /** Rollup key → ControlStatus filter value. */
 export const ROLLUP_STATUS: Record<RollupKey, string> = {
-  implemented: 'implemented',
+  passing: 'passing',
+  hybrid: 'hybrid',
   partial: 'partial',
-  notImplemented: 'not-implemented',
+  failing: 'failing',
   inherited: 'inherited',
-  unknown: 'unknown',
+  orgProvided: 'org-provided-unverified',
+  notAssessed: 'not-assessed',
 };
 
 export function FamilyRollupChart({
@@ -104,7 +109,7 @@ export function FamilyRollupChart({
               )}
             </div>
             <span className="text-right text-muted-foreground text-xs tabular-nums">
-              <span className="font-medium text-foreground">{r.counts.implemented + r.counts.inherited}</span>/{r.total} met
+              <span className="font-medium text-foreground">{r.counts.passing}</span>/{r.total} passing
             </span>
           </div>
         ))}

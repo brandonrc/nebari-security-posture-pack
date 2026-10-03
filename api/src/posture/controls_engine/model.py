@@ -55,17 +55,20 @@ class Assertion:
     severity: str
     evaluate: Evaluate = field(compare=False, repr=False)
     description: str = ""
+    # SP 800-53A assessment objectives this assertion produces evidence for (`ac-7_obj.a`; a parent
+    # such as `si-2_obj.c` covers its leaves). Objective coverage drives the control status (M2).
+    objectives: tuple[str, ...] = ()
 
     def meta(self) -> dict[str, Any]:
         return {"id": self.id, "title": self.title, "controls": list(self.controls), "component": self.component,
-                "severity": self.severity, "description": self.description}
+                "severity": self.severity, "description": self.description, "objectives": list(self.objectives)}
 
 
 REGISTRY: dict[str, Assertion] = {}
 
 
 def assertion(*, id: str, title: str, controls: list[str], component: str, severity: str = "medium",  # noqa: A002
-              description: str = "") -> Callable[[Evaluate], Assertion]:
+              description: str = "", objectives: list[str] | None = None) -> Callable[[Evaluate], Assertion]:
     """Register `async def fn(ctx) -> Result` as an assertion."""
     if severity not in SEVERITIES:
         raise ValueError(f"invalid severity {severity!r}")
@@ -74,7 +77,8 @@ def assertion(*, id: str, title: str, controls: list[str], component: str, sever
         if id in REGISTRY:
             raise ValueError(f"duplicate assertion id {id!r}")
         a = Assertion(id=id, title=title, controls=tuple(controls), component=component, severity=severity,
-                      evaluate=fn, description=description or (fn.__doc__ or "").strip())
+                      evaluate=fn, description=description or (fn.__doc__ or "").strip(),
+                      objectives=tuple(o.strip().lower() for o in objectives or ()))
         REGISTRY[id] = a
         return a
 

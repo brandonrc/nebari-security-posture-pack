@@ -1,42 +1,61 @@
 import type { Baseline, ComplianceTotals, ControlCoverage, ControlStatus, FamilyRollup } from '@/api/types';
 import { BASELINES } from '@/api/types';
 
-export const CONTROL_STATUSES: ControlStatus[] = ['implemented', 'partial', 'not-implemented', 'inherited', 'not-applicable', 'unknown'];
+export const CONTROL_STATUSES: ControlStatus[] = [
+  'passing',
+  'hybrid',
+  'partial',
+  'failing',
+  'inherited',
+  'org-provided-unverified',
+  'not-applicable',
+  'not-assessed',
+];
 
+/** Evidence-status vocabulary (compliance review M2/M8): what the evidence shows, not an assessment result. */
 export const CONTROL_STATUS_LABEL: Record<ControlStatus, string> = {
-  implemented: 'Implemented',
-  partial: 'Partial',
-  'not-implemented': 'Not implemented',
-  inherited: 'Inherited',
-  'not-applicable': 'Not applicable',
-  unknown: 'Unknown',
+  passing: 'Evidence passing',
+  hybrid: 'Hybrid (platform part passing)',
+  partial: 'Partial evidence',
+  failing: 'Evidence failing',
+  inherited: 'Inherited (named provider)',
+  'org-provided-unverified': 'Organization-provided (unverified)',
+  'not-applicable': 'Not applicable (tailored)',
+  'not-assessed': 'Not assessed',
 };
 
-/** Map any status spelling (incl. §11 `satisfied`/`not-satisfied`, `planned`) to a ControlStatus. */
+/** Map any status spelling (incl. legacy `implemented`/`not-implemented`/`unknown`, §11 `satisfied`) to a ControlStatus. */
 export function normalizeControlStatus(raw: string | null | undefined): ControlStatus {
   const s = (raw ?? '').toLowerCase().replace(/[_\s]+/g, '-');
   switch (s) {
+    case 'passing':
     case 'implemented':
     case 'satisfied':
     case 'pass':
-      return 'implemented';
+      return 'passing';
     case 'partial':
     case 'partially-implemented':
       return 'partial';
+    case 'failing':
     case 'not-implemented':
     case 'notimplemented':
     case 'planned':
     case 'not-satisfied':
     case 'fail':
-      return 'not-implemented';
+      return 'failing';
+    case 'hybrid':
+      return 'hybrid';
     case 'inherited':
       return 'inherited';
+    case 'org-provided-unverified':
+    case 'org-provided':
+      return 'org-provided-unverified';
     case 'not-applicable':
     case 'notapplicable':
     case 'n/a':
       return 'not-applicable';
     default:
-      return 'unknown';
+      return 'not-assessed';
   }
 }
 
@@ -91,14 +110,16 @@ export function inBaseline(baseline: ControlCoverage['baseline'], target: Baseli
   return lowest !== null && BASELINE_RANK[lowest] <= BASELINE_RANK[target];
 }
 
-const EMPTY = { implemented: 0, partial: 0, notImplemented: 0, inherited: 0, notApplicable: 0, unknown: 0 };
+const EMPTY = { passing: 0, partial: 0, failing: 0, hybrid: 0, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 0 };
 const ROLLUP_KEY: Record<ControlStatus, keyof typeof EMPTY> = {
-  implemented: 'implemented',
+  passing: 'passing',
   partial: 'partial',
-  'not-implemented': 'notImplemented',
+  failing: 'failing',
+  hybrid: 'hybrid',
   inherited: 'inherited',
+  'org-provided-unverified': 'orgProvided',
   'not-applicable': 'notApplicable',
-  unknown: 'unknown',
+  'not-assessed': 'notAssessed',
 };
 
 /** Fallback for `GET /compliance/families`: roll the control list up per family. */
@@ -120,22 +141,34 @@ export function rollupFamilies(controls: ControlCoverage[]): FamilyRollup[] {
 export function familyCounts(f: Partial<FamilyRollup>) {
   const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   return {
-    implemented: n(f.implemented),
+    passing: n(f.passing),
     partial: n(f.partial),
-    notImplemented: n(f.notImplemented),
+    failing: n(f.failing),
+    hybrid: n(f.hybrid),
     inherited: n(f.inherited),
+    orgProvided: n(f.orgProvided),
     notApplicable: n(f.notApplicable),
-    unknown: n(f.unknown),
+    notAssessed: n(f.notAssessed),
   };
 }
 
-/** Overview tile: implemented / applicable controls in a baseline (inherited counts as implemented by the provider). */
+/**
+ * Overview tile: controls with passing evidence / applicable controls in a baseline. Only
+ * `passing` counts; hybrid and inherited (named provider) are reported separately and
+ * organization-provided (unverified) never counts.
+ */
 export function baselineCoverage(controls: ControlCoverage[], baseline: Baseline) {
   const scoped = controls.filter((c) => inBaseline(c.baseline, baseline));
   const applicable = scoped.filter((c) => normalizeControlStatus(c.status) !== 'not-applicable');
-  const implemented = applicable.filter((c) => normalizeControlStatus(c.status) === 'implemented').length;
-  const inherited = applicable.filter((c) => normalizeControlStatus(c.status) === 'inherited').length;
-  return { implemented, inherited, total: applicable.length };
+  const count = (s: ControlStatus) => applicable.filter((c) => normalizeControlStatus(c.status) === s).length;
+  return { passing: count('passing'), hybrid: count('hybrid'), inherited: count('inherited'), total: applicable.length };
+}
+
+/** `n of m` SP 800-53A objectives with passing evidence (null when the API sends no objectives). */
+export function objectiveCoverage(c: Pick<ControlCoverage, 'objectives'>): { evidenced: number; total: number } | null {
+  const objs = c.objectives ?? [];
+  if (!objs.length) return null;
+  return { evidenced: objs.filter((o) => o.state === 'satisfied').length, total: objs.length };
 }
 
 export interface ControlFilter {
@@ -190,12 +223,12 @@ export function totalsByStatus(t: ComplianceTotals): Record<ControlStatus, numbe
   return Object.fromEntries(CONTROL_STATUSES.map((s) => [s, t[ROLLUP_KEY[s]]])) as Record<ControlStatus, number>;
 }
 
-/** Controls that count towards "implemented of N": everything but not-applicable. */
+/** Controls that count towards "passing of N": everything but not-applicable. */
 export function applicableTotal(t: ComplianceTotals): number {
   return t.total - t.notApplicable;
 }
 
-/** Tooltip text with the full-catalog figure for one status (or implemented). */
+/** Tooltip text with the full-catalog figure for one status. */
 export function catalogHint(t: ComplianceTotals, baselineTotal: number, status: ControlStatus): string {
   const outside = t.total - baselineTotal;
   return `Full catalog: ${t[ROLLUP_KEY[status]]} ${CONTROL_STATUS_LABEL[status].toLowerCase()} of ${t.total} controls` +

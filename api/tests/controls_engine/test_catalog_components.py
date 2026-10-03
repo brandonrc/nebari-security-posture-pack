@@ -40,6 +40,7 @@ def test_components_consistent_with_catalog_and_assertions():
             assert req.responsibility == "provider" or req.customer, f"{comp.id} {req.control}: no customer text"
             for a in req.assertions:
                 assert a in ids, f"{comp.id}: unknown assertion {a}"
+                assert req.control in ids[a].controls, f"{comp.id} {req.control}: {a} does not list the control"
     for a in ids.values():
         assert a.component in comps, a.id
         for c in a.controls:
@@ -47,3 +48,26 @@ def test_components_consistent_with_catalog_and_assertions():
         # the assertion's component declares every control the assertion proves
         declared = {r.control for r in comps[a.component].requirements if a.id in r.assertions}
         assert set(a.controls) <= declared, (a.id, set(a.controls) - declared)
+
+
+def test_every_assertion_tags_valid_objectives_for_each_control():
+    """M2: objective coverage needs each assertion to name the 800-53A objectives it evidences."""
+    from posture.controls_engine.catalog import objective_control
+
+    cat = get_catalog()
+    for a in all_assertions():
+        assert a.objectives, a.id
+        ctl_ids = {cat.get(c).id for c in a.controls}
+        tagged = {objective_control(o) for o in a.objectives}
+        assert tagged == ctl_ids, (a.id, tagged ^ ctl_ids)
+        for o in a.objectives:
+            assert cat.get(objective_control(o)).expand_objectives([o]), (a.id, o)
+
+
+def test_catalog_carries_objectives_statements_and_params():
+    cat = get_catalog()
+    si2 = cat.get("SI-2")
+    assert si2.objectives[:3] == ("si-2_obj.a-1", "si-2_obj.a-2", "si-2_obj.a-3") and len(si2.objectives) == 10
+    assert si2.statements == ("si-2_smt.a", "si-2_smt.b", "si-2_smt.c", "si-2_smt.d")
+    assert si2.params == (("si-02_odp", "time period"),)
+    assert cat.get("AC-3").objective_ids == ("ac-3_obj",)

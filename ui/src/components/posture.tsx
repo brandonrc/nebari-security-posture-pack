@@ -232,7 +232,12 @@ const STATUS_TONE: Record<string, string> = {
   'not-satisfied': 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
   pass: 'border-success-foreground/40 bg-success text-success-foreground',
   fail: 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
-  // §13 control / assertion statuses
+  // §13 control evidence / assertion statuses
+  passing: 'border-success-foreground/40 bg-success text-success-foreground',
+  hybrid: 'border-info-foreground/40 bg-info text-info-foreground',
+  failing: 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
+  'not-assessed': 'border-dashed border-border-strong bg-transparent text-muted-foreground-strong',
+  'org-provided-unverified': 'border-dashed border-border-strong bg-muted text-muted-foreground-strong',
   implemented: 'border-success-foreground/40 bg-success text-success-foreground',
   partial: 'border-warning-foreground/40 bg-warning text-warning-foreground',
   'not-implemented': 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
@@ -252,6 +257,10 @@ const STATUS_TEXT: Record<string, string> = {
   'not-satisfied': 'Not satisfied',
   'not-implemented': 'Not implemented',
   'not-applicable': 'Not applicable',
+  passing: 'Evidence passing',
+  failing: 'Evidence failing',
+  'not-assessed': 'Not assessed',
+  'org-provided-unverified': 'Organization-provided (unverified)',
   'pending-upgrade': 'Pending upgrade',
   'pending-install': 'Pending install',
 };

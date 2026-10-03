@@ -31,7 +31,7 @@ def _baseline(value: str | None, default: str) -> str:
 
 async def _statuses(session: AsyncSession, baseline: str, st: Any) -> tuple[list[dict[str, Any]], dict | None]:
     """Latest run's statuses re-flagged for `baseline`; without a run, statuses from component
-    declarations only (assertion-backed controls are `unknown`/`not-implemented` until the first run)."""
+    declarations only (assertion-backed controls are `not-assessed` until the first run)."""
     data = await engine.latest_data(session)
     catalog = get_catalog()
     if data is None:
@@ -51,7 +51,7 @@ async def _statuses(session: AsyncSession, baseline: str, st: Any) -> tuple[list
     for c in catalog.baseline(baseline):
         if c.label not in present:
             statuses.append({"control": c.label, "id": c.id, "family": c.family, "baseline": c.lowest_baseline,
-                             "inBaseline": True, "status": "unknown", "components": [], "assertions": [],
+                             "inBaseline": True, "status": "not-assessed", "components": [], "assertions": [],
                              "detail": f"not evaluated (latest run used the {data['run']['baseline']} baseline)",
                              "score": None})
     return statuses, data
@@ -73,7 +73,7 @@ async def catalog(family: str | None = None, baseline: str | None = None, q: str
 def _totals(rows: list[dict[str, Any]]) -> dict[str, int]:
     out = {"total": len(rows), **{k: 0 for k in engine.ROLLUP_KEYS.values()}}
     for r in rows:
-        out[engine.ROLLUP_KEYS.get(r["status"], "unknown")] += 1
+        out[engine.ROLLUP_KEYS.get(r["status"], "notAssessed")] += 1
     return out
 
 
@@ -103,7 +103,7 @@ async def _control_rows(session: AsyncSession, statuses: list[dict[str, Any]], d
             c = catalog.get(label)
             by_control[label] = {"control": label, "family": c.family if c else label.split("-")[0],
                                  "baseline": c.lowest_baseline if c else None, "inBaseline": False,
-                                 "status": "unknown", "components": [], "assertions": [],
+                                 "status": "not-assessed", "components": [], "assertions": [],
                                  "detail": "outside the selected baseline; see findingsOpen / checksFailed"}
     out = []
     for label, s in by_control.items():
@@ -116,6 +116,7 @@ async def _control_rows(session: AsyncSession, statuses: list[dict[str, Any]], d
             "family": s["family"], "baseline": s.get("baseline"), "inBaseline": bool(s.get("inBaseline")),
             "status": s["status"], "detail": s.get("detail"), "score": s.get("score"),
             "responsibility": s.get("responsibility"), "provider": s.get("provider"),
+            "objectives": s.get("objectives") or [],
             "implementationLevel": c.implementation_level if c else None,
             "components": s.get("components") or [],
             "assertions": [{"id": a, "title": results[a]["title"], "status": results[a]["status"],

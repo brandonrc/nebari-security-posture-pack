@@ -76,11 +76,14 @@ describe('cluster weights (SCORING.md)', () => {
 
 describe('control helpers (DESIGN §13)', () => {
   it('normalises status spellings', () => {
-    expect(normalizeControlStatus('satisfied')).toBe('implemented');
-    expect(normalizeControlStatus('not-satisfied')).toBe('not-implemented');
-    expect(normalizeControlStatus('planned')).toBe('not-implemented');
+    expect(normalizeControlStatus('satisfied')).toBe('passing');
+    expect(normalizeControlStatus('implemented')).toBe('passing');
+    expect(normalizeControlStatus('not-satisfied')).toBe('failing');
+    expect(normalizeControlStatus('planned')).toBe('failing');
     expect(normalizeControlStatus('Not Applicable')).toBe('not-applicable');
-    expect(normalizeControlStatus(undefined)).toBe('unknown');
+    expect(normalizeControlStatus('org-provided-unverified')).toBe('org-provided-unverified');
+    expect(normalizeControlStatus('unknown')).toBe('not-assessed');
+    expect(normalizeControlStatus(undefined)).toBe('not-assessed');
   });
   it('treats baselines as nested', () => {
     expect(inBaseline('low', 'moderate')).toBe(true);
@@ -97,10 +100,10 @@ describe('control helpers (DESIGN §13)', () => {
       { control: 'AC-1', title: '', findingsOpen: 0, checksFailed: 0, status: 'inherited', baseline: 'low' },
     ];
     expect(rollupFamilies(list)).toEqual([
-      { family: 'AC', title: 'Access Control', implemented: 1, partial: 0, notImplemented: 1, inherited: 1, notApplicable: 0, unknown: 0 },
-      { family: 'SC', title: 'System and Communications Protection', implemented: 1, partial: 0, notImplemented: 0, inherited: 0, notApplicable: 0, unknown: 0 },
+      { family: 'AC', title: 'Access Control', passing: 1, partial: 0, failing: 1, hybrid: 0, inherited: 1, orgProvided: 0, notApplicable: 0, notAssessed: 0 },
+      { family: 'SC', title: 'System and Communications Protection', passing: 1, partial: 0, failing: 0, hybrid: 0, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 0 },
     ]);
-    expect(baselineCoverage(list, 'moderate')).toEqual({ implemented: 1, inherited: 1, total: 3 });
+    expect(baselineCoverage(list, 'moderate')).toEqual({ passing: 1, hybrid: 0, inherited: 1, total: 3 });
   });
   it('splits totals into the selected baseline and the full catalog view', () => {
     const list = [
@@ -110,9 +113,9 @@ describe('control helpers (DESIGN §13)', () => {
       { control: 'SI-2(2)', title: '', findingsOpen: 1, checksFailed: 0, status: 'unknown', baseline: 'moderate', inBaseline: false },
     ];
     const t = complianceTotals(list, 'moderate');
-    expect(t.baseline).toEqual({ name: 'moderate', total: 2, implemented: 1, partial: 0, notImplemented: 1, inherited: 0, notApplicable: 0, unknown: 0 });
-    expect(t.catalog).toEqual({ total: 4, implemented: 1, partial: 0, notImplemented: 2, inherited: 0, notApplicable: 0, unknown: 1 });
-    expect(catalogHint(t.catalog, t.baseline.total, 'not-implemented')).toBe('Full catalog: 2 not implemented of 4 controls (incl. 2 outside the baseline)');
+    expect(t.baseline).toEqual({ name: 'moderate', total: 2, passing: 1, partial: 0, failing: 1, hybrid: 0, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 0 });
+    expect(t.catalog).toEqual({ total: 4, passing: 1, partial: 0, failing: 2, hybrid: 0, inherited: 0, orgProvided: 0, notApplicable: 0, notAssessed: 1 });
+    expect(catalogHint(t.catalog, t.baseline.total, 'failing')).toBe('Full catalog: 2 evidence failing of 4 controls (incl. 2 outside the baseline)');
   });
   it('orders control ids naturally', () => {
     expect(['AC-10', 'AC-2(1)', 'AC-2', 'AU-2'].sort(compareControlId)).toEqual(['AC-2', 'AC-2(1)', 'AC-10', 'AU-2']);

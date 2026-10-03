@@ -12,8 +12,10 @@ implemented-requirements:
     assertions: [reg-access-restricted]
     responsibility: shared
     customer: Restrict who may push images and review the registry account list.
+    assigned: rest
   - control: SR-4
     statement: Image provenance is preserved by restricting who can write to the registry.
     assertions: [reg-access-restricted]
     responsibility: shared
     customer: Document the provenance of images built or imported by the program.
+    assigned: rest

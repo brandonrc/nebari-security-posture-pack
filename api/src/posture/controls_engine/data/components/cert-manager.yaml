@@ -12,6 +12,7 @@ implemented-requirements:
     assertions: [cm-issuer-ready, cm-certificates-valid]
     responsibility: shared
     customer: Establish key-management procedures for keys and certificates not issued by cert-manager (application signing keys, database keys) and approve the issuing CA.
+    assigned: rest
   - control: SC-12(1)
     statement: Certificates are renewed before expiry so that keys remain available to the services that need them.
     assertions: [cm-certificates-valid]
@@ -21,3 +22,4 @@ implemented-requirements:
     assertions: [cm-issuer-ready]
     responsibility: shared
     customer: Configure a ClusterIssuer that chains to an approved CA (DoD PKI / ECA or the organization's CA) and record its approval.
+    assigned: rest

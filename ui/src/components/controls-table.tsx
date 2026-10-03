@@ -20,6 +20,7 @@ import {
   filterControls,
   lowestBaseline,
   normalizeControlStatus,
+  objectiveCoverage,
 } from '@/lib/controls';
 import { formatDateTime, formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -85,10 +86,12 @@ function AssertionList({ control }: { control: ControlCoverage }) {
     return (
       <p className="text-muted-foreground text-sm">
         {status === 'inherited'
-          ? 'Inherited: implemented by the organization or the underlying platform per its component definition; no live assertion.'
-          : status === 'not-applicable'
-            ? 'Tailored out of the selected baseline.'
-            : 'No automated assertion maps to this control; evidence must be supplied manually.'}
+          ? `Inherited from the common control provider${control.provider ? ` ${control.provider}` : ''} (leveraged authorization).`
+          : status === 'org-provided-unverified'
+            ? 'Organization-provided (unverified): assumed to come from the organization or the hosting provider; no provider authorization is recorded and nothing was verified.'
+            : status === 'not-applicable'
+              ? 'Tailored out of the selected baseline.'
+              : 'No automated assertion maps to this control; evidence must be supplied manually.'}
         {control.components?.length ? ` Components: ${control.components.join(', ')}.` : ''}
       </p>
     );
@@ -258,7 +261,17 @@ export function ControlsTable({
                       <BaselineBadge baseline={lowestBaseline(c.baseline)} />
                     </TableCell>
                     <TableCell className="px-3 py-2">
-                      <StatusBadge status={status} />
+                      <span className="flex flex-col items-start gap-0.5">
+                        <StatusBadge status={status} />
+                        {(() => {
+                          const cov = objectiveCoverage(c);
+                          return cov ? (
+                            <span className="text-muted-foreground text-xs tabular-nums" title="SP 800-53A assessment objectives with passing evidence">
+                              {cov.evidenced} of {cov.total} objectives
+                            </span>
+                          ) : null;
+                        })()}
+                      </span>
                     </TableCell>
                     <TableCell className="max-w-[160px] px-3 py-2">
                       {c.components?.length ? (

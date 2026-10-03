@@ -35,7 +35,7 @@ def _backing_service(services: list[dict[str, Any]], host: str, port: int | None
 
 
 @assertion(id="reg-access-restricted", title="Container registry requires auth or is cluster-internal only",
-           controls=["CM-14", "SR-4"], component=C, severity="high")
+           controls=["CM-14", "SR-4"], objectives=["cm-14_obj-1", "sr-4_obj-3"], component=C, severity="high")
 async def registry_access(ctx: EngineContext) -> Result:
     """The registry's `/v2/` endpoint demands authentication (401), or it is reachable only inside
     the cluster: its Service is ClusterIP (no NodePort/LoadBalancer/externalIPs) and no HTTPRoute

@@ -15,16 +15,19 @@ implemented-requirements:
     assertions: [gw-https-listener, gw-http-redirect]
     responsibility: shared
     customer: Protect application-internal traffic behind the gateway (service-to-service, database connections) as required by the system's categorization.
+    assigned: rest
   - control: SC-8(1)
     statement: TLS 1.2 or later protects data in transit between clients and the gateway.
     assertions: [gw-tls-min-version]
     responsibility: shared
     customer: Approve the cipher suites and confirm FIPS-validated cryptography where the ODP requires it.
+    assigned: rest
   - control: SC-13
     statement: TLS cipher suites and protocol versions are restricted to modern, approved algorithms.
     assertions: [gw-tls-min-version]
     responsibility: shared
     customer: Determine the required type of cryptography (e.g. FIPS 140-validated modules) and verify it is used.
+    assigned: rest
   - control: SC-23
     statement: Session authenticity is protected by TLS on every authenticated route (no session cookies over HTTP).
     assertions: [gw-https-listener, gw-http-redirect]
@@ -34,3 +37,4 @@ implemented-requirements:
     assertions: [app-gateway-auth]
     responsibility: shared
     customer: Implement and document application-level authorization (roles, data access rules) beyond the gateway's group check.
+    assigned: rest

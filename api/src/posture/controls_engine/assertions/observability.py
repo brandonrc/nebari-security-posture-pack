@@ -79,7 +79,7 @@ async def _loki_namespaces(ctx: EngineContext, url: str) -> tuple[set[str] | Non
 
 
 @assertion(id="log-ingest-all-namespaces", title="Logs from every namespace reach Loki",
-           controls=["AU-2", "AU-6", "AU-12"], component=LOKI, severity="high")
+           controls=["AU-2", "AU-6", "AU-12"], objectives=["au-2_obj.c-2", "au-6_obj.a", "au-12_obj.c"], component=LOKI, severity="high")
 async def log_ingest(ctx: EngineContext) -> Result:
     """Every namespace with running pods has log streams in Loki within the last
     `controlsEngine.logWindowMinutes` (default 10) minutes (union over discovered Loki instances)."""
@@ -125,7 +125,7 @@ def loki_retention(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 @assertion(id="log-retention", title="Log retention meets the organization-defined period",
-           controls=["AU-4", "AU-11"], component=LOKI, severity="medium")
+           controls=["AU-4", "AU-11"], objectives=["au-4_obj", "au-11_obj"], component=LOKI, severity="medium")
 async def log_retention(ctx: EngineContext) -> Result:
     """Each Loki instance either deletes nothing (retention disabled: bounded only by storage) or keeps
     logs for at least `controlsEngine.minLogRetentionDays` (read from Loki `/config`)."""
@@ -157,7 +157,7 @@ async def log_retention(ctx: EngineContext) -> Result:
 
 
 @assertion(id="mon-prometheus-scraping", title="Prometheus is scraping platform targets",
-           controls=["AU-6", "SI-4"], component=PROM, severity="medium")
+           controls=["AU-6", "SI-4"], objectives=["au-6_obj.a", "si-4_obj.c.1"], component=PROM, severity="medium")
 async def prometheus_scraping(ctx: EngineContext) -> Result:
     """A Prometheus instance has active scrape targets that are up (`/api/v1/targets`)."""
     urls = await prometheus_urls(ctx)
@@ -201,7 +201,7 @@ def receivers_with_integrations(config_yaml: str) -> tuple[list[str], list[str]]
 
 
 @assertion(id="mon-alert-receivers", title="Alertmanager notifies at least one receiver",
-           controls=["SI-4(5)", "IR-6"], component=PROM, severity="high")
+           controls=["SI-4(5)", "IR-6"], objectives=["si-4.5_obj", "ir-6_obj.b"], component=PROM, severity="high")
 async def alert_receivers(ctx: EngineContext) -> Result:
     """Alertmanager's loaded configuration has at least one receiver with an integration
     (email/slack/webhook/pagerduty/...), i.e. alerts reach a person."""

@@ -27,7 +27,7 @@ def _ts(v: str | None) -> datetime | None:
         return None
 
 
-@assertion(id="cm-issuer-ready", title="A cert-manager ClusterIssuer exists and is Ready", controls=["SC-12", "SC-17"],
+@assertion(id="cm-issuer-ready", title="A cert-manager ClusterIssuer exists and is Ready", controls=["SC-12", "SC-17"], objectives=["sc-12_obj-1", "sc-17_obj.a"],
            component=C, severity="high")
 async def issuer_ready(ctx: EngineContext) -> Result:
     """At least one ClusterIssuer exists and every ClusterIssuer reports Ready."""
@@ -47,7 +47,7 @@ async def issuer_ready(ctx: EngineContext) -> Result:
 
 
 @assertion(id="cm-certificates-valid", title="Certificates are Ready and not near expiry",
-           controls=["SC-12", "SC-12(1)"], component=C, severity="high")
+           controls=["SC-12", "SC-12(1)"], objectives=["sc-12_obj-2", "sc-12.1_obj"], component=C, severity="high")
 async def certificates_valid(ctx: EngineContext) -> Result:
     """Every cert-manager Certificate is Ready, unexpired, and not inside the renewal window
     (`controlsEngine.certRenewalWindowDays`) without having been renewed."""
