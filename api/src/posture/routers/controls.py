@@ -25,7 +25,7 @@ router = APIRouter(tags=["compliance"])
 def _baseline(value: str | None, default: str) -> str:
     b = (value or default).lower()
     if b not in BASELINES:
-        raise HTTPException(422, f"unknown baseline {value!r} (low, moderate, high)")
+        raise HTTPException(422, f"unknown baseline {value!r} ({', '.join(BASELINES)})")
     return b
 
 

@@ -15,18 +15,33 @@ class _Camel(BaseModel):
 
 
 class ControlParameters(_Camel):
-    """Organization-defined parameters (defaults: FedRAMP moderate values)."""
+    """Organization-defined parameters. Unset (null) = the selected baseline's ODP set
+    (data/profiles/*.json, each value with its cited source: FedRAMP Rev5 for the NIST and FedRAMP
+    profiles, DISA SRG / CNSSI 1253 for the DoD profile; compliance review M7). A value set here
+    overrides the profile."""
 
-    max_login_failures: int = Field(3, ge=1, le=100)  # AC-7
-    min_password_length: int = Field(12, ge=1, le=256)  # IA-5(1)
-    max_session_idle_seconds: int = Field(900, ge=60, le=7 * 86400)  # AC-11 / AC-12
-    max_session_lifespan_seconds: int = Field(43200, ge=300, le=30 * 86400)  # AC-12
-    min_log_retention_days: int = Field(90, ge=1, le=3650)  # AU-11
-    cert_renewal_window_days: int = Field(30, ge=1, le=365)  # SC-12(1)
-    log_window_minutes: int = Field(10, ge=1, le=1440)  # AU-12 ingest freshness
-    lockout_window_seconds: int = Field(900, ge=60, le=86400)  # AC-7 a: failure-count window
-    min_lockout_seconds: int = Field(1800, ge=60, le=30 * 86400)  # AC-7 b: minimum lockout duration
-    require_admin_release: bool = False  # AC-7 b: lock until an administrator releases the account
+    max_login_failures: int | None = Field(None, ge=1, le=100)  # AC-7 a
+    min_password_length: int | None = Field(None, ge=1, le=256)  # IA-5(1)
+    max_session_idle_seconds: int | None = Field(None, ge=60, le=7 * 86400)  # AC-11 / AC-12 / SC-10
+    max_session_lifespan_seconds: int | None = Field(None, ge=300, le=30 * 86400)  # AC-12
+    min_log_retention_days: int | None = Field(None, ge=1, le=3650)  # AU-11
+    cert_renewal_window_days: int | None = Field(None, ge=1, le=365)  # SC-12
+    log_window_minutes: int = Field(10, ge=1, le=1440)  # AU-12 ingest freshness (operational)
+    lockout_window_seconds: int | None = Field(None, ge=60, le=86400)  # AC-7 a: failure-count window
+    min_lockout_seconds: int | None = Field(None, ge=60, le=30 * 86400)  # AC-7 b: minimum lockout duration
+    require_admin_release: bool | None = None  # AC-7 b: lock until an administrator releases the account
+
+    def effective(self, baseline: str) -> dict[str, object]:
+        """camelCase ODP name -> value used for `baseline` (explicit setting, else the profile value)."""
+        from .catalog import odp_profile
+
+        out: dict[str, object] = {}
+        for name, odp in odp_profile(baseline).items():
+            attr = "".join("_" + ch.lower() if ch.isupper() else ch for ch in name)
+            explicit = getattr(self, attr, None)
+            out[name] = explicit if explicit is not None else odp.get("value")
+        out["logWindowMinutes"] = self.log_window_minutes
+        return out
 
 
 class CommonControlProvider(_Camel):
@@ -76,7 +91,8 @@ class StigAsset(_Camel):
 
 class ControlsEngineSettings(_Camel):
     enabled: bool = True  # read-only: env CONTROLS_ENGINE_ENABLED (chart controlsEngine.enabled)
-    baseline: Literal["low", "moderate", "high"] = "moderate"
+    # NIST SP 800-53B LOW/MODERATE/HIGH, FedRAMP Rev5 Moderate, or the CNSSI 1253 M-M-M approximation
+    baseline: Literal["low", "moderate", "high", "fedramp-moderate-rev5", "cnssi-1253-mod-mod-mod"] = "moderate"
     admin_subjects: list[str] = Field(default_factory=list)  # Keycloak usernames, User:/Group:/ServiceAccount:ns/name
     # M1: organization-level controls with no evidence are reported `org-provided-unverified` (never
     # counted as implemented) only when this is on; off = `not-assessed`. Neither is `inherited`.

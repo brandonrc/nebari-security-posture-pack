@@ -18,7 +18,7 @@ def test_catalog_trimmed_and_baselines():
     ac2 = cat.get("AC-2(1)")
     assert ac2.title == "Automated System Account Management" and ac2.parent == "ac-2"
     assert ac2.full_title.startswith("Account Management | ") and ac2.lowest_baseline == "moderate"
-    assert cat.get("AC-7").baselines == ("low", "moderate", "high")
+    assert cat.get("AC-7").baselines == ("low", "moderate", "high", "fedramp-moderate-rev5", "cnssi-1253-mod-mod-mod")
     assert cat.get("SC-12(1)").lowest_baseline == "high"
     assert cat.get("AC-2(10)").withdrawn and not cat.list(family="ac", include_withdrawn=False)[0].withdrawn
 
@@ -71,3 +71,46 @@ def test_catalog_carries_objectives_statements_and_params():
     assert si2.statements == ("si-2_smt.a", "si-2_smt.b", "si-2_smt.c", "si-2_smt.d")
     assert si2.params == (("si-02_odp", "time period"),)
     assert cat.get("AC-3").objective_ids == ("ac-3_obj",)
+
+
+def test_extra_profiles_and_cited_odp_sets():
+    """M7: FedRAMP Rev5 Moderate and the CNSSI 1253 M-M-M approximation, each with cited ODPs."""
+    from posture.controls_engine.catalog import BASELINES, odp_profile
+
+    cat = get_catalog()
+    assert len(cat.baseline("fedramp-moderate-rev5")) == 323
+    mod = {c.label for c in cat.baseline("moderate")}
+    fed = {c.label for c in cat.baseline("fedramp-moderate-rev5")}
+    assert mod <= fed and {"CA-8", "SC-45", "SI-4(16)", "RA-5(3)"} <= fed - mod
+    cnssi = {c.label for c in cat.baseline("cnssi-1253-mod-mod-mod")}
+    assert mod <= cnssi and "AC-6(8)" in cnssi and "CM-14" in cnssi
+    assert not cat.profiles["cnssi-1253-mod-mod-mod"]["exact"] and "APPROXIMATION" in \
+        cat.profiles["cnssi-1253-mod-mod-mod"]["provenance"]
+    assert cat.get("CA-8").lowest_baseline == "high"  # NIST baselines only
+    assert set(BASELINES) == {"low", "moderate", "high", "fedramp-moderate-rev5", "cnssi-1253-mod-mod-mod"}
+    for b in BASELINES:
+        odp = odp_profile(b)
+        assert {"maxLoginFailures", "minPasswordLength", "minLogRetentionDays", "requireAdminRelease"} <= set(odp)
+        assert all(v["source"] for v in odp.values()), b
+    assert odp_profile("moderate")["minLogRetentionDays"]["value"] == 365  # M-21-31, not the rev4-era 90 days
+    assert "M-21-31" in odp_profile("fedramp-moderate-rev5")["minLogRetentionDays"]["source"]
+    assert odp_profile("cnssi-1253-mod-mod-mod")["minPasswordLength"]["value"] == 15
+    assert odp_profile("cnssi-1253-mod-mod-mod")["requireAdminRelease"]["value"] is True
+
+
+def test_parameters_default_to_the_profile_and_explicit_values_win():
+    from posture import app_settings
+    from posture.config import Settings
+    from posture.controls_engine import engine
+
+    env = Settings()
+    st = app_settings.defaults(env)
+    st.controls_engine.baseline = "cnssi-1253-mod-mod-mod"
+    cfg = engine.engine_config(env, st)
+    assert cfg.min_password_length == 15 and cfg.require_admin_release and cfg.min_log_retention_days == 365
+    st.controls_engine.parameters.min_password_length = 20
+    assert engine.engine_config(env, st).min_password_length == 20
+    st.controls_engine.baseline = "moderate"
+    st.controls_engine.parameters.min_password_length = None
+    cfg = engine.engine_config(env, st)
+    assert cfg.min_password_length == 15 and not cfg.require_admin_release and cfg.min_lockout_seconds == 1800

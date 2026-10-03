@@ -1,5 +1,7 @@
 """Trimmed NIST SP 800-53 rev5 catalog + LOW/MODERATE/HIGH baselines (vendored from the
-official usnistgov/oscal-content files; rebuild with `data/build_catalog.py`)."""
+official usnistgov/oscal-content files; rebuild with `data/build_catalog.py`), plus the extra
+profiles in `data/profiles/` (FedRAMP Rev5 Moderate; a CNSSI 1253 M-M-M approximation) with their
+organization-defined parameter sets. Provenance: data/README.md (compliance review M7)."""
 
 from __future__ import annotations
 
@@ -13,7 +15,10 @@ from typing import Any
 
 DATA = Path(__file__).parent / "data"
 CATALOG_FILE = DATA / "nist_800_53_rev5.json"
-BASELINES = ("low", "moderate", "high")
+NIST_BASELINES = ("low", "moderate", "high")
+PROFILES_DIR = DATA / "profiles"
+EXTRA_PROFILES = ("fedramp-moderate-rev5", "cnssi-1253-mod-mod-mod")
+BASELINES = (*NIST_BASELINES, *EXTRA_PROFILES)
 _LABEL_RE = re.compile(r"^\s*([A-Za-z]{2})-(\d+)(?:\s*\((\d+)\))?\s*$")
 _ID_RE = re.compile(r"^\s*([a-z]{2})-(\d+)(?:\.(\d+))?\s*$")
 
@@ -79,7 +84,8 @@ class Control:
 
     @property
     def lowest_baseline(self) -> str | None:
-        return self.baselines[0] if self.baselines else None
+        """Lowest NIST SP 800-53B baseline containing the control (extra profiles excluded)."""
+        return next((b for b in self.baselines if b in NIST_BASELINES), None)
 
     def in_baseline(self, level: str) -> bool:
         return level in self.baselines
@@ -101,9 +107,16 @@ class Catalog:
         self.baselines_meta = {k: {kk: vv for kk, vv in v.items() if kk != "controls"}
                                for k, v in data["baselines"].items()}
         member: dict[str, list[str]] = {}
-        for level in BASELINES:
+        self.profiles: dict[str, dict[str, Any]] = {}
+        for level in NIST_BASELINES:
             for cid in data["baselines"][level]["controls"]:
                 member.setdefault(cid, []).append(level)
+        for pid in EXTRA_PROFILES:
+            prof = json.loads((PROFILES_DIR / f"{pid}.json").read_text(encoding="utf-8"))
+            self.profiles[pid] = {k: v for k, v in prof.items() if k != "controls"}
+            self.baselines_meta[pid] = {"title": prof["title"], "exact": prof.get("exact", False)}
+            for cid in prof["controls"]:
+                member.setdefault(cid, []).append(pid)
         self.controls: dict[str, Control] = {}
         for c in data["controls"]:
             self.controls[c["id"]] = Control(
@@ -142,6 +155,18 @@ class Catalog:
                 continue
             out.append(c)
         return sorted(out, key=lambda c: c.sort_id)
+
+
+@lru_cache
+def odp_profile(baseline: str) -> dict[str, Any]:
+    """Organization-defined parameter set of a baseline / profile: {name: {value, control, source}}."""
+    if baseline in EXTRA_PROFILES:
+        return dict(json.loads((PROFILES_DIR / f"{baseline}.json").read_text(encoding="utf-8"))["parameters"])
+    return dict(json.loads((PROFILES_DIR / "nist-odp.json").read_text(encoding="utf-8"))["parameters"])
+
+
+def odp_value(baseline: str, name: str, default: Any = None) -> Any:
+    return (odp_profile(baseline).get(name) or {}).get("value", default)
 
 
 @lru_cache

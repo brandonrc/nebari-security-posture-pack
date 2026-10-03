@@ -176,3 +176,18 @@ async def test_report_generators(ssp_validator, comp_validator):
     rep = generate("oscal-component-definition", "json", SNAPSHOT, {})
     assert rep.filename.startswith("grace-oscal-component-definition-scan42")
     assert _errors(comp_validator, json.loads(rep.content)) == []
+
+
+def test_ssp_imports_the_selected_profile(ssp_validator):
+    doc = build_ssp(None, system_name="x", baseline="fedramp-moderate-rev5")
+    assert _errors(ssp_validator, doc) == []
+    ssp = doc["system-security-plan"]
+    assert ssp["import-profile"]["href"].endswith("FedRAMP_rev5_MODERATE-baseline_profile.json")
+    reqs = ssp["control-implementation"]["implemented-requirements"]
+    assert len([r for r in reqs if not any(p["name"] == "in-selected-baseline" for p in r["props"])]) == 323
+    doc = build_ssp(None, system_name="x", baseline="cnssi-1253-mod-mod-mod")
+    assert _errors(ssp_validator, doc) == []
+    ssp = doc["system-security-plan"]
+    ref = ssp["import-profile"]["href"]
+    assert ref.startswith("#") and any(r["uuid"] == ref[1:] and "APPROXIMATION" in r["description"]
+                                       for r in ssp["back-matter"]["resources"])

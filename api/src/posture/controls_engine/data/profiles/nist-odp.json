@@ -1,0 +1,52 @@
+{
+ "id": "nist",
+ "title": "NIST SP 800-53B (organization-defined parameters)",
+ "parameters": {
+  "maxLoginFailures": {
+   "value": 3,
+   "control": "AC-7 a",
+   "source": "FedRAMP Rev5 Moderate baseline AC-7 a: three (3) consecutive invalid logon attempts"
+  },
+  "lockoutWindowSeconds": {
+   "value": 900,
+   "control": "AC-7 a",
+   "source": "FedRAMP Rev5 Moderate baseline AC-7 a: during a fifteen (15) minute time period"
+  },
+  "minLockoutSeconds": {
+   "value": 1800,
+   "control": "AC-7 b",
+   "source": "FedRAMP Rev5 Moderate baseline AC-7 b: lock the account for thirty (30) minutes or until released by an administrator"
+  },
+  "requireAdminRelease": {
+   "value": false,
+   "control": "AC-7 b",
+   "source": "FedRAMP Rev5 Moderate baseline AC-7 b (time-based release permitted)"
+  },
+  "maxSessionIdleSeconds": {
+   "value": 900,
+   "control": "AC-11 / AC-12",
+   "source": "FedRAMP Rev5 Moderate baseline AC-11 a: fifteen (15) minutes of inactivity"
+  },
+  "maxSessionLifespanSeconds": {
+   "value": 43200,
+   "control": "AC-12",
+   "source": "No FedRAMP value (organization-defined); 12 hours is this pack's default"
+  },
+  "minPasswordLength": {
+   "value": 15,
+   "control": "IA-5(1)",
+   "source": "FedRAMP Rev5 IA-5(1) defers to NIST SP 800-63B; SP 800-63B-4 section 3.1.1.2 requires at least 15 characters for a password used as a single factor"
+  },
+  "minLogRetentionDays": {
+   "value": 365,
+   "control": "AU-11",
+   "source": "FedRAMP Rev5 AU-11: a time period in compliance with OMB M-21-31 (12 months active storage, 18 months cold storage)"
+  },
+  "certRenewalWindowDays": {
+   "value": 30,
+   "control": "SC-12",
+   "source": "Organization-defined; this pack's default"
+  }
+ },
+ "provenance": "NIST SP 800-53B assigns no values to organization-defined parameters. The low / moderate / high profiles use the FedRAMP Rev5 values (cited per parameter) as placeholders; set your organization's values in settings controlsEngine.parameters."
+}

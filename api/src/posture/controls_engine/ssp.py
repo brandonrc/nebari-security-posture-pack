@@ -57,6 +57,28 @@ def oscal_state(status: str, label: str, poam_controls: set[str] | None) -> str 
 TOOL = "Nebari Security Posture Pack"
 
 
+IMPACT = {"fedramp-moderate-rev5": "moderate", "cnssi-1253-mod-mod-mod": "moderate"}
+
+
+def profile_import(baseline: str, seed: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """`import-profile` of the selected baseline (S3 / M7): the official NIST or FedRAMP profile; the
+    CNSSI 1253 approximation has no published OSCAL profile, so it points at a back-matter resource
+    that documents the derivation."""
+    from .catalog import get_catalog
+
+    meta = get_catalog().profiles.get(baseline)
+    if meta is None:
+        return ({"href": PROFILE_URL.format(level=baseline.upper()),
+                 "remarks": f"NIST SP 800-53 rev5 {baseline.upper()} baseline (official profile)."}, None)
+    if meta.get("href"):
+        return {"href": meta["href"], "remarks": f"{meta['title']}. {meta.get('provenance', '')}".strip()}, None
+    rid = _uid(seed, "profile", baseline)
+    return ({"href": f"#{rid}", "remarks": f"{meta['title']}: no published OSCAL profile; see the back-matter "
+                                           "resource for how the control list was derived."},
+            {"uuid": rid, "title": meta["title"], "description": meta.get("provenance") or "-",
+             "props": [_prop("profile-id", baseline), _prop("exact", str(meta.get("exact", False)).lower())]})
+
+
 def _uid(*parts: Any) -> str:
     return str(uuid.uuid5(UUID_NS, "|".join(str(p) for p in parts)))
 
@@ -282,7 +304,8 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
             ir["remarks"] = s["detail"]
         impl.append(ir)
 
-    level = f"fips-199-{baseline}"
+    level = f"fips-199-{IMPACT.get(baseline, baseline)}"
+    import_profile, profile_resource = profile_import(baseline, seed)
     in_b = [s for s in statuses if s.get("inBaseline", True)]
     counts = {k: sum(s["status"] == k for s in in_b) for k in
               (PASSING, PARTIAL, FAILING, HYBRID, INHERITED, ORG_PROVIDED, NOT_APPLICABLE, NOT_ASSESSED)}
@@ -290,8 +313,7 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
         "uuid": _uid(seed, "ssp"),
         "metadata": _metadata(f"System Security Plan: {system_name}", organization, generated_at,
                               str(run.get("id") or "draft"), seed),
-        "import-profile": {"href": PROFILE_URL.format(level=baseline.upper()),
-                           "remarks": f"NIST SP 800-53 rev5 {baseline.upper()} baseline (official profile)."},
+        "import-profile": import_profile,
         "system-characteristics": {
             "system-ids": [{"identifier-type": "https://ietf.org/rfc/rfc4122", "id": _uid(seed, "system-id")}],
             "system-name": system_name,
@@ -338,6 +360,8 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
     }
     if ccp_parties:
         doc["metadata"]["parties"].extend(ccp_parties)
+    if profile_resource:
+        resources.insert(0, profile_resource)
     if resources:
         doc["back-matter"] = {"resources": resources}
     return {"system-security-plan": doc}

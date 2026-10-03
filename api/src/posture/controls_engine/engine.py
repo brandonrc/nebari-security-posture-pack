@@ -462,17 +462,18 @@ def engine_config(env: Any, st: Any) -> EngineConfig:
         scan_interval_hours=getattr(st, "scan_interval_hours", 6),
         timeout_seconds=env.controls_timeout_seconds, tls_probe=env.controls_tls_probe,
     )
-    if params is not None:
-        cfg.max_login_failures = params.max_login_failures
-        cfg.min_password_length = params.min_password_length
-        cfg.max_session_idle_seconds = params.max_session_idle_seconds
-        cfg.max_session_lifespan_seconds = params.max_session_lifespan_seconds
-        cfg.min_log_retention_days = params.min_log_retention_days
-        cfg.cert_renewal_window_days = params.cert_renewal_window_days
-        cfg.log_window_minutes = params.log_window_minutes
-        cfg.lockout_window_seconds = params.lockout_window_seconds
-        cfg.min_lockout_seconds = params.min_lockout_seconds
-        cfg.require_admin_release = params.require_admin_release
+    if params is not None:  # M7: explicit settings, else the baseline's cited ODP set
+        eff = params.effective(cfg.baseline)
+        cfg.max_login_failures = int(eff["maxLoginFailures"])
+        cfg.min_password_length = int(eff["minPasswordLength"])
+        cfg.max_session_idle_seconds = int(eff["maxSessionIdleSeconds"])
+        cfg.max_session_lifespan_seconds = int(eff["maxSessionLifespanSeconds"])
+        cfg.min_log_retention_days = int(eff["minLogRetentionDays"])
+        cfg.cert_renewal_window_days = int(eff["certRenewalWindowDays"])
+        cfg.log_window_minutes = int(eff["logWindowMinutes"])
+        cfg.lockout_window_seconds = int(eff["lockoutWindowSeconds"])
+        cfg.min_lockout_seconds = int(eff["minLockoutSeconds"])
+        cfg.require_admin_release = bool(eff["requireAdminRelease"])
     cfg.approved_issuers = list(getattr(ce, "approved_issuers", None) or [])
     return cfg
 

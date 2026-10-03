@@ -145,6 +145,32 @@ resources that embed each assertion's evidence JSON (base64) and point at the AP
   addresses (for example SC-28 protection of information at rest, SI-10 input validation, IA-8
   non-organizational users). The system owner must implement and document them.
 
+## Supported baselines and parameters
+
+Stated plainly (compliance review M7):
+
+| `controlsEngine.baseline` | Control list | Fidelity |
+|---|---|---|
+| `low`, `moderate`, `high` | NIST SP 800-53B baselines (official NIST OSCAL profiles, catalog 5.2.0) | Exact |
+| `fedramp-moderate-rev5` | FedRAMP Rev5 Moderate (323 controls) | Exact control list; re-verify against the FedRAMP OSCAL profile |
+| `cnssi-1253-mod-mod-mod` | NIST MODERATE + the controls DISA's Kubernetes STIG / Container Platform SRG CCIs link to | **Approximation**, not the CNSSI 1253 tables (no overlays). Replace with your eMASS control set |
+
+DoD RMF programs use CNSSI 1253 baselines with overlays; FedRAMP programs use the FedRAMP
+baselines. NIST LOW / MODERATE / HIGH alone always need DoD or FedRAMP tailoring.
+
+Each baseline has an organization-defined parameter (ODP) set with a cited source per value
+(`controls_engine/data/profiles/*.json`, provenance in `controls_engine/data/README.md`). The
+NIST baselines borrow the FedRAMP Rev5 values because SP 800-53B defines none. A value set in
+`controlsEngine.parameters` overrides the profile; unset (`null`) uses it.
+
+| Parameter | NIST / FedRAMP Rev5 | DoD (CNSSI approximation) |
+|---|---|---|
+| `maxLoginFailures` / `lockoutWindowSeconds` (AC-7 a) | 3 in 900 s | 3 in 900 s (SRG-APP-000065) |
+| `minLockoutSeconds` / `requireAdminRelease` (AC-7 b) | 1800 s | administrator release (SRG-APP-000345) |
+| `maxSessionIdleSeconds` (AC-11, AC-12, SC-10) | 900 | 900 (SRG-APP-000190) |
+| `minPasswordLength` (IA-5(1)) | 15 (SP 800-63B-4) | 15 (SRG-APP-000164) |
+| `minLogRetentionDays` (AU-11) | 365 (OMB M-21-31) | 365 (CNSSI 1253; 5 years for SAMI) |
+
 ## Tailoring
 
 Settings (`PUT /api/v1/settings`, UI **Settings**), key `controlsEngine`:
