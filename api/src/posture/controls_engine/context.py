@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -19,6 +20,10 @@ from ..logs import get_logger
 log = get_logger(__name__)
 
 DEFAULT_SYSTEM_NAMESPACES = ("kube-system", "kube-public", "kube-node-lease")
+
+
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 IN_APP_AUTH_ANNOTATION = "posture.nebari.dev/in-app-auth"
 
 
@@ -58,7 +63,10 @@ class EngineConfig:
     # Keycloak
     keycloak_url: str = "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth"
     keycloak_realm: str = "nebari"
-    keycloak_admin_realm: str = ""  # "" = try the target realm, then master
+    keycloak_admin_realm: str = ""  # "" = the target realm (master only with keycloak_allow_master_fallback)
+    # KEYCLOAK_ALLOW_MASTER_FALLBACK=true: with no pinned admin realm, retry the login against `master`
+    # (a super-admin credential). Off by default: least privilege (security review M4).
+    keycloak_allow_master_fallback: bool = field(default_factory=lambda: _env_bool("KEYCLOAK_ALLOW_MASTER_FALLBACK"))
     keycloak_client_id: str = "admin-cli"
     keycloak_admin_secret_name: str = "nebari-realm-admin-credentials"
     keycloak_admin_secret_namespace: str = "keycloak"
@@ -147,17 +155,23 @@ class KeycloakAdmin:
     `client-id`/`client-secret` (client-credentials grant of a service-account client holding
     realm-management roles). They may belong to the **master** realm (Keycloak super-admin,
     administers every realm) or to the **target** realm (a realm admin with realm-management
-    roles). `admin_realm` pins which; empty tries the target realm first, then master.
+    roles). `admin_realm` pins which; empty uses the target realm, and also tries master only
+    when `allow_master_fallback` (KEYCLOAK_ALLOW_MASTER_FALLBACK=true).
+
+    Preferred setup (security review M4): a dedicated confidential client in the target realm with
+    a service account holding only realm-management `view-realm`, `view-users`, `view-events`,
+    given to the worker as KEYCLOAK_CLIENT_ID / KEYCLOAK_CLIENT_SECRET (client_credentials grant).
     """
 
     def __init__(self, http: httpx.AsyncClient, base_url: str, realm: str, credentials: dict[str, str],
-                 admin_realm: str = "", client_id: str = "admin-cli"):
+                 admin_realm: str = "", client_id: str = "admin-cli", allow_master_fallback: bool = False):
         self.http = http
         self.base = base_url.rstrip("/")
         self.realm = realm
         self.creds = credentials
         self.admin_realm = (credentials.get("realm") or admin_realm or "").strip()
         self.client_id = credentials.get("client-id") or credentials.get("client_id") or client_id
+        self.allow_master_fallback = allow_master_fallback
         self._token: str | None = None
         self._expires = 0.0
         self.token_realm: str | None = None
@@ -189,7 +203,12 @@ class KeycloakAdmin:
                 raise
 
     async def _login(self) -> str:
-        realms = [self.admin_realm] if self.admin_realm else list(dict.fromkeys([self.realm, "master"]))
+        if self.admin_realm:
+            realms = [self.admin_realm]
+        elif self.allow_master_fallback:
+            realms = list(dict.fromkeys([self.realm, "master"]))
+        else:
+            realms = [self.realm]
         errors = []
         for r in realms:
             try:
@@ -216,6 +235,24 @@ class KeycloakAdmin:
         if resp.status_code != 200:
             raise KeycloakError(f"GET {path}: HTTP {resp.status_code}")
         return resp.json()
+
+
+def env_client_credentials() -> dict[str, str] | None:
+    """KEYCLOAK_CLIENT_ID + KEYCLOAK_CLIENT_SECRET (or KEYCLOAK_CLIENT_SECRET_FILE): a dedicated
+    view-only service-account client. Read at run time and never stored on EngineConfig, which is
+    serialised into evidence."""
+    cid = os.environ.get("KEYCLOAK_CLIENT_ID", "").strip()
+    secret = os.environ.get("KEYCLOAK_CLIENT_SECRET", "").strip()
+    path = os.environ.get("KEYCLOAK_CLIENT_SECRET_FILE", "").strip()
+    if not secret and path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                secret = f.read().strip()
+        except OSError as e:
+            log.warning("controls.keycloak_client_secret_unreadable", path=path, error=type(e).__name__)
+    if cid and secret:
+        return {"client-id": cid, "client-secret": secret}
+    return None
 
 
 async def keycloak_credentials(api: KubeAPI, namespace: str, name: str) -> dict[str, str]:
@@ -349,6 +386,11 @@ async def build_context(config: EngineConfig, snapshot: dict[str, Any] | None,
         ctx.keycloak = keycloak
     elif not config.keycloak_url:
         ctx.keycloak_error = "Keycloak URL not configured (controlsEngine.keycloak.url)"
+    elif (sa := env_client_credentials()) is not None:
+        # dedicated client_credentials client: no admin Secret read at all
+        ctx.keycloak = KeycloakAdmin(http, config.keycloak_url, config.keycloak_realm, sa,
+                                     config.keycloak_admin_realm, sa["client-id"],
+                                     config.keycloak_allow_master_fallback)
     elif k8s is None:
         ctx.keycloak_error = "Keycloak admin secret unreadable: no Kubernetes API access"
     else:
@@ -356,7 +398,8 @@ async def build_context(config: EngineConfig, snapshot: dict[str, Any] | None,
             creds = await keycloak_credentials(k8s, config.keycloak_admin_secret_namespace,
                                                config.keycloak_admin_secret_name)
             ctx.keycloak = KeycloakAdmin(http, config.keycloak_url, config.keycloak_realm, creds,
-                                         config.keycloak_admin_realm, config.keycloak_client_id)
+                                         config.keycloak_admin_realm, config.keycloak_client_id,
+                                         config.keycloak_allow_master_fallback)
         except EngineError as e:
             ctx.keycloak_error = (f"Keycloak admin secret {config.keycloak_admin_secret_namespace}/"
                                   f"{config.keycloak_admin_secret_name} unreadable: {e}")

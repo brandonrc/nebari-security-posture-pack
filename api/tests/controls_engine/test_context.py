@@ -44,7 +44,7 @@ def kc_transport(valid: dict[str, dict], calls: list):
 async def test_master_realm_admin_fallback():
     calls: list = []
     http = httpx.AsyncClient(transport=kc_transport({"master": {"username": "admin", "password": "pw"}}, calls))
-    kc = KeycloakAdmin(http, BASE, "nebari", {"username": "admin", "password": "pw"})
+    kc = KeycloakAdmin(http, BASE, "nebari", {"username": "admin", "password": "pw"}, allow_master_fallback=True)
     assert (await kc.get(""))["realm"] == "nebari"
     assert kc.token_realm == "master"
     tokens = [c for c in calls if c[1].endswith("/token")]
@@ -70,10 +70,53 @@ async def test_client_credentials_and_pinned_realm():
     assert kc.token_realm == "master" and [c[1] for c in calls][0] == "/auth/realms/master/protocol/openid-connect/token"
 
 
+async def test_master_realm_not_tried_by_default():
+    calls: list = []
+    http = httpx.AsyncClient(transport=kc_transport({"master": {"username": "admin", "password": "pw"}}, calls))
+    kc = KeycloakAdmin(http, BASE, "nebari", {"username": "admin", "password": "pw"})
+    with pytest.raises(KeycloakError, match="nebari: HTTP 401\\)"):
+        await kc.get("")
+    assert [c[1] for c in calls] == ["/auth/realms/nebari/protocol/openid-connect/token"]
+
+
+async def test_master_fallback_env(monkeypatch):
+    monkeypatch.setenv("KEYCLOAK_ALLOW_MASTER_FALLBACK", "true")
+    assert EngineConfig().keycloak_allow_master_fallback is True
+    monkeypatch.delenv("KEYCLOAK_ALLOW_MASTER_FALLBACK")
+    assert EngineConfig().keycloak_allow_master_fallback is False
+
+
+async def test_env_client_credentials_preferred_over_admin_secret(monkeypatch):
+    monkeypatch.setenv("KEYCLOAK_CLIENT_ID", "posture-view")
+    monkeypatch.setenv("KEYCLOAK_CLIENT_SECRET", "s3")
+    calls: list = []
+    http = httpx.AsyncClient(transport=kc_transport(
+        {"nebari": {"grant_type": "client_credentials", "client_id": "posture-view", "client_secret": "s3"}}, calls))
+    api = FakeKube({})
+    ctx = await build_context(EngineConfig(), {}, k8s=api, http=http)
+    assert ctx.keycloak_error is None
+    assert not any("secrets" in c for c in api.calls)  # the admin Secret is never read
+    assert (await ctx.keycloak.get(""))["realm"] == "nebari" and ctx.keycloak.token_realm == "nebari"
+    assert "s3" not in json.dumps(ctx.config.__dict__)  # never in the evidence-serialised config
+
+
+async def test_env_client_secret_file(monkeypatch, tmp_path):
+    from posture.controls_engine.context import env_client_credentials
+
+    f = tmp_path / "secret"
+    f.write_text("from-file\n")
+    monkeypatch.setenv("KEYCLOAK_CLIENT_ID", "c")
+    monkeypatch.delenv("KEYCLOAK_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("KEYCLOAK_CLIENT_SECRET_FILE", str(f))
+    assert env_client_credentials() == {"client-id": "c", "client-secret": "from-file"}
+    monkeypatch.delenv("KEYCLOAK_CLIENT_ID")
+    assert env_client_credentials() is None
+
+
 async def test_login_failure_is_cached():
     calls: list = []
     http = httpx.AsyncClient(transport=kc_transport({}, calls))
-    kc = KeycloakAdmin(http, BASE, "nebari", {"username": "a", "password": "b"})
+    kc = KeycloakAdmin(http, BASE, "nebari", {"username": "a", "password": "b"}, allow_master_fallback=True)
     with pytest.raises(KeycloakError, match="nebari: HTTP 401; master: HTTP 401"):
         await kc.get("")
     with pytest.raises(KeycloakError):
