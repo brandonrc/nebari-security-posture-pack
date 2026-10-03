@@ -1,6 +1,12 @@
-# Security Posture Scoring (v1)
+# Security Posture Scoring (v1): a hygiene index
 
 All scores are 0–100 (higher is better). Grades: A ≥ 90, B ≥ 80, C ≥ 65, D ≥ 50, F < 50.
+
+> **What the grade is and is not.** The score and the A–F grade are an internal **hygiene index**
+> for trends and prioritization. They have no authoritative basis (no NIST, DISA or FedRAMP
+> method defines them) and they are **not an assessment result**: reports call them "hygiene
+> index", and control evidence is reported separately ([CONTROLS.md](CONTROLS.md)). Use the
+> CISA KEV exposure, the SLA counts and the POA&M for risk decisions.
 
 ## Image vulnerability score
 
@@ -15,9 +21,14 @@ For each consensus finding (unique `(vulnId, package)` across scanners):
 | negligible / unknown | 0.05 |
 
 Multipliers:
-- **Agreement**: 1 scanner = 0.6, 2 scanners = 0.85, 3 scanners = 1.0 (over scanners that
-  completed successfully; if only one scanner succeeded, agreement multiplier = 1.0 and
-  the image gets `confidence: low`).
+- **Agreement**: 1 scanner = 0.6, 2 scanners = 0.85, 3 scanners = 1.0, counted over the
+  scanners that completed **and are capable of detecting that package type**: OS distribution
+  packages (deb, apk, rpm, ...) all three; language-ecosystem packages (Python, Go, Java, npm,
+  ...) Trivy and Grype only, because Clair does not cover them. A Python finding reported by
+  Trivy and Grype is therefore full agreement. If only one capable scanner succeeded, the
+  multiplier is 1.0 and the image gets `confidence: low`.
+- **CISA KEV**: a finding in the CISA Known Exploited Vulnerabilities catalog is never
+  down-weighted (agreement multiplier 1.0), whatever the number of scanners.
 - **Fixable** (a fixed version exists): × 1.25 (unpatched-but-patchable is worse).
 
 `penalty = Σ base × agreement × fixable`
@@ -54,7 +65,7 @@ container (or per pod where noted).
 | no-netpol | low | namespace has no NetworkPolicy selecting the pod (per pod) |
 
 `workloadPostureScore = 100 × exp(−Σ failed weights / 20)`.
-Checks for `kube-system` pods are evaluated but weighted × 0.5 (system components are
+Checks for system-namespace pods are evaluated but weighted × 0.5 (system components are
 expected to be privileged); they are flagged `systemNamespace: true`.
 
 ## Aggregation
@@ -71,6 +82,29 @@ expected to be privileged); they are flagged `systemNamespace: true`.
   `vulnScore` = container-weighted mean of imageVulnScore over all running containers with
   a scored image, and `postureScore` = container-weighted mean of workloadPostureScore.
 - `grade` from the table above. Trend compares to previous completed scan.
+
+## Exposure (CISA KEV)
+
+`GET /summary` carries `exposure: {kev, kevCves, kevOverdue, kevEarliestDue, kevCatalogVersion,
+topKev}`: open findings on running images whose CVE is in the CISA KEV catalog, how many are past
+the KEV due date, and the earliest due date. It is reported next to the grade, not folded into
+it. The catalog is the vendored snapshot, refreshed daily from `KEV_URL` into `CACHE_DIR`
+(see REPORTS.md, Remediation SLA policy).
+
+## System namespaces
+
+`kube-system`, `kube-public` and `kube-node-lease` (`posture.scoring.SYSTEM_NAMESPACES`, the single
+definition used by scoring, posture checks and reports; the control evidence engine's default
+`systemNamespaces` is the same set). Their posture checks are weighted × 0.5.
+
+## Known limitations of the index
+
+- Container-weighted means let many clean pods mask one exposed gateway or identity-provider
+  image; look at the per-image grades and the KEV exposure, not only the cluster grade.
+- Images no scanner could analyze are excluded from the means (listed as `images.failed`) rather
+  than penalised, which flatters the score when coverage is poor.
+- Consensus severity is the highest vendor severity, not NVD CVSS; the DoD CAT mapping in the
+  POA&M is severity-based.
 
 ## Scanner freshness
 

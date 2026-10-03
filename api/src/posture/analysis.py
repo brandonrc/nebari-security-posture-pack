@@ -38,8 +38,12 @@ def analyze(results: list[ScanResult]) -> ImageAnalysis:
     succeeded = [r.scanner for r in ok]
     findings = [f for r in ok for f in r.findings]
     consensus = correlate(findings, succeeded)
+    from .reports.kev import lookup as kev_lookup  # S4: KEV findings are never down-weighted
+
     score = image_vuln_score(
-        (VulnInput(c.severity, len(c.scanners), c.fixable) for c in consensus), len(succeeded)
+        (VulnInput(c.severity, len(c.scanners), c.fixable, pkg_type=c.pkg_type,
+                   kev=kev_lookup(c.vuln_id) is not None, succeeded=tuple(succeeded)) for c in consensus),
+        len(succeeded),
     )
     counts, fixable = zero_counts(), zero_counts()
     for c in consensus:

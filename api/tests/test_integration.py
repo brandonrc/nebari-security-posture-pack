@@ -156,6 +156,7 @@ async def test_01_empty_state_shapes(env):
     assert s["counts"]["critical"] == 0 and s["trend"] == [] and s["topRisks"] == []
     assert s["checks"] == {"passed": 0, "failed": 0, "total": 0}
     assert s["slaOverdue"] == {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    assert s["exposure"]["kev"] == 0 and s["exposure"]["kevCatalogVersion"]  # S4: KEV exposure count
     assert (await c.get("/images")).json() == {"items": [], "total": 0, "page": 1, "pageSize": 50}
     assert (await c.get("/vulnerabilities")).json()["items"] == []
     assert (await c.get("/workloads")).json() == []
@@ -378,3 +379,17 @@ async def test_06_sla_clock_survives_a_rebuilt_digest(env):
                 ).scalars().all()
     carried = [r for r in rows if r.first_seen_at <= old + timedelta(seconds=1)]
     assert rows and carried, "a CVE already seen on another digest of the repository keeps its first-seen date"
+
+
+async def test_07_summary_kev_exposure(env):
+    """S4: KEV findings surface as an exposure count in /summary."""
+    from posture.reports import kev
+
+    kev.set_catalog({"version": "fixture", "source": "test", "entries": {
+        "CVE-2023-42363": ("2024-01-01", "2024-01-22", 0), "CVE-2024-6119": ("2024-09-01", "2099-01-01", 1)}})
+    try:
+        ex = (await env["client"].get("/summary")).json()["exposure"]
+        assert ex["kev"] >= 2 and ex["kevCves"] == 2 and ex["kevOverdue"] >= 1
+        assert ex["kevEarliestDue"] == "2024-01-22" and ex["kevCatalogVersion"] == "fixture"
+    finally:
+        kev.set_catalog(None)

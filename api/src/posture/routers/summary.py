@@ -43,6 +43,33 @@ async def compute_sla_overdue(session: AsyncSession, sla: dict[str, int]) -> dic
     return out
 
 
+async def kev_exposure(session: AsyncSession) -> dict[str, Any]:
+    """Open findings on running images that are in the CISA KEV catalog (count, distinct CVEs,
+    the earliest KEV due date, and how many are past it)."""
+    from ..reports.kev import catalog, lookup
+
+    rows = (await session.execute(
+        select(ConsensusFindingRow.vuln_id, func.count()).join(Image, Image.id == ConsensusFindingRow.image_id)
+        .where(Image.running.is_(True), ConsensusFindingRow.vuln_id.like("CVE-%"))
+        .group_by(ConsensusFindingRow.vuln_id))).all()
+    today = utcnow().date()
+    findings, cves, overdue, due = 0, [], 0, None
+    for vid, n in rows:
+        e = lookup(vid)
+        if e is None:
+            continue
+        findings += int(n)
+        cves.append(vid)
+        if e.due:
+            due = e.due if due is None or e.due < due else due
+            if e.due < today:
+                overdue += int(n)
+    cat = catalog()
+    return {"kev": findings, "kevCves": len(cves), "kevOverdue": overdue,
+            "kevEarliestDue": due.isoformat() if due else None, "kevCatalogVersion": cat.get("version"),
+            "topKev": sorted(cves)[:20]}
+
+
 async def build_summary(session: AsyncSession) -> dict[str, Any]:
     settings = await app_settings.load(session)
     latest = await latest_done_scan(session)
@@ -150,6 +177,7 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
         "slaOverdue": await compute_sla_overdue(session, settings.remediation_sla_days.model_dump()),
         "warnings": warnings,
         "supplyChain": supply,
+        "exposure": await kev_exposure(session),  # compliance review S4: CISA KEV, never down-weighted
     }
 
 

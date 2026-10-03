@@ -19,7 +19,7 @@ from typing import Any, Iterable
 SEVERITIES = ("critical", "high", "medium", "low", "negligible", "unknown")
 SEV_RANK = {s: len(SEVERITIES) - i for i, s in enumerate(SEVERITIES)}  # critical=6 .. unknown=1
 DEFAULT_SLA_DAYS = {"critical": 15, "high": 30, "medium": 90, "low": 180, "negligible": 365, "unknown": 180}
-SYSTEM_NAMESPACES = {"kube-system", "kube-public", "kube-node-lease"}
+from ..scoring import SYSTEM_NAMESPACES  # noqa: E402  (single source, S4)
 SCANNERS = ("trivy", "grype", "clair")
 SCANNER_TITLES = {"trivy": "Trivy", "grype": "Grype", "clair": "Clair"}
 TOOL_NAME = "Nebari Security Posture Pack"

@@ -86,3 +86,24 @@ def test_combine_and_weighted_mean():
     assert combine(None, 60) is None
     assert weighted_mean([(100, 1), (50, 3), (None, 5)]) == 62.5
     assert weighted_mean([]) is None
+
+
+def test_agreement_only_over_capable_scanners_and_kev_never_downweighted():
+    """Compliance review S4: a language-package finding Clair cannot see is not penalised for
+    Clair's silence, and a CISA KEV finding is never down-weighted."""
+    from posture.scoring import SYSTEM_NAMESPACES, VulnInput, capable_scanners, finding_penalty
+
+    all3 = ("trivy", "grype", "clair")
+    assert capable_scanners("debian", all3) == 3 and capable_scanners("python-pkg", all3) == 2
+    assert capable_scanners("gobinary", ("clair",)) == 1 and capable_scanners(None, all3) == 3
+    lang = VulnInput("high", 2, False, pkg_type="jar", succeeded=all3)
+    assert finding_penalty(lang, 3) == 4.0  # 2 of the 2 capable scanners: full agreement
+    os_pkg = VulnInput("high", 2, False, pkg_type="deb", succeeded=all3)
+    assert finding_penalty(os_pkg, 3) == 4.0 * 0.85
+    single_kev = VulnInput("critical", 1, False, pkg_type="deb", kev=True, succeeded=all3)
+    assert finding_penalty(single_kev, 3) == 10.0  # was 6.0 with the 1-of-3 multiplier
+    legacy = VulnInput("critical", 1, False)  # callers without package / scanner detail keep the old rule
+    assert finding_penalty(legacy, 3) == 6.0
+    from posture.reports._common import SYSTEM_NAMESPACES as REPORT_NS
+
+    assert SYSTEM_NAMESPACES is REPORT_NS and SYSTEM_NAMESPACES == {"kube-system", "kube-public", "kube-node-lease"}

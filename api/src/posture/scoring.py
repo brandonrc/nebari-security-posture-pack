@@ -1,4 +1,5 @@
-"""Scoring per docs/SCORING.md (pure functions)."""
+"""Scoring per docs/SCORING.md (pure functions). The cluster grade is an internal hygiene index
+for trends, not an assessment result (compliance review S4)."""
 
 from __future__ import annotations
 
@@ -13,7 +14,27 @@ FIXABLE_MULT = 1.25
 VULN_SCALE = 40.0
 POSTURE_SCALE = 20.0
 SYSTEM_NAMESPACE_FACTOR = 0.5
-SYSTEM_NAMESPACES = frozenset({"kube-system"})
+# The one definition of the Kubernetes system namespaces (scoring, posture checks, reports; the
+# control evidence engine's default `systemNamespaces` is the same set). Compliance review S4.
+SYSTEM_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease"})
+SCANNERS_ALL = ("trivy", "grype", "clair")
+# Scanners able to detect a package type (S4): Clair covers OS distribution packages only, so a
+# language-ecosystem finding is compared against Trivy and Grype alone.
+LANGUAGE_SCANNERS = ("trivy", "grype")
+OS_PKG_TYPES = frozenset({
+    "os", "os-pkgs", "deb", "dpkg", "debian", "ubuntu", "apk", "alpine", "rpm", "redhat", "centos", "rocky",
+    "alma", "almalinux", "amazon", "oracle", "photon", "suse", "sles", "opensuse", "opensuse-leap",
+    "opensuse.leap", "wolfi", "chainguard", "mariner", "cbl-mariner", "azurelinux", "fedora", "bitnami-os",
+    "distroless", "minimos", "echo", "binary-os",
+})
+
+
+def capable_scanners(pkg_type: str | None, succeeded: tuple[str, ...] | list[str]) -> int:
+    """How many of the succeeded scanners can detect findings of this package type."""
+    t = (pkg_type or "").strip().lower()
+    if not t or t in OS_PKG_TYPES:
+        return len(succeeded)
+    return sum(1 for s in succeeded if s in LANGUAGE_SCANNERS) or len(succeeded)
 VULN_SHARE = 0.7
 POSTURE_SHARE = 0.3
 # cluster score once supply-chain data exists (SCORING.md, DESIGN §12)
@@ -50,11 +71,18 @@ class VulnInput:
     severity: str
     n_scanners: int
     fixable: bool
+    pkg_type: str | None = None
+    kev: bool = False  # CISA Known Exploited Vulnerability: never down-weighted (S4)
+    succeeded: tuple[str, ...] = ()  # scanners that completed (for capability-aware agreement)
 
 
 def finding_penalty(f: VulnInput, n_succeeded: int) -> float:
+    """Agreement is computed over the scanners *capable* of the package type (S4): a language
+    package only Trivy and Grype can see is full agreement when both report it. KEV findings are
+    never down-weighted."""
     base = VULN_BASE.get(f.severity, VULN_BASE["unknown"])
-    mult = agreement_multiplier(f.n_scanners, n_succeeded)
+    capable = capable_scanners(f.pkg_type, f.succeeded) if f.succeeded else n_succeeded
+    mult = 1.0 if f.kev else agreement_multiplier(f.n_scanners, capable)
     return base * mult * (FIXABLE_MULT if f.fixable else 1.0)
 
 
