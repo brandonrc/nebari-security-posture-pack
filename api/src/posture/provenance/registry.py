@@ -112,6 +112,16 @@ def parse_challenge(header: str) -> tuple[str, dict[str, str]]:
     return scheme.lower(), dict(_CHALLENGE_RE.findall(rest))
 
 
+def _fmt(registry: str, repository: str, reference: str) -> str:
+    return f"{registry}/{repository}{'@' if ':' in reference and reference.startswith('sha256') else ':'}{reference}"
+
+
+def _status(resp: httpx.Response) -> str:
+    if resp.status_code == 429:
+        return "429 rate limited (configure registry credentials, e.g. REGISTRY_AUTH_FILE)"
+    return str(resp.status_code)
+
+
 def _next_link(link: str | None) -> str | None:
     if not link:
         return None
@@ -213,7 +223,7 @@ class HttpRegistry:
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise RegistryError(f"GET manifest {registry}/{repository}:{reference} -> {resp.status_code}")
+            raise RegistryError(f"GET manifest {_fmt(registry, repository, reference)} -> {_status(resp)}")
         raw = resp.content[:MAX_MANIFEST_BYTES]
         try:
             body = json.loads(raw)
@@ -229,7 +239,7 @@ class HttpRegistry:
             return True
         if resp.status_code in (404, 400):  # some registries answer 400 MANIFEST_INVALID / NAME_UNKNOWN
             return False
-        raise RegistryError(f"HEAD manifest {registry}/{repository}:{reference} -> {resp.status_code}")
+        raise RegistryError(f"HEAD manifest {_fmt(registry, repository, reference)} -> {_status(resp)}")
 
     async def get_blob(self, registry: str, repository: str, digest: str, max_bytes: int = 2 * 1024 * 1024) -> bytes | None:
         resp = await self._request("GET", registry, repository, f"blobs/{digest}")
@@ -249,7 +259,7 @@ class HttpRegistry:
             if resp.status_code == 404:
                 return tags
             if resp.status_code != 200:
-                raise RegistryError(f"list tags {registry}/{repository} -> {resp.status_code}")
+                raise RegistryError(f"list tags {registry}/{repository} -> {_status(resp)}")
             tags.extend((resp.json() or {}).get("tags") or [])
             nxt = _next_link(resp.headers.get("link"))
             url = None if not nxt else (nxt if nxt.startswith("http") else self._base(registry) + nxt)

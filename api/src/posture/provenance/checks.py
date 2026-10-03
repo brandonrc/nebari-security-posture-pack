@@ -228,12 +228,19 @@ async def collect_attestations(reg: Registry, ref: ImageRef, *, want_att: bool =
             log.debug("provenance.registry_partial", ref=ref.display, error=str(e))
             return default
 
+    async def _get_if_exists(reference: str) -> Manifest | None:
+        # HEAD first: probes for tags that usually do not exist stay cheap, and Docker
+        # Hub does not count HEAD requests against its pull rate limit.
+        if not await _safe(reg.manifest_exists(registry, repo, reference), False):
+            return None
+        return await _safe(reg.get_manifest(registry, repo, reference), None)
+
     # 1. referrers: API first, fallback tag second (theirs: fallback tag only)
     api = await _safe(reg.referrers(registry, repo, digest), None)
     if api:
         out.referrers, out.referrers_source = list(api), "api"
     else:
-        fb = await _safe(reg.get_manifest(registry, repo, digest_tag(digest)), None)
+        fb = await _get_if_exists(digest_tag(digest))
         if fb is not None and fb.manifests:
             out.referrers, out.referrers_source = fb.manifests, "tag"
 
@@ -253,7 +260,7 @@ async def collect_attestations(reg: Registry, ref: ImageRef, *, want_att: bool =
     # 3. legacy cosign tags
     out.sig_tag = bool(await _safe(reg.manifest_exists(registry, repo, digest_tag(digest, ".sig")), False))
     if want_att:
-        att = await _safe(reg.get_manifest(registry, repo, digest_tag(digest, ".att")), None)
+        att = await _get_if_exists(digest_tag(digest, ".att"))
         if att is not None:
             for layer in att.layers[:MAX_ATT_LAYERS]:
                 pts = predicate_types(layer)
@@ -262,7 +269,7 @@ async def collect_attestations(reg: Registry, ref: ImageRef, *, want_att: bool =
                     blob = await _safe(reg.get_blob(registry, repo, layer["digest"], MAX_PAYLOAD_BYTES), None)
                     if blob:
                         out.att_payloads.append(dsse_statement(blob) or blob)
-        sbom = await _safe(reg.get_manifest(registry, repo, digest_tag(digest, ".sbom")), None)
+        sbom = await _get_if_exists(digest_tag(digest, ".sbom"))
         if sbom is not None:
             out.sbom_tag_format = next((f for f in (sbom_format_from_media_type(l.get("mediaType", ""))
                                                      for l in sbom.layers) if f), "")

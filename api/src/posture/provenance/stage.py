@@ -287,7 +287,11 @@ class ProvenanceStage:
                 updates[tag] = info.as_json()
         primary = ref.tag if ref.tag in updates else (sorted(updates)[0] if updates else ref.tag)
         upd = UpdateInfo.from_json(updates.get(primary or "")) if primary is not None else None
-        inputs = build_inputs(sig, sbom, prov, upd, ps, cosign_on)
+        if error:  # registry unreachable / rate limited: unknown, not failed (no penalty; not cached)
+            inputs = build_inputs(None, None, None, upd, ps.model_copy(update={"check_sbom": False,
+                                                                                "check_provenance": False}), cosign_on)
+        else:
+            inputs = build_inputs(sig, sbom, prov, upd, ps, cosign_on)
         score = supply_chain_score(inputs, w.mutable)
         return ImageOutcome(w.image_id, ref.digest or details.get("resolvedDigest"), checked_at, sig, sbom, prov,
                             updates, details, error, inputs, score, primary)

@@ -8,7 +8,7 @@ Python 3.12 package `posture` (`src/posture/`) with two entrypoints:
 | migrations | `python -m posture.migrate` (alembic upgrade head, retries until the DB is up) | api image |
 | worker (inventory + scans + scheduler) | `python -m posture.worker` (health on `:9000/healthz`) | `Dockerfile.worker` |
 
-The contract is `../docs/DESIGN.md` §4–§6, §11 and `../docs/SCORING.md`; deviations are in
+The contract is `../docs/DESIGN.md` §4–§6, §11, §12 (`../docs/PROVENANCE.md`) and `../docs/SCORING.md`; deviations are in
 `../docs/DECISIONS.md`.
 
 ## Run locally (no compose)
@@ -57,6 +57,9 @@ TEST_DATABASE_URL=postgresql://posture:posture@127.0.0.1:55432/posture_test \
 ```
 
 Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the README there).
+`tests/provenance/` runs the supply-chain checks against an in-memory registry / cosign fake
+(`tests/provenance/fakes.py`), so no network is needed; its Postgres module
+(`test_integration_provenance.py`) is also gated on `TEST_DATABASE_URL`.
 
 ## Environment
 
@@ -90,6 +93,17 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `REPORTS_KEEP_PER_TYPE` | `50` | both | retention: newest N finished reports per type |
 | `REPORTS_AUTO_GENERATE` | empty | both | default for settings `reports.autoGenerate` (comma list of report types) |
 | `LOG_LEVEL` | `INFO` | both | logs are `key=value` lines on stdout; tokens are never logged |
+| `PROVENANCE_ENABLED` | `true` | both | supply-chain stage (DESIGN §12, `../docs/PROVENANCE.md`); default for settings `provenance.enabled` |
+| `PROVENANCE_VERIFY_SIGNATURES` / `PROVENANCE_CHECK_SBOM` / `PROVENANCE_CHECK_PROVENANCE` / `PROVENANCE_CHECK_UPDATES` | `true` | both | per-check defaults (settings `provenance.*`) |
+| `PROVENANCE_COSIGN_PUBLIC_KEY` | empty | both | PEM text, file path or KMS/remote URI for `cosign verify --key`; empty = existence check only |
+| `PROVENANCE_COSIGN_CERTIFICATE_IDENTITY_REGEXP` / `..._OIDC_ISSUER_REGEXP` | empty | both | keyless verification (both required) |
+| `PROVENANCE_UPDATE_LEVEL` / `PROVENANCE_SKIP_PRERELEASE` | `patch` / `true` | both | update check (provenance-collector-pack semantics) |
+| `PROVENANCE_HELM_ENABLED` | `true` | both | Helm release discovery from `sh.helm.release.v1.*` Secrets (needs secrets list RBAC; chart default off) |
+| `PROVENANCE_HELM_CHART_REPOS` | empty | worker | `https://…` index.yaml repos / `oci://host/path` prefixes for chart update checks |
+| `PROVENANCE_RECHECK_HOURS` | `24` | both | reuse a digest's signature/SBOM/provenance results |
+| `PROVENANCE_CONCURRENCY` / `PROVENANCE_REGISTRY_TIMEOUT` | `8` / `30` | worker | registry concurrency / per-request timeout (s) |
+| `PROVENANCE_COMPAT_INTERNAL_PORT` | unset | api | second, unauthenticated listener serving only `/api/reports*`, `/api/export`, `/healthz` (Grafana) |
+| `COSIGN_BIN` | `cosign` | worker | cosign binary (pinned v3.1.3 in the worker image; TUF cache `TUF_ROOT=/cache/sigstore`) |
 
 ## Module map (`src/posture/`)
 
@@ -97,12 +111,12 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 |---|---|
 | `config.py` | pydantic-settings for the env vars above |
 | `app_settings.py` | editable settings (single `settings` row) over env defaults: interval, rescan, exclusions, scanner toggles, parallelism, `systemName`, `organization`, `remediationSlaDays`, `reports.autoGenerate` |
-| `main.py` | FastAPI app, `/api/v1` routers, admin-gated `/api/v1/openapi.json` + `/api/v1/docs`, access log |
+| `main.py` | FastAPI app, `/api/v1` routers, admin-gated `/api/v1/openapi.json` + `/api/v1/docs`, access log; provenance-collector-pack aliases outside `/api/v1` and the optional compat listener |
 | `auth.py` | Bearer / `NebariIdToken` / `IdToken*` cookie → JWKS-verified JWT → issuer check → groups → admin |
-| `routers/` | `health`, `me`, `summary`, `images`, `vulnerabilities`, `workloads` (+`/namespaces`), `checks`, `scans`, `scanners`, `settings`, `export`, `compliance` (`/compliance/controls`), `reports` (`/reports*`, `/compliance/stig`) |
+| `routers/` | `health`, `me`, `summary`, `images`, `vulnerabilities`, `workloads` (+`/namespaces`), `checks`, `scans`, `scanners`, `settings`, `export`, `compliance` (`/compliance/controls`), `reports` (`/reports*`, `/compliance/stig`), `supply_chain` (`/supply-chain`, `/helm-releases`), `provenance_compat` (`/api/reports*`, `/api/export`, `/api/me`, `/api/scan`, `/healthz`) |
 | `report_jobs.py` | report rows, generation off the event loop (`asyncio.to_thread(registry.generate)`), files under `REPORTS_DIR`, retention; used by the API background task and the worker's `reports.autoGenerate` |
 | `views.py` | shared queries and camelCase JSON shapes |
-| `db/` | SQLAlchemy 2 async models + engine; `alembic/` migrations (`0001` initial) |
+| `db/` | SQLAlchemy 2 async models + engine; `alembic/` migrations (`0001` initial, `0002_provenance`) |
 | `migrate.py` | `python -m posture.migrate` |
 | `inventory.py` / `inventory_model.py` | K8s API inventory: pods (containers/init/ephemeral), owner chain (RS→Deployment, Job→CronJob), NebariApp mapping, securityContext snapshot, NetworkPolicies |
 | `images.py` | image ref parsing, `imageID` normalization (`docker-pullable://`, bare `sha256:`), unique image key, rewrite map, mirror target |
@@ -114,11 +128,12 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `aggregate.py` | workload / namespace / cluster scores |
 | `controls.py` + `reports/data/controls.yaml` | NIST 800-53 tagging |
 | `reports/models.py`, `reports/snapshot.py` | `ReportSnapshot` + `build_snapshot(session, scan_id, scope)` for report generators |
-| `worker.py` | Postgres queue (`FOR UPDATE SKIP LOCKED`), APScheduler jobs, scan pipeline, health server |
+| `provenance/` | DESIGN §12: `registry` (async OCI client), `checks` (cosign / referrers / BuildKit / legacy-tag signature, SBOM, SLSA), `updates` (Masterminds-compatible semver update check), `helm` (release Secrets, chart updates), `stage` (worker stage, cache, persistence), `report` (their report JSON / CSV / Markdown), `scoring` (supply-chain score, controls), `models` (`image_provenance`, `helm_releases`, `images.provenance`) |
+| `worker.py` | Postgres queue (`FOR UPDATE SKIP LOCKED`), APScheduler jobs, scan pipeline (provenance stage concurrent with scanning), health server |
 
 ## Limitations (v0.1)
 
-* `imagePullSecrets` are not discovered; private registries need `REGISTRY_AUTH_FILE`.
+* `imagePullSecrets` are not discovered; private registries need `REGISTRY_AUTH_FILE` (also used by the provenance checks; anonymous Docker Hub access is rate limited - rate-limited images are reported as errors and scored as unknown).
 * Images whose `imageID` is a bare config digest (locally loaded) are scanned by tag.
 * `no-netpol` is skipped (not failed) when NetworkPolicies cannot be listed (RBAC).
 * List endpoints filter/sort in memory (fine for hundreds of images; not for tens of thousands).
