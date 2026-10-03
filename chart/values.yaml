@@ -240,6 +240,51 @@ provenance:
         - monitoring
 
 # =============================================================================
+# Control evidence engine (DESIGN §13, docs/CONTROLS.md)
+# =============================================================================
+# After every completed scan (and on POST /compliance/assertions/run) the worker
+# runs live NIST SP 800-53 assertions against Keycloak, the gateway, cert-manager,
+# Kubernetes RBAC/PodSecurity/NetworkPolicy, Loki, Prometheus/Alertmanager and
+# the registry, and derives per-control implementation status (OSCAL SSP).
+controlsEngine:
+  enabled: true
+  # Default for settings controlsEngine.baseline: low | moderate | high.
+  baseline: moderate
+  # Approved privileged subjects (default for settings controlsEngine.adminSubjects):
+  # Keycloak usernames holding the realm admin role, and cluster-admin binding
+  # subjects as User:<name>, Group:<name> or ServiceAccount:<ns>/<name>.
+  adminSubjectsAllowlist: []
+  # Namespaces exempt from the per-namespace checks (PodSecurity, default-deny,
+  # default ServiceAccount automount, workload least privilege).
+  systemNamespaces: [kube-system, kube-public, kube-node-lease]
+  keycloak:
+    url: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth
+    realm: nebari
+    # Realm the admin credentials belong to: "" tries `realm` first, then
+    # `master` (works with a master-realm super-admin or a realm admin).
+    adminRealm: ""
+    clientId: admin-cli
+    # Group whose members must have OTP/WebAuthn (IA-2(1)); "" = first adminGroups entry.
+    adminGroup: ""
+    verifyTls: true
+    # Secret with `username`/`password` (or `client-id`/`client-secret`, optional
+    # `realm`). The chart grants the ServiceAccount `get` on this one Secret via
+    # a Role in its namespace; nothing else in that namespace is readable.
+    adminSecret:
+      name: nebari-realm-admin-credentials
+      namespace: keycloak
+  # Service URLs; "" = discover Services in the cluster (loki:3100,
+  # *prometheus*:9090, *alertmanager*:9093).
+  lokiUrl: ""
+  prometheusUrl: ""
+  alertmanagerUrl: ""
+  # In-cluster registry probed for anonymous access; "" = scanner.mirror.registry.
+  registryUrl: ""
+  # Per-assertion timeout and the gateway TLS handshake probe (TLS 1.1 must be refused).
+  timeoutSeconds: 30
+  tlsProbe: true
+
+# =============================================================================
 # Database
 # =============================================================================
 database:

@@ -1,0 +1,42 @@
+{{/*
+  Control evidence engine env (DESIGN §13); included by api.yaml and worker.yaml.
+*/}}
+{{- define "security-posture.controlsEnv" -}}
+{{- $c := .Values.controlsEngine -}}
+- name: CONTROLS_ENGINE_ENABLED
+  value: {{ $c.enabled | quote }}
+- name: CONTROLS_BASELINE
+  value: {{ $c.baseline | quote }}
+- name: CONTROLS_ADMIN_SUBJECTS
+  value: {{ join "," ($c.adminSubjectsAllowlist | default list) | quote }}
+- name: CONTROLS_SYSTEM_NAMESPACES
+  value: {{ join "," ($c.systemNamespaces | default list) | quote }}
+- name: CONTROLS_KEYCLOAK_URL
+  value: {{ $c.keycloak.url | quote }}
+- name: CONTROLS_KEYCLOAK_REALM
+  value: {{ $c.keycloak.realm | quote }}
+- name: CONTROLS_KEYCLOAK_ADMIN_REALM
+  value: {{ $c.keycloak.adminRealm | default "" | quote }}
+- name: CONTROLS_KEYCLOAK_CLIENT_ID
+  value: {{ $c.keycloak.clientId | default "admin-cli" | quote }}
+- name: CONTROLS_KEYCLOAK_ADMIN_GROUP
+  value: {{ $c.keycloak.adminGroup | default "" | quote }}
+- name: CONTROLS_KEYCLOAK_VERIFY_TLS
+  value: {{ $c.keycloak.verifyTls | quote }}
+- name: CONTROLS_KEYCLOAK_ADMIN_SECRET_NAME
+  value: {{ $c.keycloak.adminSecret.name | quote }}
+- name: CONTROLS_KEYCLOAK_ADMIN_SECRET_NAMESPACE
+  value: {{ $c.keycloak.adminSecret.namespace | quote }}
+- name: CONTROLS_LOKI_URL
+  value: {{ $c.lokiUrl | default "" | quote }}
+- name: CONTROLS_PROMETHEUS_URL
+  value: {{ $c.prometheusUrl | default "" | quote }}
+- name: CONTROLS_ALERTMANAGER_URL
+  value: {{ $c.alertmanagerUrl | default "" | quote }}
+- name: CONTROLS_REGISTRY_URL
+  value: {{ $c.registryUrl | default "" | quote }}
+- name: CONTROLS_TIMEOUT_SECONDS
+  value: {{ $c.timeoutSeconds | quote }}
+- name: CONTROLS_TLS_PROBE
+  value: {{ $c.tlsProbe | quote }}
+{{- end }}

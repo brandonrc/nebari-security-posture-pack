@@ -59,6 +59,7 @@ spec:
               value: /etc/posture/docker/config.json
             {{- end }}
             {{- include "security-posture.provenanceEnv" . | nindent 12 }}
+            {{- include "security-posture.controlsEnv" . | nindent 12 }}
             {{- with .Values.worker.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

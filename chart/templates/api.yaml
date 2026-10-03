@@ -60,6 +60,7 @@ spec:
             - name: CACHE_DIR
               value: /tmp
             {{- include "security-posture.provenanceEnv" . | nindent 12 }}
+            {{- include "security-posture.controlsEnv" . | nindent 12 }}
             {{- if .Values.provenance.compat.internalService.enabled }}
             - name: PROVENANCE_COMPAT_INTERNAL_PORT
               value: {{ .Values.provenance.compat.internalService.containerPort | quote }}
