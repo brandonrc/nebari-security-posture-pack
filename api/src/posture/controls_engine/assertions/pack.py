@@ -101,6 +101,8 @@ async def sla_overdue(ctx: EngineContext) -> Result:
     snap = _snap(ctx)
     if not snap.get("lastDoneScan"):
         return unknown("no completed scan yet")
+    if snap.get("slaOverdue") is None:  # absent evidence is not "zero overdue"
+        return unknown("SLA overdue counts unavailable for the latest scan")
     od = {k: int(v) for k, v in (snap.get("slaOverdue") or {}).items()}
     total = sum(od.values())
     ev = {"slaOverdue": od, "slaDays": snap.get("slaDays")}

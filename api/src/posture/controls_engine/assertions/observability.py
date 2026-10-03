@@ -128,8 +128,10 @@ def loki_retention(cfg: dict[str, Any]) -> dict[str, Any]:
 @assertion(id="log-retention", title="Log retention meets the organization-defined period",
            controls=["AU-4", "AU-11"], objectives=["au-4_obj", "au-11_obj"], component=LOKI, severity="medium")
 async def log_retention(ctx: EngineContext) -> Result:
-    """Each Loki instance either deletes nothing (retention disabled: bounded only by storage) or keeps
-    logs for at least `controlsEngine.minLogRetentionDays` (read from Loki `/config`)."""
+    """Each Loki instance has retention enabled and keeps logs for at least
+    `controlsEngine.parameters.minLogRetentionDays` (read from Loki `/config`). Retention disabled
+    means Loki keeps logs only until storage runs out: an AU-4 / AU-5 risk, not AU-11 evidence, so it
+    fails (compliance review M4/M5)."""
     urls = await loki_urls(ctx)
     if not urls:
         return failed("no Loki service found (set controlsEngine.lokiUrl)")
@@ -145,16 +147,17 @@ async def log_retention(ctx: EngineContext) -> Result:
             continue
         info["url"] = u
         rows.append(info)
-        if not info["unbounded"] and (info["retentionDays"] or 0) < ctx.config.min_log_retention_days:
+        if info["unbounded"] or (info["retentionDays"] or 0) < ctx.config.min_log_retention_days:
             bad.append(info)
     ev = {"minDays": ctx.config.min_log_retention_days, "instances": rows, "errors": errors}
     if not rows:
         return unknown("Loki /config unreachable: " + "; ".join(e["error"] for e in errors), **ev)
     if bad:
-        return failed("retention below policy: " + ", ".join(f"{b['url']} keeps {b['retentionDays']}d" for b in bad)
-                      + f" (< {ctx.config.min_log_retention_days}d)", **ev)
-    return passed("; ".join(f"{r['url']}: " + ("no deletion (bounded by storage)" if r["unbounded"]
-                                               else f"{r['retentionDays']}d") for r in rows), **ev)
+        return failed("retention not enforced at the policy value: " + ", ".join(
+            f"{b['url']} " + ("has retention disabled (logs kept only until storage fills)" if b["unbounded"]
+                              else f"keeps {b['retentionDays']}d") for b in bad)
+            + f" (policy: at least {ctx.config.min_log_retention_days}d)", **ev)
+    return passed("; ".join(f"{r['url']}: {r['retentionDays']}d" for r in rows), **ev)
 
 
 @assertion(id="mon-prometheus-scraping", title="Prometheus is scraping platform targets",

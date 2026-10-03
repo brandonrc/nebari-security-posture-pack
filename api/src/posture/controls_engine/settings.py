@@ -24,6 +24,9 @@ class ControlParameters(_Camel):
     min_log_retention_days: int = Field(90, ge=1, le=3650)  # AU-11
     cert_renewal_window_days: int = Field(30, ge=1, le=365)  # SC-12(1)
     log_window_minutes: int = Field(10, ge=1, le=1440)  # AU-12 ingest freshness
+    lockout_window_seconds: int = Field(900, ge=60, le=86400)  # AC-7 a: failure-count window
+    min_lockout_seconds: int = Field(1800, ge=60, le=30 * 86400)  # AC-7 b: minimum lockout duration
+    require_admin_release: bool = False  # AC-7 b: lock until an administrator releases the account
 
 
 class CommonControlProvider(_Camel):
@@ -70,6 +73,9 @@ class ControlsEngineSettings(_Camel):
     inherit_organizational_controls: bool = False
     organization_statement: str = ""  # SSP text for organization-provided (unverified) controls
     common_control_providers: list[CommonControlProvider] = Field(default_factory=list)
+    # SC-17 / IA-5(2): cert-manager ClusterIssuers that chain to an approved CA (DoD PKI, ECA, the
+    # organization's CA). Empty = no CA is approved yet, so cm-issuer-ready fails.
+    approved_issuers: list[str] = Field(default_factory=list)
     not_applicable: dict[str, str] = Field(default_factory=dict)  # tailoring: control -> justification
     parameters: ControlParameters = Field(default_factory=ControlParameters)
 

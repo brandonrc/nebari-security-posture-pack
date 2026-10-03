@@ -88,8 +88,9 @@ def test_objective_coverage_caps_at_partial():
 
 
 def test_not_applicable_results_and_tailoring():
+    # M5: an assertion that finds nothing to check never tailors the control out
     s = statuses([outcome("a1", "not-applicable"), outcome("a2", "not-applicable")])
-    assert s["AC-7"].status == "not-applicable"
+    assert s["AC-7"].status == "not-assessed" and "controlsEngine.notApplicable" in s["AC-7"].detail
     s = statuses([outcome("a1", "fail")], not_applicable={"ac-7": "no interactive logins"})
     assert s["AC-7"].status == "not-applicable" and "no interactive logins" in s["AC-7"].detail
     # n/a results are ignored when others are evaluated

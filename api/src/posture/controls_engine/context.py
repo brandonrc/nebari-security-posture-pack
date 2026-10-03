@@ -80,6 +80,11 @@ class EngineConfig:
     max_session_lifespan_seconds: int = 43200
     min_log_retention_days: int = 90
     cert_renewal_window_days: int = 30
+    # compliance review M5 (additive): AC-7 window / lockout ODPs, SC-17 approved CAs
+    lockout_window_seconds: int = 900  # AC-7 a: failures are counted over at least this period
+    min_lockout_seconds: int = 1800  # AC-7 b: minimum lockout duration
+    require_admin_release: bool = False  # AC-7 b (DoD): locked until released by an administrator
+    approved_issuers: list[str] = field(default_factory=list)  # SC-17: ClusterIssuers chaining to approved CAs
     # services ("" = discover)
     loki_url: str = ""
     prometheus_url: str = ""

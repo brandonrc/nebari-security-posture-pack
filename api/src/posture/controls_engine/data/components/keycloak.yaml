@@ -88,6 +88,18 @@ implemented-requirements:
     responsibility: shared
     customer: For DoD, privileged MFA must use PKI/CAC (IA-2(12), DoDI 8520.03); OTP is generally not acceptable.
     assigned: rest
+  - control: IA-2(2)
+    statement: The realm's browser flow requires a second factor for every user, not only administrators.
+    assertions: [kc-mfa-all-users]
+    responsibility: shared
+    customer: Require MFA for non-privileged access paths outside the platform SSO.
+    assigned: rest
+  - control: IA-2(12)
+    statement: The realm's browser flow accepts and verifies X.509 (PIV/CAC) client certificates.
+    assertions: [kc-x509-authenticator]
+    responsibility: shared
+    customer: Configure the trust anchors and revocation checking for PIV/CAC certificates (DoD PKI).
+    assigned: rest
   - control: IA-5(1)
     statement: >-
       The realm password policy enforces the minimum length (organization-defined, 15 for DoD) and a

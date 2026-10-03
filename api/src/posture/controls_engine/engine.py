@@ -356,9 +356,11 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
         elif amap.get(label) and not results:
             res.status = NOT_ASSESSED
             res.detail = "assertion(s) not evaluated yet: " + ", ".join(amap[label])
-        elif results:
-            res.status, res.detail = NOT_APPLICABLE, "no applicable resources: " + "; ".join(
-                r.detail for r in results if r.detail)[:500]
+        elif results:  # M5: an assertion never tailors a control out; only the AO's tailoring does
+            res.status = NOT_ASSESSED
+            res.detail = ("assertion(s) found nothing to evaluate (not-applicable result; tailor the control out "
+                          "with controlsEngine.notApplicable if it really does not apply): " + "; ".join(
+                              r.detail for r in results if r.detail))[:500]
         elif org_declared:
             res.status = ORG_PROVIDED
             res.detail = "UNVERIFIED (no common control provider configured): " + " ".join(
@@ -468,6 +470,10 @@ def engine_config(env: Any, st: Any) -> EngineConfig:
         cfg.min_log_retention_days = params.min_log_retention_days
         cfg.cert_renewal_window_days = params.cert_renewal_window_days
         cfg.log_window_minutes = params.log_window_minutes
+        cfg.lockout_window_seconds = params.lockout_window_seconds
+        cfg.min_lockout_seconds = params.min_lockout_seconds
+        cfg.require_admin_release = params.require_admin_release
+    cfg.approved_issuers = list(getattr(ce, "approved_issuers", None) or [])
     return cfg
 
 

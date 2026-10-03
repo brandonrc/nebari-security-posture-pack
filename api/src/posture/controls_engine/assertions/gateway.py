@@ -7,7 +7,7 @@ import ssl
 from typing import Any
 
 from ..context import IN_APP_AUTH_ANNOTATION, EngineContext
-from ..model import Result, assertion, failed, not_applicable, passed
+from ..model import Result, assertion, failed, not_applicable, passed, unknown
 
 GW = "envoy-gateway"
 OP = "nebari-operator"
@@ -148,14 +148,15 @@ async def _tls_probe(host: str, port: int, max_version: ssl.TLSVersion | None, t
            objectives=["sc-8.1_obj"], component=GW, severity="high")
 async def tls_min_version(ctx: EngineContext) -> Result:
     """ClientTrafficPolicy `tls.minVersion` >= 1.2 for every Gateway; without a policy the Envoy
-    Gateway default (1.2) applies and is confirmed by a live handshake probe (TLS 1.1 must be refused)."""
+    Gateway default (1.2) must be confirmed by a live handshake probe (TLS 1.1 refused). An
+    unconfirmed default (probe disabled or inconclusive) is `unknown`, never a pass."""
     gws = await ctx.k8s_list_optional(GATEWAYS)
     if gws is None:
         return not_applicable("Gateway API is not installed")
     if not gws:
         return not_applicable("no Gateway resources")
     ctps = await ctx.k8s_list_optional(CLIENT_TRAFFIC_POLICIES) or []
-    per_gw, bad = [], []
+    per_gw, bad, unverified = [], [], []
     for gw in gws:
         gname, gns = gw["metadata"]["name"], gw["metadata"]["namespace"]
         pol = next((p for p in ctps if p["metadata"]["namespace"] == gns and any(
@@ -178,10 +179,17 @@ async def tls_min_version(ctx: EngineContext) -> Result:
                 if legacy.get("handshake") == "ok":
                     entry["minVersion"] = f"<= {legacy.get('version')} (accepted by live probe)"
                     bad.append(entry)
+                elif legacy.get("handshake") != "rejected":
+                    unverified.append(entry)  # probe inconclusive (unreachable / client cannot offer 1.1)
+            else:
+                unverified.append(entry)  # default assumed, nothing verified (M5: no pass on assumption)
         per_gw.append(entry)
     if bad:
         return failed(f"{len(bad)} gateway(s) accept TLS below 1.2: " + ", ".join(b["gateway"] for b in bad),
                       gateways=per_gw)
+    if unverified:
+        return unknown("no ClientTrafficPolicy sets tls.minVersion and the live probe did not verify the default for "
+                       + ", ".join(u["gateway"] for u in unverified), gateways=per_gw)
     return passed("TLS >= 1.2 on every gateway (" + "; ".join(
         f"{g['gateway']}: {g['minVersion']}" for g in per_gw) + ")", gateways=per_gw)
 
@@ -227,7 +235,7 @@ async def app_gateway_auth(ctx: EngineContext) -> Result:
         targets = _protected_route_names(app, routes)
         covering = [p for p in sps if p["metadata"]["namespace"] == ns
                     and any(t.get("kind") == "HTTPRoute" and t.get("name") in targets for t in _targets(p))
-                    and any(k in (p.get("spec") or {}) for k in ("oidc", "jwt", "extAuth", "basicAuth"))]
+                    and any((p.get("spec") or {}).get(k) for k in ("oidc", "jwt", "extAuth", "basicAuth"))]
         if targets and covering:
             enforced.append({"app": name, "routes": targets, "securityPolicies": [_name(p) for p in covering]})
         else:

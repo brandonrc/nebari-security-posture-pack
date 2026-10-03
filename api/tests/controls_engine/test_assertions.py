@@ -27,7 +27,11 @@ FAIL = {
     # keycloak
     "kc-brute-force-protection": lambda w: w["keycloak"][""].update(failureFactor=30),
     "kc-password-policy": lambda w: w["keycloak"][""].update(passwordPolicy=None),
-    "kc-admin-mfa": lambda w: _set(w["keycloak"], "/users/u1/credentials", [{"type": "password"}]),
+    "kc-admin-mfa": lambda w: w["keycloak"]["/authentication/flows/browser/executions"][5].update(
+        requirement="DISABLED"),
+    "kc-mfa-all-users": lambda w: w["keycloak"]["/authentication/flows/browser/executions"][5].update(
+        requirement="ALTERNATIVE"),
+    "kc-x509-authenticator": lambda w: w["keycloak"]["/authentication/flows/browser/executions"].pop(4),
     "kc-session-timeouts": lambda w: w["keycloak"][""].update(ssoSessionIdleTimeout=1800),
     "kc-remember-me-disabled": lambda w: w["keycloak"][""].update(rememberMe=True),
     "kc-self-registration-disabled": lambda w: w["keycloak"][""].update(registrationAllowed=True),
@@ -93,7 +97,9 @@ FAIL = {
 # A world where the evidence source is missing / unreachable -> unknown.
 UNKNOWN = {
     **{i: {"keycloak": False} for i in IDS if i.startswith("kc-")},
-    **{i: {"forbidden": {"*"}} for i in IDS if i.startswith(("gw-", "app-", "cm-", "k8s-"))},
+    "gw-tls-min-version": {"mutate": lambda w: _set(w["k8s"], "/apis/gateway.envoyproxy.io/v1alpha1/"
+                                                              "clienttrafficpolicies", [])},
+    **{i: {"forbidden": {"*"}} for i in IDS if i.startswith(("gw-", "app-", "cm-", "k8s-")) and i != "gw-tls-min-version"},
     "k8s-api-audit-logging": {"mutate": lambda w: k(w, "/api/v1/pods").pop(2)},  # API server not visible
     "k8s-workload-least-privilege": {"mutate": lambda w: w["snapshot"].pop("lastDoneScan")},
     "log-ingest-all-namespaces": {"mutate": lambda w: w["http"].pop(f"{LOKI}/loki/api/v1/label/namespace/values")},
@@ -230,12 +236,12 @@ async def test_tls_default_without_policy_uses_probe(monkeypatch):
     assert (await run_one(get_assertion("gw-tls-min-version"), make_ctx(w), 5)).status == "fail"
 
 
-async def test_loki_retention_disabled_is_unbounded_and_discovery():
+async def test_loki_retention_disabled_fails_and_discovery():
     w = good_world()
     w["http"][f"{LOKI}/config"] = (200, "limits_config:\n  retention_period: 744h\ncompactor:\n"
                                         "  retention_enabled: false\n")
     out = await run_one(get_assertion("log-retention"), make_ctx(w), 5)
-    assert out.status == "pass" and out.evidence["instances"][0]["unbounded"]
+    assert out.status == "fail" and out.evidence["instances"][0]["unbounded"] and "disabled" in out.detail
     w["k8s"]["/api/v1/services"] = []
     out = await run_one(get_assertion("log-retention"), make_ctx(w), 5)
     assert out.status == "fail" and "no Loki" in out.detail
@@ -272,10 +278,38 @@ async def test_login_events_must_store_login_and_logout_types():
     assert (await run_one(get_assertion("kc-login-events"), make_ctx(w), 5)).status == "pass"
 
 
-async def test_mfa_not_applicable_without_admin_group():
+async def test_mfa_unknown_without_admin_group():
+    """M5: a wrong admin group name used to make IA-2(1) not-applicable; it is a configuration gap."""
     w = good_world()
     w["keycloak"]["/groups"] = []
-    assert (await run_one(get_assertion("kc-admin-mfa"), make_ctx(w), 5)).status == "not-applicable"
+    out = await run_one(get_assertion("kc-admin-mfa"), make_ctx(w), 5)
+    assert out.status == "unknown" and "not found" in out.detail
+
+
+EXEC = "/authentication/flows/browser/executions"
+
+
+def _conditional_otp(w, condition):
+    """Keycloak's stock browser flow: OTP inside a CONDITIONAL sub-flow."""
+    w["keycloak"][EXEC] = [
+        {"displayName": "Cookie", "providerId": "auth-cookie", "requirement": "ALTERNATIVE", "level": 0},
+        {"displayName": "forms", "authenticationFlow": True, "requirement": "ALTERNATIVE", "level": 0},
+        {"displayName": "Username Password Form", "providerId": "auth-username-password-form",
+         "requirement": "REQUIRED", "level": 1},
+        {"displayName": "Browser - Conditional OTP", "authenticationFlow": True, "requirement": "CONDITIONAL",
+         "level": 1},
+        {"displayName": "Condition", "providerId": condition, "requirement": "REQUIRED", "level": 2},
+        {"displayName": "OTP Form", "providerId": "auth-otp-form", "requirement": "REQUIRED", "level": 2}]
+
+
+async def test_mfa_flow_enforcement_cases():
+    w = good_world()
+    _conditional_otp(w, "conditional-user-role")  # OTP required for the admin role
+    assert (await run_one(get_assertion("kc-admin-mfa"), make_ctx(w), 5)).status == "pass"
+    assert (await run_one(get_assertion("kc-mfa-all-users"), make_ctx(w), 5)).status == "fail"
+    _conditional_otp(w, "conditional-user-configured")  # stock flow: only users who set up OTP
+    out = await run_one(get_assertion("kc-admin-mfa"), make_ctx(w), 5)
+    assert out.status == "fail" and out.evidence["mfaSteps"][0]["enforcement"] == "optional"
 
 
 async def test_poam_not_needed_without_open_items():
@@ -289,3 +323,83 @@ async def test_http_error_types():
     w["http"][f"{PROM}/api/v1/targets"] = httpx.ReadTimeout("slow", request=httpx.Request("GET", PROM))
     out = await run_one(get_assertion("mon-prometheus-scraping"), make_ctx(w), 5)
     assert out.status == "unknown" and "ReadTimeout" in out.detail
+
+
+# ---------------------------------------------------------------- "looks compliant but isn't" (M5)
+LOOKS_COMPLIANT = {
+    "kc-brute-force-protection": lambda w: w["keycloak"][""].update(maxDeltaTimeSeconds=60),  # 3 per minute
+    "kc-password-policy": lambda w: w["keycloak"][""].update(
+        passwordPolicy="length(15) and digits(1) and upperCase(1) and specialChars(1)"),  # complexity, no blocklist
+    "kc-admin-mfa": lambda w: _conditional_otp(w, "conditional-user-configured"),  # admins have OTP, flow optional
+    "kc-mfa-all-users": lambda w: _conditional_otp(w, "conditional-user-role"),  # admins only
+    "kc-x509-authenticator": lambda w: w["keycloak"][EXEC][4].update(requirement="DISABLED"),  # present, disabled
+    "kc-session-timeouts": lambda w: w["keycloak"][""].update(ssoSessionMaxLifespan=0),  # idle ok, lifetime unset
+    "kc-remember-me-disabled": lambda w: w["keycloak"][""].pop("rememberMe"),  # not visible != disabled
+    "kc-self-registration-disabled": lambda w: w["keycloak"][""].pop("registrationAllowed"),
+    "kc-login-events": lambda w: w["keycloak"]["/events/config"].update(enabledEventTypes=["UPDATE_PROFILE"]),
+    "kc-admin-events": lambda w: w["keycloak"]["/events/config"].update(adminEventsDetailsEnabled=None),
+    "kc-admin-role-allowlist": lambda w: (_set(w["keycloak"], "/roles/admin/groups", [{"id": "g9", "name": "ops"}]),
+                                          _set(w["keycloak"], "/groups/g9/members", [{"username": "mallory"}])),
+    "kc-ssl-required": lambda w: w["keycloak"][""].pop("sslRequired"),
+    "gw-https-listener": lambda w: k(w, "/apis/gateway.networking.k8s.io/v1/gateways")[0]["status"].update(
+        listeners=[]),  # HTTPS listener declared but never programmed
+    "gw-http-redirect": lambda w: k(w, "/apis/gateway.networking.k8s.io/v1/httproutes")[1]["spec"]["rules"].append(
+        {"backendRefs": [{"name": "web"}]}),  # one rule redirects, another serves content over HTTP
+    "gw-tls-min-version": lambda w: k(w, "/apis/gateway.envoyproxy.io/v1alpha1/clienttrafficpolicies")[0]["spec"][
+        "targetRefs"][0].update(name="other-gateway"),  # policy exists but targets another gateway
+    "app-gateway-auth": lambda w: k(w, "/apis/gateway.envoyproxy.io/v1alpha1/securitypolicies")[0]["spec"].update(
+        oidc=None, cors={"allowOrigins": ["*"]}),  # a SecurityPolicy, but no authentication in it
+    "app-landing-visibility": lambda w: k(w, "/apis/reconcilers.nebari.dev/v1/nebariapps")[0]["status"][
+        "serviceDiscovery"].update(requiredGroups=["users"]),  # private, but the wrong groups
+    "cm-issuer-ready": lambda w: (_set(w["k8s"], "/apis/cert-manager.io/v1/clusterissuers", [
+        {"metadata": {"name": "selfsigned-issuer"}, "spec": {"selfSigned": {}},
+         "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]), w["config"].update(approved_issuers=[])),
+    "cm-certificates-valid": lambda w: k(w, "/apis/cert-manager.io/v1/certificates")[0]["status"].pop("notAfter"),
+    "k8s-pod-security-admission": lambda w: k(w, "/api/v1/namespaces").append(ns("legacy", "privileged")),
+    "k8s-default-deny-ingress": lambda w: _set(w["k8s"], "/apis/networking.k8s.io/v1/networkpolicies", [
+        {"metadata": {"namespace": n, "name": "deny"}, "spec": {"podSelector": {}, "policyTypes": ["Egress"]}}
+        for n in ("apps", "monitoring")]),  # default-deny, but for egress only
+    "k8s-default-deny-egress": lambda w: _set(w["k8s"], "/apis/networking.k8s.io/v1/networkpolicies", [
+        {"metadata": {"namespace": n, "name": "deny"}, "spec": {"podSelector": {}}}
+        for n in ("apps", "monitoring")]),  # no policyTypes: Ingress only
+    "k8s-cluster-admin-bindings": lambda w: k(w, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings").append(
+        {"metadata": {"name": "sa-admins"}, "roleRef": {"kind": "ClusterRole", "name": "cluster-admin"},
+         "subjects": [{"kind": "Group", "name": "system:serviceaccounts"}]}),  # system: prefix, every SA
+    "k8s-default-sa-automount": lambda w: k(w, "/api/v1/serviceaccounts")[1].update(automountServiceAccountToken=None),
+    "k8s-no-anonymous-access": lambda w: k(w, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings").append(
+        {"metadata": {"name": "system:public-info-viewer-2"}, "roleRef": {"kind": "ClusterRole", "name": "view"},
+         "subjects": [{"kind": "Group", "name": "system:unauthenticated"}]}),  # upstream-looking name
+    "k8s-supported-version": lambda w: k(w, "/api/v1/nodes").append(
+        {"metadata": {"name": "node2"}, "status": {"nodeInfo": {"kubeletVersion": "v1.28.9"}}}),
+    "k8s-api-audit-logging": lambda w: k(w, "/api/v1/pods")[2]["spec"]["containers"][0].update(
+        command=["kube-apiserver", "--audit-policy-file=/etc/audit.yaml"]),  # policy without a backend
+    "k8s-workload-least-privilege": lambda w: w["snapshot"]["postureFailures"].append(
+        {"checkId": "host-path", "namespace": "apps", "kind": "DaemonSet", "name": "agent", "severity": "high"}),
+    "log-ingest-all-namespaces": lambda w: _set(w["http"], f"{LOKI}/loki/api/v1/label/namespace/values",
+                                                (200, {"data": ["monitoring", "kube-system"]})),
+    "log-retention": lambda w: _set(w["http"], f"{LOKI}/config", (200, "compactor:\n  retention_enabled: false\n")),
+    "log-pipeline-alerting": lambda w: _set(w["http"], f"{PROM}/api/v1/rules", (200, {"data": {"groups": [
+        {"name": "loki", "rules": [{"type": "alerting", "name": "LokiCompactorRunning"}]}]}})),
+    "mon-prometheus-scraping": lambda w: _set(w["http"], f"{PROM}/api/v1/targets", (200, {"data": {
+        "activeTargets": [{"labels": {"job": "kubelet"}, "health": "down"}, {"labels": {"job": "x"}, "health": "unknown"}]}})),
+    "mon-alert-receivers": lambda w: _set(w["http"], f"{PROM}/api/v1/rules", (200, {"data": {"groups": [
+        {"name": "node", "rules": [{"type": "alerting", "name": "NodeFilesystemAlmostFull"}]}]}})),
+    "reg-access-restricted": lambda w: _set(w["http"], f"{REG}/v2/", (200, {})),  # anonymous but ClusterIP-only
+    "pack-scan-recent": lambda w: w["snapshot"]["lastDoneScan"].update(finishedAt=None),
+    "pack-scanner-db-fresh": lambda w: w["snapshot"]["scanners"][2].update(dbUpdatedAt=None),
+    "pack-poam-current": lambda w: w["snapshot"]["latestPoam"].update(scanId=3),  # a POA&M, from an old scan
+    "pack-sla-overdue": lambda w: w["snapshot"].pop("slaOverdue"),  # no evidence is not "zero overdue"
+    "pack-inventory-current": lambda w: w["snapshot"]["lastDoneScan"].update(finishedAt=NOW - timedelta(days=3)),
+}
+
+
+def test_every_assertion_has_a_looks_compliant_fixture():
+    assert set(LOOKS_COMPLIANT) == set(IDS)
+
+
+@pytest.mark.parametrize("aid", IDS)
+async def test_looks_compliant_but_isnt(aid):
+    w = good_world()
+    LOOKS_COMPLIANT[aid](w)
+    out = await run_one(get_assertion(aid), make_ctx(w), 5)
+    assert out.status in ("fail", "unknown"), (aid, out.detail, out.evidence)

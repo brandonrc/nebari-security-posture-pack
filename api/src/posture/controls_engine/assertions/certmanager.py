@@ -31,20 +31,34 @@ def _ts(v: str | None) -> datetime | None:
            objectives=["sc-12_obj-1", "sc-17_obj.a", "ia-5.2_obj.b.1"],
            component=C, severity="high")
 async def issuer_ready(ctx: EngineContext) -> Result:
-    """At least one ClusterIssuer exists and every ClusterIssuer reports Ready."""
+    """At least one ClusterIssuer exists, every ClusterIssuer reports Ready, and every ClusterIssuer
+    is on the approved-CA allowlist (`controlsEngine.approvedIssuers`): issuers that chain to DoD PKI,
+    an ECA or the organization's approved CA. A `selfSigned` issuer is never approved by default,
+    and an empty allowlist fails (SC-17 needs an approved CA; compliance review M4/M5)."""
     issuers = await ctx.k8s_list_optional(CLUSTER_ISSUERS)
     if issuers is None:
         return failed("cert-manager is not installed (no ClusterIssuer API)")
     rows = [{"name": i["metadata"]["name"], "ready": _ready(i),
              "kind": next((k for k in ("ca", "acme", "vault", "selfSigned", "venafi") if k in (i.get("spec") or {})),
                           "other")} for i in issuers]
+    approved = list(ctx.config.approved_issuers)
+    for r in rows:
+        r["approved"] = r["name"] in approved
+    ev = {"issuers": rows, "approvedIssuers": approved}
     if not rows:
-        return failed("no ClusterIssuer is configured", issuers=rows)
+        return failed("no ClusterIssuer is configured", **ev)
     bad = [r["name"] for r in rows if not r["ready"]]
     if bad:
-        return failed(f"ClusterIssuer(s) not Ready: {', '.join(bad)}", issuers=rows)
-    return passed(f"{len(rows)} ClusterIssuer(s) Ready: " + ", ".join(f"{r['name']} ({r['kind']})" for r in rows),
-                  issuers=rows)
+        return failed(f"ClusterIssuer(s) not Ready: {', '.join(bad)}", **ev)
+    if not approved:
+        return failed("no approved-CA allowlist configured (controlsEngine.approvedIssuers); issuers present: "
+                      + ", ".join(f"{r['name']} ({r['kind']})" for r in rows), **ev)
+    unapproved = [r for r in rows if not r["approved"]]
+    if unapproved:
+        return failed("ClusterIssuer(s) not on the approved-CA allowlist: "
+                      + ", ".join(f"{r['name']} ({r['kind']})" for r in unapproved), **ev)
+    return passed(f"{len(rows)} approved ClusterIssuer(s) Ready: "
+                  + ", ".join(f"{r['name']} ({r['kind']})" for r in rows), **ev)
 
 
 @assertion(id="cm-certificates-valid", title="Certificates are Ready and not near expiry",

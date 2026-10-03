@@ -177,12 +177,24 @@ def good_world() -> dict[str, Any]:
                         "notAfter": iso(NOW + timedelta(days=60)), "renewalTime": iso(NOW + timedelta(days=30))}}],
     }
     keycloak = {
-        "": {"bruteForceProtected": True, "failureFactor": 3, "passwordPolicy": "length(12) and digits(1)",
+        "": {"bruteForceProtected": True, "failureFactor": 3, "maxDeltaTimeSeconds": 900, "waitIncrementSeconds": 1800,
+             "maxFailureWaitSeconds": 3600, "permanentLockout": False, "browserFlow": "browser",
+             "passwordPolicy": "length(15) and passwordBlacklist(rockyou.txt) and notUsername(undefined)",
              "ssoSessionIdleTimeout": 900, "ssoSessionMaxLifespan": 36000, "rememberMe": False,
              "registrationAllowed": False, "sslRequired": "external"},
         "/events/config": {"eventsEnabled": True, "eventsExpiration": 7776000, "adminEventsEnabled": True,
                            "adminEventsDetailsEnabled": True,
                            "enabledEventTypes": ["LOGIN", "LOGIN_ERROR", "LOGOUT", "CODE_TO_TOKEN"]},
+        "/authentication/flows/browser/executions": [
+            {"displayName": "Cookie", "providerId": "auth-cookie", "requirement": "ALTERNATIVE", "level": 0},
+            {"displayName": "Identity Provider Redirector", "providerId": "identity-provider-redirector",
+             "requirement": "ALTERNATIVE", "level": 0},
+            {"displayName": "forms", "authenticationFlow": True, "requirement": "ALTERNATIVE", "level": 0},
+            {"displayName": "Username Password Form", "providerId": "auth-username-password-form",
+             "requirement": "REQUIRED", "level": 1},
+            {"displayName": "X509/Validate Username Form", "providerId": "auth-x509-client-username-form",
+             "requirement": "ALTERNATIVE", "level": 1},
+            {"displayName": "OTP Form", "providerId": "auth-otp-form", "requirement": "REQUIRED", "level": 1}],
         "/groups": [{"id": "g1", "name": "admin"}],
         "/groups/g1/members": [{"id": "u1", "username": "alice", "enabled": True}],
         "/users/u1/credentials": [{"type": "password"}, {"type": "otp"}],
@@ -222,6 +234,7 @@ def good_world() -> dict[str, Any]:
     }
     return {"k8s": k8s, "keycloak": keycloak, "http": http, "snapshot": snapshot,
             "config": {"admin_subjects": ["alice", "User:alice"], "registry_url": REG.split("://")[1],
+                       "approved_issuers": ["org-ca"],
                        "tls_probe": False}}
 
 

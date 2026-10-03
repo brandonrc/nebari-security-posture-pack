@@ -122,17 +122,23 @@ def subject_allowed(s: dict[str, Any], allow: list[str]) -> bool:
                                                         f"{s.get('namespace')}/{s.get('name')}" in allow)
 
 
+# Upstream subjects that hold cluster-admin by design (kubeadm / the default `cluster-admin` binding).
+# Every other subject, `system:` prefixed or not, must be on the allowlist (compliance review M4/M5).
+UPSTREAM_ADMIN_SUBJECTS = {("Group", "system:masters"), ("Group", "kubeadm:cluster-admins")}
+
+
 def is_system_subject(s: dict[str, Any]) -> bool:
-    name = s.get("name") or ""
-    return name.startswith("system:") and s.get("kind") in ("User", "Group")
+    return (s.get("kind"), s.get("name")) in UPSTREAM_ADMIN_SUBJECTS
 
 
-@assertion(id="k8s-cluster-admin-bindings", title="cluster-admin bound only to system or approved subjects",
+@assertion(id="k8s-cluster-admin-bindings", title="cluster-admin bound only to upstream or approved subjects",
            controls=["AC-6(1)", "AC-6(5)"],
            objectives=["ac-6.1_obj.a", "ac-6.5_obj"], component=C, severity="critical")
 async def cluster_admin(ctx: EngineContext) -> Result:
-    """ClusterRoleBindings to `cluster-admin` have only `system:*` users/groups or subjects listed in
-    `controlsEngine.adminSubjects` (`User:alice`, `Group:ops`, `ServiceAccount:ns/name`)."""
+    """ClusterRoleBindings to `cluster-admin` have only the explicit upstream subjects
+    (`Group:system:masters`, `Group:kubeadm:cluster-admins`) or subjects listed in
+    `controlsEngine.adminSubjects` (`User:alice`, `Group:ops`, `ServiceAccount:ns/name`). Other
+    `system:` users and groups are not trusted by prefix."""
     crbs = await ctx.k8s_list("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings")
     bindings, extra = [], []
     for b in crbs:
@@ -146,9 +152,9 @@ async def cluster_admin(ctx: EngineContext) -> Result:
                 extra.append({"binding": b["metadata"]["name"], "subject": subject_label(s)})
     ev = {"clusterAdminBindings": bindings, "notAllowlisted": extra, "allowlist": ctx.config.admin_subjects}
     if extra:
-        return failed(f"{len(extra)} non-system subject(s) bound to cluster-admin: "
+        return failed(f"{len(extra)} unapproved subject(s) bound to cluster-admin: "
                       + ", ".join(e["subject"] for e in extra[:10]), **ev)
-    return passed(f"{len(bindings)} cluster-admin binding(s); only system or approved subjects", **ev)
+    return passed(f"{len(bindings)} cluster-admin binding(s); only upstream or approved subjects", **ev)
 
 
 @assertion(id="k8s-default-sa-automount", title="Default ServiceAccounts do not automount API tokens",
