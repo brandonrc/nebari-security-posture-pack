@@ -98,34 +98,52 @@
   `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
   never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
 
-## Grace deployment status (2026-10-03)
+## Grace deployment status (2026-10-03, phase 2)
 
-- Deployed tag `cefb217-1790989563` = phase-1 code (`ca2a6a7`) plus the POA&M xlsx fix
-  (`663e268`, cherry-picked locally as `cefb217`); phase-2 code (§12/§13) is not deployed yet.
-  API limit 4Gi (one POA&M xlsx peaks at ~1.06 GiB; nine concurrent reports OOMKilled it at 1Gi).
-- Scan #5 (scheduled, 2026-10-02 20:33-20:40 UTC): 68 images, 67 scored, 1 failed; cluster
-  score 28.2, grade F (vuln 8.3, configuration 74.6); 24,668 consensus findings
-  (777 critical / 6,830 high / 12,410 medium / 3,541 low); posture checks 1,140 pass / 464 fail.
-  Scans #1-#4 failed during the bring-up (worker/Clair OOMKills and redeploys).
-- Scanner coverage on scan #5: trivy 67/68, grype 67/68, clair 61/68.
-- Known failures:
-  - `artifacts.100-89-230-107.sslip.io/ray/ray-polars:2.56.0`: all three scanners and the skopeo
-    mirror fail with `x509: certificate signed by unknown authority`. The node's containerd trusts
-    that registry through `certs.d/.../hosts.toml` (`ca = .../ca.crt`); the worker and Clair pods
-    do not have the CA. Environment configuration, not an adapter bug; needs a CA-bundle mount
-    (chart feature, not implemented).
-  - Clair `unexpected return status: 500` on 6 images (artifact-keeper-backend,
-    postgres:16-alpine, dependencytrack/apiserver, opensearch, 2x artifact-keeper-scanner-adapter):
-    exactly the first parallelism-6 batch at 20:33:42, while the Clair Deployment was being
-    rolled (helm revision 5 at 20:33:28 changed its memory limit). The new Clair pod never
-    received those requests (its log has no 5xx), so the old, terminating pod answered them.
-    Transient, not an adapter bug; the stale-on-scanner-error rule (`a1b71f3`) rescans these
-    images on the next scan. The adapter does not retry 5xx.
-- Report verification from scan #5 (admin via the gateway, sequential): every type/format
-  generates; POA&M xlsx 86 s (previously >15 min, quadratic), SAR PDF 125 s / 199 pages, OSCAL AR
-  81 MB valid against the OSCAL 1.1.2 schema.
-- Grace hazard: creating a docker network (e.g. `ui/screenshots/run.sh` creates `sp-shots`) adds a
-  host IP; MicroK8s `apiserver-kicker` then regenerates certs and restarts kubelite and containerd,
-  killing every pod for ~40 s (2026-10-03 00:45). Use `--network host` or an existing network.
-- Capacity: node memory requests are 99% allocated; the root filesystem (hostpath PVCs, local
-  registry) is 98% full (7.7 GB free); the Clair database is 8 GB of the 10Gi postgres PVC.
+- Deployed: api/worker `10f6df7-1790990443` (phase 2: §12 provenance + §13 control evidence
+  engine, `extraCACerts`), ui `72a5e81-1790990739` (findings pagination). Migrations
+  `0001 -> 0002_provenance -> 0003_controls_engine` applied by the api `migrate` init container.
+  Limits unchanged: api 4Gi, worker 16Gi, Clair 8Gi.
+- Values (`deploy/grace/values.yaml`): provenance on with Helm releases and the Grafana compat
+  Service (allowed from `monitoring`, `observability`); keyless cosign identity for
+  `registry.k8s.io` (krel-trust / accounts.google.com); controls engine MODERATE with
+  `adminSubjectsAllowlist: [admin]`, master-realm creds from `keycloak/nebari-realm-admin-credentials`,
+  Loki/Prometheus/Alertmanager in `observability`. `extraCACerts.secretName: nebari-ca` (the
+  cert-manager `nebari-ca-secret` CA, created by `deploy.sh`) fixed the `artifacts.*.sslip.io`
+  x509 failure: `ray/ray-polars:2.56.0` now mirrors and scans with trivy, grype and Clair.
+- Scan #6 (manual, force, 2026-10-03 01:24:53-01:31:13 UTC, 6m20s): 79 images, 79 scored,
+  0 failed; trivy/grype/Clair 79/79 each (the six scan-#5 Clair 500s are gone). Cluster score
+  27.7, grade F (vulnerability 8.2, configuration 74.8, supply chain 27.3 F); findings
+  780 critical / 6,847 high / 12,403 medium / 3,536 low; posture checks 1,150 pass / 464 fail.
+- Provenance (scan #6): 16 signed, 5 verified (all `registry.k8s.io`), 8 with SBOM, 34 with SLSA
+  provenance, 57 with updates, 17 Helm releases (0 behind: no `chartRepos`, so "not checked"),
+  6 registry errors, all Docker Hub `429` (kiwigrid/k8s-sidecar, curlimages/curl:8.9.1,
+  bitnami/redis, busybox:1.36, bitnami/postgresql, aquasec/trivy:0.75.0). Docker Hub 429 also
+  failed the skopeo mirror for `rayproject/ray:2.56.0` and `bitnami/postgresql:latest`; both were
+  scanned from the original ref. Signed-but-unverified (11) is expected: those images are signed
+  with other keys/identities than the configured keyless identity.
+- Control evidence engine (MODERATE): 35 assertions, 19 pass / 15 fail / 1 unknown
+  (`k8s-api-audit-logging`, MicroK8s). Versus the dev-time table (18/16/1) the only change is
+  `kc-admin-role-allowlist` (now pass: `admin` is allowlisted). Controls: 20 implemented,
+  6 partial, 62 not implemented, 199 inherited of 287 (catalog view: 292 incl. 5 out-of-baseline,
+  2 of them unknown).
+- Compat API: `security-posture-web-internal:8080/api/reports/latest` returns their schema
+  (`metadata`, `images` 99 per-workload entries / 78 unique, `helmReleases` 17, `summary`) from
+  `monitoring` without auth; from `default` the connection times out (NetworkPolicy).
+- Reports (scan #6, via the gateway): the 6 auto-generated reports completed; OSCAL SSP (0.43 MB,
+  290 implemented-requirements) and component definition (9 components) validate against the
+  OSCAL 1.1.2 schemas with 0 errors; the compliance package (POA&M xlsx 132 s, STIG cklb 30 s,
+  SAR pdf 228 s, OSCAL AR 37 s, SSP 19 s, queued concurrently) completed with no api restart.
+- Known issues:
+  - Update check follows upstream Masterminds/semver ordering, so numeric non-release tags win
+    "newest available" (e.g. cert-manager v1.16.2 -> `608111629`, grafana -> `9799770991`,
+    postgres 16-alpine -> `18.6`); `latestInMajor` is sane. These images are counted as
+    major-update-available; consider ignoring tags whose major is far above the current one.
+  - The image list and the Supply chain page include 7 images no longer running (old
+    `localhost:32000/security-posture-*` tags, no provenance): "74 of 86 images" there vs 79
+    in the scan.
+  - Docker Hub unauthenticated pull limits (see above); `registryAuth.existingSecret` would fix it.
+- Grace hazard: creating or removing a docker network adds/removes a host IP; MicroK8s
+  `apiserver-kicker` then regenerates certs and restarts kubelite and containerd, killing every
+  pod for ~40 s (2026-10-03 00:45). Use `--network host`; leave `sp-shots` alone.
+- Capacity: node memory requests are ~99% allocated; root filesystem 46 GB free (88%) after pruning superseded local images.

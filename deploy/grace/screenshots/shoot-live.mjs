@@ -7,14 +7,25 @@ import { chromium } from 'playwright';
 const BASE = process.env.BASE_URL ?? 'https://security.100-89-230-107.sslip.io';
 const OUT = process.env.OUT_DIR ?? '/out';
 const IMAGE_ID = process.env.IMAGE_ID ?? '28';
-const PAGES = [
+const SC_IMAGE_ID = process.env.SC_IMAGE_ID ?? IMAGE_ID;
+const CONTROL = process.env.CONTROL ?? 'AC-3';
+const ONLY = (process.env.ONLY ?? '').split(',').filter(Boolean);
+const ALL_PAGES = [
   { name: 'overview', path: '/', ready: 'table[aria-label="Top 10 riskiest images"] tbody tr' },
   { name: 'images', path: '/images', ready: 'table[aria-label="Images"] tbody tr:nth-child(10)' },
   { name: 'image-detail', path: `/images/${IMAGE_ID}`, ready: 'table[aria-label="Findings"] tbody tr' },
   { name: 'compliance', path: '/compliance', ready: 'main table tbody tr' },
   { name: 'reports', path: '/reports', ready: 'main table tbody tr' },
   { name: 'scans', path: '/scans', ready: 'main table tbody tr' },
+  { name: 'supply-chain', path: '/supply-chain', ready: 'table[aria-label="Unsigned images"] tbody tr' },
+  { name: 'compliance-controls', path: '/compliance', ready: 'table[aria-label="Control catalog"] tbody tr',
+    action: async (page) => {
+      await page.click(`button[aria-label="Show evidence for ${CONTROL}"]`);
+      await page.waitForSelector(`ul[aria-label="Assertions for ${CONTROL}"]`, { timeout: 15000 });
+    } },
+  { name: 'image-supply-chain', path: `/images/${SC_IMAGE_ID}?tab=supply-chain`, ready: 'table[aria-label="Supply-chain score deductions"], [aria-label^="supply-chain grade"]' },
 ];
+const PAGES = ONLY.length ? ALL_PAGES.filter((p) => ONLY.includes(p.name)) : ALL_PAGES;
 const browser = await chromium.launch();
 const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1, colorScheme: 'light', reducedMotion: 'reduce' });
 await context.addInitScript(() => localStorage.setItem('nebari:themeMode', 'light'));
@@ -29,6 +40,7 @@ console.log('logged in at', page.url());
 for (const p of PAGES) {
   await page.goto(`${BASE}${p.path}`, { waitUntil: 'networkidle', timeout: 60000 });
   await page.waitForSelector(p.ready, { timeout: 30000 });
+  if (p.action) await p.action(page);
   await page.waitForTimeout(1200);
   const height = await page.evaluate(() => (document.querySelector('#main')?.scrollHeight ?? 1000) + 64);
   await page.setViewportSize({ width: 1440, height: Math.min(p.name === "image-detail" ? 2400 : 4000, Math.max(1000, height)) });
