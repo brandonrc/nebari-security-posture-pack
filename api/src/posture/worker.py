@@ -69,6 +69,7 @@ from .provenance import stage as provenance_stage
 from .scanners import ClairScanner, GrypeScanner, Scanner, ScanResult, TrivyScanner
 from .scanners.base import pack_raw_text, raw_summary
 from .admission import order_for_admission, probe_size
+from .rollup import write_vuln_rollup
 from .views import ACTIVE_SCAN_STATUSES  # queued, running, scanned, finalizing
 
 log = get_logger("posture.worker")
@@ -881,23 +882,33 @@ class Worker:
                                 "runningContainers": n.running_containers}} for n in namespaces]
             running_imgs = [by_id[i] for i in set(key_to_id.values()) if i in by_id and by_id[i].running]
             counts: dict[str, int] = {}
+            fixable: dict[str, int] = {}
             for im in running_imgs:
                 if im.score is None:
                     continue
                 for sev, n in (im.counts or {}).items():
                     counts[sev] = counts.get(sev, 0) + int(n)
+                for sev, n in (im.fixable or {}).items():
+                    fixable[sev] = fixable.get(sev, 0) + int(n)
+            # /summary reads these instead of recomputing over every image (architecture M4)
+            top = sorted((i for i in running_imgs if i.score is not None), key=lambda i: (i.score, -i.id))[:10]
+            top_risks = [{"imageId": i.id, "ref": i.ref, "score": i.score, "grade": i.grade,
+                          "critical": int((i.counts or {}).get("critical", 0) or 0),
+                          "high": int((i.counts or {}).get("high", 0) or 0), "workloads": i.workloads} for i in top]
             snaps.append({"scan_id": sid, "level": "cluster", "key": "", "score": cluster.score, "grade": cluster.grade,
                           "data": {"vulnScore": cluster.vuln_score, "postureScore": cluster.posture_score,
                                    "supplyChainScore": cluster.supply_chain_score,
                                    "workloads": cluster.workloads, "namespaces": cluster.namespaces,
                                    "containers": cluster.containers, "runningContainers": cluster.running_containers,
-                                   "counts": counts, "inventoryErrors": inv.errors}})
+                                   "counts": counts, "fixable": fixable, "topRisks": top_risks,
+                                   "inventoryErrors": inv.errors}})
             await s.execute(ScanSnapshot.__table__.insert(), snaps)
+            rolled = await write_vuln_rollup(s, sid)
             await s.execute(update(Scan).where(Scan.id == sid).values(
                 score=cluster.score, grade=cluster.grade, vuln_score=cluster.vuln_score,
                 posture_score=cluster.posture_score, inventory_complete=True))
         ctx.add_log(f"cluster score {cluster.score} ({cluster.grade}); {len(workloads)} workloads, "
-                    f"{len(namespaces)} namespaces, {len(results)} posture results")
+                    f"{len(namespaces)} namespaces, {len(results)} posture results, {rolled} vulnerabilities")
         await self._prune()
 
     async def _prune(self) -> None:

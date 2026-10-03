@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import app_settings
@@ -101,16 +101,94 @@ async def _image_or_404(session: AsyncSession, image_id: int) -> Image:
     return img
 
 
+UNPAGED_LIMIT = 500  # findings returned when the client sends no `page` (the UI before server paging)
+_SEV_RANK = case({s: severity_rank(s) for s in SEVERITIES}, value=ConsensusFindingRow.severity, else_=0)
+
+
+def _finding_order(sort: str, order: str) -> list[Any]:
+    c = ConsensusFindingRow
+    desc = order.lower() != "asc"
+    cols = {
+        "severity": [_SEV_RANK, func.coalesce(c.cvss, 0.0)],
+        "cvss": [func.coalesce(c.cvss, 0.0), _SEV_RANK],
+        "vulnId": [c.vuln_id],
+        "package": [c.package],
+        "agreement": [func.jsonb_array_length(c.scanners), _SEV_RANK],
+        "firstSeenAt": [c.first_seen_at],
+    }.get(sort) or [_SEV_RANK, func.coalesce(c.cvss, 0.0)]
+    out = [x.desc() if desc else x.asc() for x in cols]
+    # stable tie-break: vulnId asc, package asc (the old in-memory order)
+    return out + [c.vuln_id.asc(), c.package.asc(), c.id.asc()]
+
+
+async def findings_page(session: AsyncSession, img: Image, sla: dict[str, int], *, page: int | None,
+                        page_size: int, severity: str | None, q: str | None, fixable: bool | None,
+                        disagree: bool | None, sort: str, order: str) -> dict[str, Any]:
+    """Findings of one image filtered, sorted and paginated in SQL, plus a summary over the
+    filtered set (totals by severity, fixable, flagged by all scanners that succeeded)."""
+    c = ConsensusFindingRow
+    ok_scanners = sum(1 for r in (img.scanners or {}).values() if (r or {}).get("status") == "ok")
+    conds = [c.image_id == img.id]
+    if severity:
+        conds.append(c.severity.in_([x.strip().lower() for x in severity.split(",") if x.strip()] or ["-"]))
+    if q:
+        needle = "%" + q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        conds.append(or_(func.lower(c.vuln_id).like(needle, escape="\\"), func.lower(c.package).like(needle, escape="\\"),
+                         func.lower(func.coalesce(c.title, "")).like(needle, escape="\\")))
+    if fixable is not None:
+        conds.append(c.fixable.is_(fixable))
+    if disagree:
+        conds.append(func.jsonb_array_length(c.scanners) < ok_scanners)
+    all_agree = func.jsonb_array_length(c.scanners) >= ok_scanners
+    by_sev = dict((await session.execute(select(c.severity, func.count()).where(*conds).group_by(c.severity))).all())
+    agg = (await session.execute(select(
+        func.count(), func.count().filter(c.fixable.is_(True)),
+        func.count().filter(all_agree) if ok_scanners > 1 else func.sum(0),
+    ).where(*conds))).one()
+    filtered = int(agg[0] or 0)
+    image_total = filtered if len(conds) == 1 else (await session.scalar(
+        select(func.count()).select_from(c).where(c.image_id == img.id)) or 0)
+    stmt = select(c).where(*conds).order_by(*_finding_order(sort, order))
+    if page is None:
+        size, start = UNPAGED_LIMIT, 0
+    else:
+        size, start = page_size, (page - 1) * page_size
+    rows = (await session.execute(stmt.offset(start).limit(size))).scalars().all()
+    return {
+        "findings": [finding_dict(f, sla) for f in rows],
+        "findingsTotal": filtered,
+        "findingsPage": page or 1,
+        "findingsPageSize": size,
+        "truncated": page is None and filtered > UNPAGED_LIMIT,
+        "findingsSummary": {"total": image_total, "filtered": filtered,
+                            "bySeverity": {sev: int(by_sev.get(sev, 0)) for sev in SEVERITIES},
+                            "fixable": int(agg[1] or 0), "flaggedByAll": int(agg[2] or 0),
+                            "scannersOk": ok_scanners},
+    }
+
+
 @router.get("/images/{image_id}")
-async def get_image(image_id: int, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+async def get_image(
+    image_id: int,
+    page: int | None = Query(None, ge=1),
+    pageSize: int = Query(50, alias="pageSize"),  # noqa: N803
+    severity: str | None = None,
+    q: str | None = Query(None, max_length=200),
+    fixable: bool | None = None,
+    disagree: bool | None = None,
+    sort: str = "severity",
+    order: str = "desc",
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Image detail. Findings are paginated in SQL when `page` is given (`pageSize` default 50,
+    max 500); without `page` the first 500 come back with `truncated: true` when there are more
+    (the UI before server-side paging; DECISIONS 2026-10-03)."""
     img = await _image_or_404(session, image_id)
     settings = await app_settings.load(session)
     sla = settings.remediation_sla_days.model_dump()
-    findings = (await session.execute(
-        select(ConsensusFindingRow).where(ConsensusFindingRow.image_id == image_id)
-    )).scalars().all()
-    fl = sorted((finding_dict(f, sla) for f in findings),
-                key=lambda f: (-severity_rank(f["severity"]), -(f["cvss"] or 0), f["vulnId"]))
+    _, page_size = page_params(page or 1, pageSize)
+    fpage = await findings_page(session, img, sla, page=page, page_size=page_size, severity=severity, q=q,
+                                fixable=fixable, disagree=disagree, sort=sort, order=order)
     latest = await latest_done_scan(session)
     used_by: list[dict[str, Any]] = []
     posture: list[dict[str, Any]] = []
@@ -144,7 +222,7 @@ async def get_image(image_id: int, session: AsyncSession = Depends(get_session))
     out = image_summary(img)
     out.update({
         "penalty": img.penalty,
-        "findings": fl,
+        **fpage,
         "usedBy": used_by,
         "scans": [image_scan_dict(r) for r in runs],
         "postureFindings": sorted(posture, key=lambda p: (p["status"] != "fail", -severity_rank(p["severity"]))),
