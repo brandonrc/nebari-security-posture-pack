@@ -45,6 +45,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 pythonpath = ["src"]
+# The Postgres scenario modules (test_integration, test_reports_api, ...) are ordered test_01..
+# steps sharing DB state: never shuffle (quality M3). See CONTRIBUTING.md.
+addopts = "-p no:randomly"
 markers = ["integration: needs Postgres via TEST_DATABASE_URL"]
 filterwarnings = ["ignore::DeprecationWarning:starlette.*", "ignore:Using `httpx` with `starlette.testclient`"]
 
