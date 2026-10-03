@@ -229,6 +229,19 @@ class View:
         base = first_seen or self.scan.started_at or self.generated_at
         return base + timedelta(days=self.sla_days.get(severity, DEFAULT_SLA_DAYS["unknown"])) if base else None
 
+    def finding_due(self, f: SimpleNamespace) -> datetime | None:
+        """Due date of a finding: the severity SLA from first seen, or the CISA KEV due date when it is
+        earlier (BOD 22-01; option `kevDueDates`, default on)."""
+        due = self.sla_due(f.severity, f.first_seen_at)
+        kev = getattr(f, "kev_due", None)
+        if kev and self.options.get("kevDueDates", True) and (due is None or kev < due):
+            return kev
+        return due
+
+    def finding_overdue(self, f: SimpleNamespace) -> bool:
+        due = self.finding_due(f)
+        return bool(due and due < self.now)
+
     def overdue(self, severity: str, first_seen: datetime | None) -> bool:
         due = self.sla_due(severity, first_seen)
         return bool(due and due < self.now)
@@ -353,6 +366,15 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
 
             o.controls = vuln_controls(bool(o.fixable))
         o.first_seen_at = o.first_seen_at or scan.started_at or gen
+        if o.kev is None:  # S2: CISA KEV flag and due date
+            from .kev import lookup
+
+            e = lookup(o.vuln_id) if str(o.vuln_id).upper().startswith("CVE-") else None
+            o.kev = e is not None
+            if e and e.due and not o.kev_due:
+                o.kev_due = datetime(e.due.year, e.due.month, e.due.day, tzinfo=timezone.utc)
+        else:
+            o.kev = bool(o.kev)
         findings.append(o)
 
     workloads = [_ns(w, {"namespace": "", "kind": "", "name": "", "pack": None, "score": None, "grade": "?",

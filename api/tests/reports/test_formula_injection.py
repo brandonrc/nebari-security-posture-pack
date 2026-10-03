@@ -64,4 +64,5 @@ def test_csv_reports_neutralise_formulas(report, fmt):
 
 @pytest.mark.parametrize("report", ["poam", "inventory"])
 def test_xlsx_reports_neutralise_formulas(report):
-    _assert_xlsx_clean(generate(report, "xlsx", _evil_snapshot(), {"now": NOW}).content)
+    # per-finding POA&M rows put the package name at the start of a cell (Vendor Dependent Product Name)
+    _assert_xlsx_clean(generate(report, "xlsx", _evil_snapshot(), {"now": NOW, "poamGranularity": "finding"}).content)

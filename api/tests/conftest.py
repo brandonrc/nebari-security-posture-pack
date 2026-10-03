@@ -7,6 +7,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # The worker runs the control evidence engine (DESIGN §13) after each scan; keep the shared harness
 # hermetic (no live cluster / Keycloak). tests/controls_engine enable it with fake clients.
 os.environ.setdefault("CONTROLS_ENGINE_ENABLED", "false")
+# The CISA KEV catalog is read from the vendored snapshot in tests (no download).
+os.environ.setdefault("KEV_REFRESH", "false")
 # AUTH_MODE=disabled refuses to start without POSTURE_DEV=1 (security review L4); the harness is dev.
 os.environ.setdefault("POSTURE_DEV", "1")
 

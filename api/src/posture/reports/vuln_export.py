@@ -17,7 +17,7 @@ CSV_COLUMNS = [
     "Image Reference", "Image Digest", "Namespaces", "Workloads", "Vulnerability ID", "Package",
     "Installed Version", "Fixed Version", "Package Type", "Consensus Severity", "Trivy Severity",
     "Grype Severity", "Clair Severity", "Scanners", "Agreement", "CVSS", "Fixable", "Title", "URL",
-    "NIST 800-53 Controls", "First Seen", "SLA Due", "Overdue", "Status",
+    "NIST 800-53 Controls", "First Seen", "SLA Due", "Overdue", "Status", "KEV", "KEV Due Date",
 ]
 CDX_SEVERITY = {"critical": "critical", "high": "high", "medium": "medium", "low": "low",
                 "negligible": "info", "unknown": "unknown"}
@@ -50,8 +50,10 @@ def _records(v: View) -> list[dict[str, Any]]:
             "controls": list(f.controls),
             "firstSeenAt": iso(f.first_seen_at),
             "slaDueAt": iso(due),
-            "overdue": f.status == "open" and v.overdue(f.severity, f.first_seen_at),
+            "overdue": f.status == "open" and v.finding_overdue(f),
             "status": f.status,
+            "kev": bool(f.kev),
+            "kevDueAt": iso(f.kev_due) if f.kev_due else None,
         })
     return out
 
@@ -68,6 +70,7 @@ def _csv(v: View) -> bytes:
             "" if r["agreement"] is None else round(r["agreement"], 3), "" if r["cvss"] is None else r["cvss"],
             "Yes" if r["fixable"] else "No", r["title"], r["url"], "; ".join(r["controls"]),
             r["firstSeenAt"][:10], r["slaDueAt"][:10], "Yes" if r["overdue"] else "No", r["status"],
+            "Yes" if r["kev"] else "No", (r["kevDueAt"] or "")[:10],
         ]))
     return buf.getvalue().encode("utf-8-sig")
 

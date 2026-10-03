@@ -37,10 +37,12 @@ REPORT_TYPES: list[dict[str, Any]] = [
         "title": "Plan of Action & Milestones (POA&M)",
         "formats": ["xlsx", "csv"],
         "scopes": SCOPES,
-        "options": ["rollupByCve", "systemName", "includeSystemNamespaces", "poamVariant"],
-        "description": "eMASS POA&M import layout: one row per consensus finding per image (or per CVE with "
-                       "rollupByCve) plus one row per failing posture check and per failing control assertion, "
-                       "with the primary in-baseline NIST 800-53 control and an SLA-based scheduled completion date.",
+        "options": ["poamGranularity", "rollupByCve", "systemName", "includeSystemNamespaces", "poamVariant",
+                    "emassProfile", "baseline", "kevDueDates", "requireOrganization"],
+        "description": "eMASS POA&M import layout: by default one item per image repository (the remediation unit; "
+                       "poamGranularity cve / finding for finer rows) plus one per failing posture check and per "
+                       "failing control assertion, with the primary in-baseline NIST 800-53 control, a stable "
+                       "External UID, KEV flag / due date and an SLA- or KEV-based scheduled completion date.",
     },
     {
         "type": "stig-checklist",

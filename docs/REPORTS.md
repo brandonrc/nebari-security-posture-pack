@@ -20,7 +20,8 @@ workload scope) by `api/src/posture/reports/` and downloaded from the **Reports*
 |---|---|---|---|
 | POA&M | xlsx, csv | Step 5 (Authorize) and Step 6 (Monitor): weaknesses with milestones and scheduled completion dates | eMASS **POA&M import** (paste into your system's template), or the FedRAMP-style POA&M |
 | STIG checklist | ckl, cklb | Step 4 (Assess): STIG compliance evidence for the Kubernetes platform | **STIG Viewer** 2.x (.ckl) / 3.x (.cklb), **STIG Manager**, eMASS checklist import |
-| SAR | pdf, html | Step 4 (Assess): narrative assessment results for the AO package | Uploaded to eMASS as an **artifact**, or given to the SCA as input for their SAR |
+| Assessment summary (`sar`) | pdf, html | Step 4 (Assess): **input** to the SCA's Security Assessment Report (the SAR is the SCA's deliverable, SP 800-37 task A-4) | Given to the SCA; uploaded to eMASS as a supporting artifact |
+| CRM (`crm`) | xlsx, csv | Steps 2-3: draft Customer Responsibility Matrix for programs on the platform | Programs' SSPs / eMASS inheritance planning |
 | OSCAL AR | json | Steps 4 and 6, machine-readable | GRC / cATO tooling that ingests NIST OSCAL |
 | Inventory | xlsx, csv | Steps 1-2: system component inventory (CM-8) | eMASS **Hardware/Software** list, asset spreadsheets |
 | Vuln export | csv, json, cyclonedx-vex | Step 6 (Monitor): continuous vulnerability data | ACAS/Nessus-style trackers, Iron Bank VAT justification sheets, VEX-aware tooling |
@@ -41,9 +42,14 @@ so that every completed scan produces fresh reports automatically.
 |---|---|---|---|
 | `systemName` | all | settings `systemName` | Name printed as the system / eMASS "System / Project Name" |
 | `includeSystemNamespaces` | all | `true` | Include `kube-system`, `kube-public`, `kube-node-lease`. Set `false` to report on tenant workloads only |
-| `rollupByCve` | poam | `false` | One POA&M item per CVE listing every affected image (instead of one per image x CVE x package) |
+| `poamGranularity` | poam | `repository` | `repository`: one item per image repository (the remediation unit), CVEs in Security Checks; `cve`: one item per CVE with Devices Affected; `finding`: one per image x CVE x package |
+| `rollupByCve` | poam | `false` | Alias of `poamGranularity: cve` |
 | `poamVariant` | poam csv | `emass` | Which column layout the CSV uses: `emass`, `generic`, `emass-legacy` (the xlsx contains all three) |
-| `includeSrg` | stig-checklist | `true` | Add the Container Platform SRG checklist next to the Kubernetes STIG |
+| `emassProfile` | poam | `generic` | eMASS template differences per component: `generic`, `navy` (CSSP Mitigations header), `army` (no Predisposing Conditions / Threat Description / Resulting Residual Risk), `marine-corps` (no Resulting Residual Risk) |
+| `baseline` | poam, oscal-ssp, crm | settings `controlsEngine.baseline` | Control set: POA&M rows keep only controls in it |
+| `kevDueDates` | poam, vuln-export | `true` | A CISA KEV due date earlier than the SLA date becomes the scheduled completion date |
+| `requireOrganization` | poam | `false` | Refuse to generate without settings `organization` (eMASS Office/Org); otherwise a loud warning |
+| `includeSrg` | stig-checklist | `false` | Add the complete Container Platform SRG checklist (all 188 rules; unevaluated ones Not_Reviewed) next to the Kubernetes STIG |
 
 Scope: `cluster` (everything), `namespace` (`name` = namespace), or `workload`
 (`name` = `<namespace>/<Kind>/<name>`, for example `dev/Deployment/hub`). Images,
@@ -54,8 +60,13 @@ File names follow `<system>[-<scope>]-<report>-scan<id>-<yyyymmdd>.<ext>`.
 ## Remediation SLA policy
 
 Scheduled completion dates come from the consensus severity and the date the finding
-was **first seen** by this tool. The day counts are set in **Settings**
-(`remediationSlaDays`):
+was **first seen** by this tool **on the image repository** (the clock keeps running across
+rebuilt or retagged digests that still carry the vulnerability). The day counts are set in
+**Settings** (`remediationSlaDays`). Provenance of the defaults: critical 15 / high 30 follow CISA
+BOD 19-02 (internet-facing), medium 90 / low 180 follow FedRAMP continuous monitoring (Moderate /
+Low). For DoD systems the binding dates come from **IAVM** (IAVA / IAVB compliance dates) and
+TASKORDs; for federal civilian systems **CISA KEV due dates** (BOD 22-01) override the severity
+SLA, which the POA&M applies by default (`kevDueDates`).
 
 | Severity | Default SLA |
 |---|---|
@@ -66,7 +77,7 @@ was **first seen** by this tool. The day counts are set in **Settings**
 | Negligible | 365 days |
 | Unknown | 180 days |
 
-`scheduled completion = firstSeenAt + SLA(severity)`. A finding is **overdue** when that
+`scheduled completion = min(firstSeenAt + SLA(severity), KEV due date)`. A finding is **overdue** when that
 date is in the past at report time. Overdue POA&M rows are shaded red in the xlsx and
 marked `OVERDUE.` in Comments. The SAR and `/summary` count them per severity.
 Posture (configuration) failures use the same table, based on the check's severity and
@@ -74,42 +85,52 @@ the earliest first-seen date among the failing workloads.
 
 ## NIST SP 800-53 control tagging
 
+Corrected per the compliance review (`docs/reviews/compliance-sme.md` M4):
+
 | Source | Controls |
 |---|---|
-| Any vulnerability finding | RA-5, SI-2 |
-| ... with a fixed version available | + SI-2(2) |
-| privileged, run-as-root, privilege-escalation, added-capabilities, capabilities-not-dropped | AC-6, CM-7 |
-| host-namespaces, host-path | SC-7, CM-7 |
-| writable-rootfs | CM-6, CM-7 |
-| no-resource-limits, no-resource-requests | SC-6 |
-| mutable-tag | CM-2, CM-14 |
-| no-liveness-probe, no-readiness-probe | SI-13 |
-| automount-sa-token | AC-6(10), IA-5 |
-| seccomp-unconfined | CM-6, SI-16 |
-| no-netpol | SC-7, AC-4 |
+| Any vulnerability finding | SI-2 (SI-2 c when past its SLA). RA-5 is the scanning control: findings evidence that it works, they are not weaknesses against it |
+| privileged, added-capabilities, capabilities-not-dropped | AC-6, CM-7, SC-39 |
+| run-as-root, privilege-escalation | AC-6, CM-7, SC-39, AC-6(8) (in no 800-53B baseline: dropped from the POA&M) |
+| host-namespaces, host-path | SC-39, AC-6, CM-7 |
+| writable-rootfs | CM-6, CM-7, SI-7 |
+| no-resource-limits, no-resource-requests | SC-5 |
+| mutable-tag | CM-2, SI-7 |
+| no-liveness-probe, no-readiness-probe | none: operational hygiene, no POA&M row |
+| automount-sa-token | AC-6, CM-7 |
+| seccomp-unconfined | CM-6, CM-7, SC-39 |
+| no-netpol | AC-4, SC-7 |
+| STIG-derived items | plus the rev5 controls of the rule's DISA CCIs (vendored DISA CCI list), e.g. CCI-001090 -> SC-4 |
 
-The mapping is stored in `api/src/posture/reports/data/controls.yaml`. The report
-generators read that file, so a change there updates the API, the UI and every report.
+The mapping is stored in `api/src/posture/reports/data/controls.yaml`, the single source for the
+API, the UI and every report. The POA&M keeps only controls of the selected baseline (eMASS
+imports items only against controls in the system's control set): the first in-baseline control
+goes into **Controls / APs**, items without any are dropped and the Info sheet counts what was
+dropped.
 
 ## POA&M (`poam`)
 
 ### Granularity
 
-- **Vulnerabilities:** by default, one item per *(image digest, vulnerability ID, package)*
-  consensus finding. With `rollupByCve`, one item per vulnerability ID. Devices Affected
-  then lists every image (`ref@sha256:digest`) and the workloads that use them. Rolled-up
-  items take the highest severity, the earliest first-seen date and the union of
-  controls.
-- **Configuration:** one item per failing posture check, listing every failing
-  workload/container. Its Security Checks value is the check ID plus the DISA rule IDs it
-  maps to.
+- **Vulnerabilities, default `repository`:** one item per image repository, the unit you rebuild.
+  Security Checks lists its vulnerability IDs (KEV first, then by severity; capped, the full list
+  is in `vuln-export`), Devices Affected lists every digest and the workloads using them, the
+  scheduled date is the earliest due date of its findings. `cve` gives one item per vulnerability
+  ID (closest to ACAS plugin-based POA&Ms); `finding` one per image x CVE x package.
+- **Configuration:** one item per failing posture check with a control. Security Checks cites only
+  the STIG / SRG rules the checklist marks **Open**, with their CCIs.
+- **Control assertions:** one item per failing assertion of the same control evidence run as the
+  SSP (`SP-CTL-<id>`).
 - Only `open` findings are included. Items are sorted most severe first, then by due date.
+- **External UID** (`SP-REPO-…`, `SP-CVE-…`, `SP-CFG-<check>`, `SP-CTL-<assertion>`) is stable
+  across regenerations. Use it to match items on re-import (or as the eMASS REST API
+  `externalUid`), so a new scan does not create duplicates.
 
 ### Workbook layout (xlsx)
 
 | Sheet | Purpose |
 |---|---|
-| `eMASS` | Current eMASS POA&M import columns (32 columns, eMASS 5.x Navy / Marine Corps layout) |
+| `eMASS` | Current eMASS POA&M import columns (32 columns; header per `emassProfile`), then the tool columns External UID, KEV, KEV Due Date, IAVM ID |
 | `POA&M` | Widely published generic POA&M columns (FedRAMP-style, 27 columns) |
 | `eMASS (legacy)` | Pre-5.x DoD POA&M template columns |
 | `Info` | System, scan, scope, counts, SLA table, notes |
@@ -124,9 +145,10 @@ external tool can reproduce. Follow these steps:
    header row, keeping the same column order.
 3. Complete the risk-analysis columns (see below) and import.
 
-`POA&M Item ID` is left blank so that eMASS assigns IDs. Our stable ID (for example
-`SP-CVE-2024-6387-1a2b3c4d`) is in **Comments**, so you can match rows on later imports
-and avoid duplicates. Each row is also a single milestone. To add more milestones, add
+`POA&M Item ID` is left blank so that eMASS assigns IDs. Our stable ID is in the trailing
+**External UID** column (and in Comments): drop the tool columns when pasting into the template
+and keep the workbook to match items on later imports, or use the eMASS REST API with
+`externalUid` for create / update / close. Each row is also a single milestone. To add more milestones, add
 rows with the item-level columns repeated, which is the same convention eMASS exports
 use.
 
@@ -142,25 +164,28 @@ column. Delete those columns before pasting if your template does not have them.
 |---|---|
 | POA&M Item ID | blank (eMASS assigns) |
 | Control Vulnerability Description | Title, description, affected packages (`pkg installed (fixed in X)`), advisory URL. For configuration items: check title, failing workload count, details |
-| Controls / APs | Primary control: `RA-5` for vulnerabilities, the first mapped control for configuration items (for example `AC-6`). Other controls are listed in Comments |
-| Security Checks | Vulnerability ID (CVE/GHSA), or `check-id, V-xxxxxx, ...` for configuration items |
+| Controls / APs | Primary in-baseline control: `SI-2` for vulnerabilities, the first in-baseline mapped control for configuration items (for example `AC-6`). Other controls are listed in Comments |
+| Security Checks | Vulnerability IDs of the item (repository granularity: the list, KEV first), or the Open STIG rules with their CCIs (`V-233127 (CCI-001090); ...`) for configuration items |
 | POA&M Status | `Ongoing` |
 | POA&M Scheduled Completion Date | first seen + SLA (MM/DD/YYYY) |
 | POA&M Requested Risk Accepted Expiration Date, POA&M Completion Date | blank |
 | Milestone ID | `1` |
 | Milestone Description | "Rebuild image(s) with fixed package, redeploy and confirm by rescan by <date>". Vulnerabilities with no fix get "Monitor vendor ... or request risk acceptance". Configuration items get "Remediate workload configuration ..." |
 | Milestone Status | `Pending` |
+| Milestone Status Comments | Overdue items: `OVERDUE: scheduled completion … has passed. ISSO action: record a milestone change …` (many eMASS instances reject a past date on a new item) |
 | Milestone Scheduled Completion Date | same as the scheduled completion date |
 | Identification Source | `Vulnerability scan - Nebari Security Posture Pack (Trivy x; Grype y; Clair z)`. Configuration items use the STIG/SRG title and release (`Container Platform Security Requirements Guide :: Version 2, Release: 4 ...`) |
 | Identification Source Details | Scanner names and versions that reported the finding |
-| Office/Org | Settings `organization`, POC name, POC email |
-| Resources Required | `Existing O&M staff; no additional funding required.` (fixable) / `Vendor fix required.` |
+| Office/Org | Settings `organization`, POC name, POC email. Required by eMASS: an empty value is warned about in the Info sheet and the log (`requireOrganization` refuses) |
+| Resources Required | `Default (confirm with the program): existing O&M staff; no additional funding identified.` / `... vendor fix required.` |
 | Comments | Stable ID, scanner agreement (`3/3 scanners (trivy=high, grype=high, clair=medium)`), CVSS, single-scanner warning, SLA basis, `OVERDUE.`, additional controls |
-| Raw Severity, Severity | critical: Very High, high: High, medium: Moderate, low: Low, negligible: Very Low |
+| Raw Severity | critical: Very High, high: High, medium: Moderate, low: Low, negligible: Very Low (consensus severity, unassessed) |
+| Severity | blank: the assessed severity after mitigations and threat relevance is the ISSO's |
 | Devices Affected | Image `ref@digest` list plus `Used by:` workloads (configuration items list `ns/Kind/name [container]`) |
-| Mitigations (in-house and in conjunction with the Navy CSSP) | Upgrade instructions (`pkg installed -> fixed`) or "No vendor fix available" |
-| Impact Description | Generic statement of what is exposed |
-| Recommendations | Overall remediation plan |
+| Mitigations (`navy` profile: "Mitigations (in-house and in conjunction with the Navy CSSP)") | blank: compensating measures already in place, completed by the ISSO. The fix is **not** a mitigation |
+| Impact Description | blank (no boilerplate) |
+| Recommendations, Milestone Description | The fix / remediation plan with its target date |
+| External UID, KEV, KEV Due Date, IAVM ID | Tool columns after the template: stable id, CISA KEV flag and due date, IAVM ID left blank (not available from the scanners) |
 | Predisposing Conditions, Relevance of Threat, Threat Description, Likelihood, Impact, Residual Risk Level, Resulting Residual Risk after Proposed Mitigations | **blank: the ISSO must complete these.** The tool cannot judge threat or residual risk |
 
 ### `POA&M` (generic) sheet mapping
@@ -172,7 +197,7 @@ column. Delete those columns before pasting if your template does not have them.
 | Weakness Name | `CVE-x (packages)` / `Configuration: <check title>` |
 | Weakness Description | as eMASS *Control Vulnerability Description* |
 | Weakness Detector Source | Scanner names and versions that reported it, or `Nebari Security Posture Pack posture check <id>` |
-| Weakness Source Identifier | Vulnerability ID, or check ID plus STIG IDs |
+| Weakness Source Identifier | as eMASS Security Checks |
 | Asset Identifier | Image `ref@digest` list plus workloads |
 | Point of Contact | POC name/email (falls back to the organization) |
 | Resources Required | as above |
@@ -188,7 +213,9 @@ column. Delete those columns before pasting if your template does not have them.
 | Original Risk Rating | critical/high: High, medium: Moderate, low/negligible/unknown: Low |
 | Adjusted Risk Rating, Deviation Rationale | blank |
 | Risk Adjustment, False Positive, Operational Requirement, Auto-Approve | `No` |
-| Supporting Documents | `Nebari Security Posture Pack scan <id> (SAR / vuln-export)` |
+| Supporting Documents | `Nebari Security Posture Pack scan <id> / control evidence run <id> (assessment summary / vuln-export)` |
+| Milestone Changes | Overdue items: the milestone-change flag |
+| External UID, KEV, KEV Due Date, IAVM ID | as in the eMASS sheet |
 | Comments | as eMASS Comments |
 
 ### `eMASS (legacy)` sheet
@@ -201,8 +228,9 @@ These are the older DoD template columns (`Control Vulnerability Description`,
 `Severity`, `Relevance of Threat`, `Threat Description`, `Likelihood`, `Impact`,
 `Impact Description`, `Residual Risk Level`, `Recommendations`,
 `Resulting Residual Risk after Proposed Mitigations`). Values match the sheets above,
-with two differences: **Raw Severity / Severity are CAT levels** (critical/high: `I`,
-medium: `II`, low/negligible: `III`), and **Security Control Number** lists every control.
+with two differences: **Raw Severity is a CAT level** (critical/high: `I`, medium: `II`,
+low/negligible: `III`; Severity is left for the ISSO), and **Security Control Number** lists
+every in-baseline control.
 
 ## STIG checklist (`stig-checklist`)
 
