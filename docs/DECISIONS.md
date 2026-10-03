@@ -116,7 +116,8 @@
   27.7, grade F (vulnerability 8.2, configuration 74.8, supply chain 27.3 F); findings
   780 critical / 6,847 high / 12,403 medium / 3,536 low; posture checks 1,150 pass / 464 fail.
 - Provenance (scan #6): 16 signed, 5 verified (all `registry.k8s.io`), 8 with SBOM, 34 with SLSA
-  provenance, 57 with updates, 17 Helm releases (0 behind: no `chartRepos`, so "not checked"),
+  provenance, 57 with updates, 17 Helm releases (0 behind: no `chartRepos`, so "not checked";
+  `deploy/grace/values.yaml` now lists them, verified against the live repos, not deployed yet),
   6 registry errors, all Docker Hub `429` (kiwigrid/k8s-sidecar, curlimages/curl:8.9.1,
   bitnami/redis, busybox:1.36, bitnami/postgresql, aquasec/trivy:0.75.0). Docker Hub 429 also
   failed the skopeo mirror for `rayproject/ray:2.56.0` and `bitnami/postgresql:latest`; both were

@@ -108,6 +108,23 @@ provenance:
     certificateOidcIssuerRegexp: '^https://accounts\.google\.com$'
   helmReleases:
     enabled: true
+    # Chart update check (PROVENANCE.md): first source that knows the chart wins,
+    # so the index.yaml repos go first and the OCI prefixes (one tag list per
+    # chart, `<prefix>/<chart>`) last, quay before Docker Hub. Covers grace's
+    # releases (helm list -A, 2026-10-03):
+    chartRepos:
+      - https://charts.jetstack.io                           # cert-manager
+      - https://prometheus-community.github.io/helm-charts   # kube-prometheus-stack
+      - https://grafana.github.io/helm-charts                # loki-stack, tempo
+      - https://ray-project.github.io/kuberay-helm           # kuberay-operator
+      - https://helm.dask.org                                # dask-kubernetes-operator
+      - https://codecentric.github.io/helm-charts            # keycloakx
+      - oci://quay.io/nebari/charts                          # nebari-*-pack, nebari-landing
+      - oci://docker.io/envoyproxy                           # gateway-helm (eg)
+    # Not listed: no grace release uses a bitnami or metallb chart (MetalLB is
+    # the MicroK8s addon); artifact-keeper, bifrost, checkmaite, dask-gateway-pack
+    # and security-posture are installed from local chart directories and are
+    # not in any of these repos, so they stay "not checked".
   compat:
     internalService:
       enabled: true
