@@ -22,7 +22,7 @@ import httpx
 import yaml
 
 from ..logs import get_logger
-from .updates import UpdateInfo, compute_update, needs_tag_list
+from .updates import DEFAULT_MAX_MAJOR_JUMP, UpdateInfo, compute_update, needs_tag_list
 
 log = get_logger(__name__)
 
@@ -214,7 +214,8 @@ class ChartRepos:
 
 
 async def check_chart_updates(releases: list[HelmRelease], repos: ChartRepos, *, skip_prerelease: bool,
-                              update_level: str, registry=None) -> None:
+                              update_level: str, registry=None,
+                              max_major_jump: int = DEFAULT_MAX_MAJOR_JUMP) -> None:
     """Fill `update` for releases whose chart is found in a configured repo. Like the
     images, `update` is only kept when an update is flagged (their omitempty usage)."""
     for rel in releases:
@@ -223,6 +224,7 @@ async def check_chart_updates(releases: list[HelmRelease], repos: ChartRepos, *,
         available, source = await repos.versions(rel.chart, registry)
         if available is None:
             continue
-        info = compute_update(rel.version, available, skip_prerelease=skip_prerelease, update_level=update_level)
+        info = compute_update(rel.version, available, skip_prerelease=skip_prerelease, update_level=update_level,
+                              max_major_jump=max_major_jump)
         rel.chart_source = source
         rel.update = info if info.update_available else None

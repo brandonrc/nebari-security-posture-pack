@@ -138,7 +138,8 @@
   - Update check follows upstream Masterminds/semver ordering, so numeric non-release tags win
     "newest available" (e.g. cert-manager v1.16.2 -> `608111629`, grafana -> `9799770991`,
     postgres 16-alpine -> `18.6`); `latestInMajor` is sane. These images are counted as
-    major-update-available; consider ignoring tags whose major is far above the current one.
+    major-update-available. Fixed in master (candidate filter, see the 2026-10-03 update-check
+    entry below); not deployed yet.
   - The image list and the Supply chain page include 7 images no longer running (old
     `localhost:32000/security-posture-*` tags, no provenance): "74 of 86 images" there vs 79
     in the scan.
@@ -147,3 +148,12 @@
   `apiserver-kicker` then regenerates certs and restarts kubelite and containerd, killing every
   pod for ~40 s (2026-10-03 00:45). Use `--network host`; leave `sp-shots` alone.
 - Capacity: node memory requests are ~99% allocated; root filesystem 46 GB free (88%) after pruning superseded local images.
+- 2026-10-03 (provenance, deviation from provenance-collector-pack): update candidates are
+  filtered before the Masterminds/semver ordering. Only version-like tags count (optional `v`,
+  2-3 numeric components, 4th tolerated, optional suffix; no bare integers, no MAJOR over 4
+  digits, no dates unless the current tag is a date), candidates more than
+  `provenance.maxMajorJump` (50, `PROVENANCE_MAX_MAJOR_JUMP`) majors above the current one are
+  ignored, and a candidate must carry the current tag's variant suffix shape (`-alpine`,
+  `-py3.12`, ...); real prereleases (rc/beta/dev/...) still follow `skipPrerelease`. Reason:
+  upstream's ordering made CI build-number tags (`608111629`) the newest version and suggested
+  other image variants, which charged a wrong major-update penalty. Details in PROVENANCE.md.

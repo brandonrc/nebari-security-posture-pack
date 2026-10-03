@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     provenance_check_updates: bool = True
     provenance_skip_prerelease: bool = True
     provenance_update_level: str = "patch"  # patch | minor | major
+    provenance_max_major_jump: int = 50  # ignore update candidates whose MAJOR is this far above current; 0 = off
     provenance_helm_enabled: bool = True  # needs cluster-wide secrets list (chart: provenance.helmReleases.enabled)
     provenance_helm_chart_repos: CsvList = []  # https://.../ (index.yaml) or oci://host/path
     provenance_recheck_hours: float = 24  # reuse signature/SBOM/provenance results per digest

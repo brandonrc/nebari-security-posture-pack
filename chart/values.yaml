@@ -214,6 +214,11 @@ provenance:
   updateLevel: patch
   # Ignore alpha/beta/rc tags when looking for updates.
   skipPrerelease: true
+  # Ignore update candidates whose major version is more than this far above
+  # the running one (CI build numbers published as tags); 0 disables the guard.
+  # Candidates must also be version-like (x.y[.z], no bare integers / dates)
+  # and share the current tag's variant suffix (-alpine, -py3.12, ...).
+  maxMajorJump: 50
   # Reuse a digest's signature / SBOM / provenance results for this long
   # (tags are re-listed every scan).
   recheckHours: 24

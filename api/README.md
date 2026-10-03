@@ -98,6 +98,7 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `PROVENANCE_COSIGN_PUBLIC_KEY` | empty | both | PEM text, file path or KMS/remote URI for `cosign verify --key`; empty = existence check only |
 | `PROVENANCE_COSIGN_CERTIFICATE_IDENTITY_REGEXP` / `..._OIDC_ISSUER_REGEXP` | empty | both | keyless verification (both required) |
 | `PROVENANCE_UPDATE_LEVEL` / `PROVENANCE_SKIP_PRERELEASE` | `patch` / `true` | both | update check (provenance-collector-pack semantics) |
+| `PROVENANCE_MAX_MAJOR_JUMP` | `50` | worker | update candidates more than this many majors above the current tag are ignored; `0` = off (docs/PROVENANCE.md) |
 | `PROVENANCE_HELM_ENABLED` | `true` | both | Helm release discovery from `sh.helm.release.v1.*` Secrets (needs secrets list RBAC; chart default off) |
 | `PROVENANCE_HELM_CHART_REPOS` | empty | worker | `https://…` index.yaml repos / `oci://host/path` prefixes for chart update checks |
 | `PROVENANCE_RECHECK_HOURS` | `24` | both | reuse a digest's signature/SBOM/provenance results |

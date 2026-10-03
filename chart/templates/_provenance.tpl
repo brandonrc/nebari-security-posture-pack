@@ -24,6 +24,8 @@ compat listener) and worker (checks). Keys: values.yaml `provenance:`.
   value: {{ $p.updateLevel | quote }}
 - name: PROVENANCE_SKIP_PRERELEASE
   value: {{ $p.skipPrerelease | quote }}
+- name: PROVENANCE_MAX_MAJOR_JUMP
+  value: {{ ternary $p.maxMajorJump 50 (hasKey $p "maxMajorJump") | quote }}
 - name: PROVENANCE_RECHECK_HOURS
   value: {{ $p.recheckHours | quote }}
 - name: PROVENANCE_CONCURRENCY

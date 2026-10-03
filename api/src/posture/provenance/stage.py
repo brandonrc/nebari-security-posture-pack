@@ -281,7 +281,8 @@ class ProvenanceStage:
                     if available is None:
                         continue
                     info = compute_update(tag, available, skip_prerelease=ps.skip_prerelease,
-                                          update_level=ps.update_level)
+                                          update_level=ps.update_level,
+                                          max_major_jump=self.env.provenance_max_major_jump)
                 else:
                     info = compute_update(tag, None)
                 updates[tag] = info.as_json()
@@ -308,7 +309,8 @@ class ProvenanceStage:
         if ps.check_updates and self.env.provenance_helm_chart_repos:
             await helm_mod.check_chart_updates(
                 releases, helm_mod.ChartRepos(list(self.env.provenance_helm_chart_repos)),
-                skip_prerelease=ps.skip_prerelease, update_level=ps.update_level, registry=reg)
+                skip_prerelease=ps.skip_prerelease, update_level=ps.update_level, registry=reg,
+                max_major_jump=self.env.provenance_max_major_jump)
         return releases, errors
 
     async def _persist(self, scan_id: int, outcomes: list[ImageOutcome], mutable: dict[int, bool],

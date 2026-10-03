@@ -119,3 +119,98 @@ def test_v_prefix_original_is_reported():
 def test_update_info_roundtrip():
     j = {"currentTag": "1.0", "latestInMajor": "1.1", "updateAvailable": True}
     assert UpdateInfo.from_json(j).as_json() == j and UpdateInfo.from_json(None) is None
+
+
+# --- candidate filter: our deviation from upstream (docs/PROVENANCE.md, DECISIONS 2026-10-03) ---
+
+from posture.provenance.updates import candidate_version, is_version_like, suffix_shape  # noqa: E402
+
+
+@pytest.mark.parametrize("tag,ok", [
+    ("1.2", True), ("v1.16.2", True), ("1.2.3", True), ("1.2.3.4", True), ("16.6-alpine", True),
+    ("2024.5.0-py3.12", True), ("1.0.0+build.5", True), ("2.57.0", True), ("v1.17.0-alpha.0", True),
+    ("16", False), ("v1", False), ("608111629", False), ("9799770991", False), ("20240115", False),
+    ("2024-01-15", False), ("2024.01.15", False), ("10000.0.0", False), ("1.2.3.4.5", False),
+    ("2.10.0.d5b5a1-py38", False), ("latest", False), ("nightly", False), ("16-alpine", False),
+])
+def test_is_version_like(tag, ok):
+    assert is_version_like(tag) is ok
+
+
+def test_fourth_component_orders():
+    assert candidate_version("1.2.3.4") > candidate_version("1.2.3.3") > candidate_version("1.2.3")
+    assert compute_update("1.2.3.1", ["1.2.3.1", "1.2.3.2"]).latest_in_major == "1.2.3.2"
+
+
+def test_suffix_shape():
+    assert suffix_shape("alpine3.20") == "alpine#.#" and suffix_shape("py3.12") == "py#.#"
+
+
+def test_cert_manager_build_number_tags_ignored():
+    tags = ["v1.16.1", "v1.16.2", "v1.16.3", "v1.17.0", "v1.19.1", "v1.20.0-alpha.0", "608111629", "1234567"]
+    info = compute_update("v1.16.2", tags)
+    assert info.latest_in_major == "v1.19.1" and info.newest_available == "v1.19.1"
+    assert info.update_available and not info.major_behind
+
+
+def test_grafana_build_number_and_variant_tags_ignored():
+    tags = ["12.1.0", "12.1.1", "12.2.0", "9799770991", "12.2.0-17142428006", "12.2.0-ubuntu", "main",
+            "nightly", "12.3.0-security-01"]
+    info = compute_update("12.1.1", tags)
+    assert info.as_json() == {"currentTag": "12.1.1", "latestInMajor": "12.2.0", "newestAvailable": "12.2.0",
+                              "updateAvailable": True}
+    assert not info.major_behind
+
+
+def test_only_build_numbers_newer_means_up_to_date():
+    info = compute_update("v1.16.2", ["v1.16.2", "608111629", "20240115", "2024-01-15"])
+    assert info == UpdateInfo("v1.16.2", "", "", False)
+
+
+def test_major_jump_guard_is_configurable():
+    tags = ["2.57.0", "99.0.0"]
+    assert compute_update("2.57.0", tags).newest_available == ""
+    assert compute_update("2.57.0", tags, max_major_jump=0).newest_available == "99.0.0"
+    assert compute_update("2.57.0", ["30.0.0"], max_major_jump=50).newest_available == "30.0.0"
+
+
+def test_postgres_alpine_only_suggests_alpine():
+    tags = ["16", "16.4", "16.6", "16-alpine", "16.4-alpine", "16.6-alpine", "16.6-alpine3.21", "16.6-bookworm",
+            "17.2-alpine", "18.6", "18.0-alpine3.22", "18rc1-alpine", "18.0-rc1-alpine", "alpine", "latest"]
+    info = compute_update("16-alpine", tags)
+    assert info.latest_in_major == "16.6-alpine"
+    assert info.newest_available == "17.2-alpine"
+    assert info.update_available and info.major_behind
+    info = compute_update("16.4-alpine3.21", tags)
+    assert info.latest_in_major == "16.6-alpine3.21" and info.newest_available == "18.0-alpine3.22"
+
+
+def test_plain_tag_never_suggests_variant():
+    info = compute_update("16.4", ["16.4", "16.6-alpine", "16.5", "17.0-bookworm"])
+    assert info.latest_in_major == "16.5" and info.newest_available == "16.5"
+
+
+def test_ray_style_tags():
+    tags = ["2.56.0", "2.57.0", "2.57.1", "2.57.1-py312", "2.57.1-gpu", "2.58.0-py312-cu128", "2.58.0rc0",
+            "2.59.0.d5b5a1-py310", "nightly", "nightly-py312", "a1b2c3-py39", "2.58.0-rc0"]
+    assert compute_update("2.57.0", tags).as_json() == {
+        "currentTag": "2.57.0", "latestInMajor": "2.57.1", "newestAvailable": "2.57.1", "updateAvailable": True}
+    info = compute_update("2.57.0-py312", tags)
+    assert info.latest_in_major == "2.57.1-py312" and info.newest_available == "2.57.1-py312"
+
+
+def test_jupyterhub_style_dev_builds_are_prereleases():
+    tags = ["4.0.0", "4.1.0", "4.2.0-0.dev.git.7001.h1a2b3c4", "4.2.0-beta.1", "5.0.0-0.dev.git.7100.habcdef0"]
+    info = compute_update("4.1.0", tags)
+    assert info == UpdateInfo("4.1.0", "", "", False)
+    info = compute_update("4.0.0", tags, skip_prerelease=False)
+    assert info.newest_available == "5.0.0-0.dev.git.7100.habcdef0"
+
+
+def test_python_variant_suffix():
+    tags = ["2024.5.0", "2024.5.0-py3.12", "2024.6.0-py3.12", "2024.6.0-py3.11", "2024.6.0"]
+    assert compute_update("2024.5.0-py3.12", tags).latest_in_major == "2024.6.0-py3.12"
+
+
+def test_date_calver_current_allows_date_candidates():
+    assert compute_update("2024.05.01", ["2024.05.01", "2024.10.15"]).latest_in_major == "2024.10.15"
