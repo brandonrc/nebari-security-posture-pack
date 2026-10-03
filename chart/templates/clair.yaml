@@ -85,6 +85,12 @@ spec:
               value: combo
             - name: CLAIR_CONF
               value: /etc/clair/config.yaml
+            {{- if .Values.extraCACerts.secretName }}
+            # Go replaces its default directories when SSL_CERT_DIR is set:
+            # keep them and add the extra CAs (the default bundle files stay).
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/certs:/etc/pki/tls/certs:/etc/posture/extra-ca
+            {{- end }}
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
@@ -119,12 +125,22 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.extraCACerts.secretName }}
+            - name: extra-ca
+              mountPath: /etc/posture/extra-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           secret:
             secretName: {{ $name }}-config
         - name: tmp
           emptyDir: {}
+        {{- if .Values.extraCACerts.secretName }}
+        - name: extra-ca
+          secret:
+            secretName: {{ .Values.extraCACerts.secretName }}
+        {{- end }}
       {{- with .Values.clair.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

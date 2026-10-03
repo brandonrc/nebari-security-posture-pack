@@ -31,6 +31,34 @@ spec:
         {{- toYaml .Values.worker.podSecurityContext | nindent 8 }}
       initContainers:
         {{- include "security-posture.waitForDb" . | nindent 8 }}
+        {{- if .Values.extraCACerts.secretName }}
+        # System bundle + extra CAs -> one file (httpx ignores the system
+        # directories once SSL_CERT_FILE is set, Go tools read the file).
+        - name: ca-bundle
+          image: {{ include "security-posture.image" .Values.images.worker | quote }}
+          imagePullPolicy: {{ .Values.images.worker.pullPolicy }}
+          command:
+            - sh
+            - -ec
+            - |
+              cat /etc/ssl/certs/ca-certificates.crt > /etc/posture/ca/ca-bundle.crt
+              for f in /etc/posture/extra-ca/*.crt /etc/posture/extra-ca/*.pem; do
+                [ -f "$f" ] || continue
+                echo >> /etc/posture/ca/ca-bundle.crt
+                cat "$f" >> /etc/posture/ca/ca-bundle.crt
+              done
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          volumeMounts:
+            - name: extra-ca
+              mountPath: /etc/posture/extra-ca
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/posture/ca
+        {{- end }}
       containers:
         - name: worker
           image: {{ include "security-posture.image" .Values.images.worker | quote }}
@@ -58,6 +86,12 @@ spec:
             - name: REGISTRY_AUTH_FILE
               value: /etc/posture/docker/config.json
             {{- end }}
+            {{- if .Values.extraCACerts.secretName }}
+            - name: SSL_CERT_FILE
+              value: /etc/posture/ca/ca-bundle.crt
+            - name: REQUESTS_CA_BUNDLE
+              value: /etc/posture/ca/ca-bundle.crt
+            {{- end }}
             {{- include "security-posture.provenanceEnv" . | nindent 12 }}
             {{- include "security-posture.controlsEnv" . | nindent 12 }}
             {{- with .Values.worker.extraEnv }}
@@ -82,6 +116,11 @@ spec:
             {{- if .Values.provenance.cosign.existingSecret }}
             - name: cosign-key
               mountPath: /etc/posture/cosign
+              readOnly: true
+            {{- end }}
+            {{- if .Values.extraCACerts.secretName }}
+            - name: ca-bundle
+              mountPath: /etc/posture/ca
               readOnly: true
             {{- end }}
       volumes:
@@ -110,6 +149,13 @@ spec:
             items:
               - key: cosign.pub
                 path: cosign.pub
+        {{- end }}
+        {{- if .Values.extraCACerts.secretName }}
+        - name: extra-ca
+          secret:
+            secretName: {{ .Values.extraCACerts.secretName }}
+        - name: ca-bundle
+          emptyDir: {}
         {{- end }}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector:
