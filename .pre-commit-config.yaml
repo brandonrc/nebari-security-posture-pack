@@ -1,0 +1,40 @@
+# Fast local checks that mirror the CI `lint` job (pip install pre-commit && pre-commit install).
+# The full suites (pytest + Postgres, vitest, Playwright, helm unittest) run in CI; see
+# CONTRIBUTING.md for running them locally with Docker only.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+        exclude: ^ui/(screenshots|package-lock\.json)
+      - id: end-of-file-fixer
+        exclude: ^(ui/screenshots/|.*\.svg$|api/tests/fixtures/)
+      - id: trailing-whitespace
+        exclude: ^(api/tests/fixtures/|.*\.md$)
+      - id: check-yaml
+        exclude: ^chart/templates/        # Helm templates are not plain YAML
+        args: ["--allow-multiple-documents"]
+      - id: check-json
+        exclude: ^ui/(tsconfig.*\.json)$  # JSONC
+      - id: detect-private-key
+        exclude: ^api/tests/
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10                          # keep in step with api/pyproject.toml [lint] extra
+    hooks:
+      - id: ruff-check
+        args: ["--config", "api/pyproject.toml"]
+        files: ^api/
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        files: ^(deploy/grace/.*|\.github/scripts/.*)\.sh$
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
