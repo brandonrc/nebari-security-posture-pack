@@ -1,0 +1,21 @@
+id: prometheus
+uuid: 318ebcce-f1ae-4fe8-a4f2-6c7d2859e61c
+title: Prometheus / Alertmanager
+type: service
+purpose: Metrics collection, alert evaluation and alert notification.
+description: >-
+  Prometheus scrapes platform and node metrics; Alertmanager routes firing alerts to the
+  configured receivers (e-mail, chat, paging).
+implemented-requirements:
+  - control: AU-6
+    statement: Platform metrics are collected continuously for review and analysis.
+    assertions: [mon-prometheus-scraping]
+  - control: SI-4
+    statement: Prometheus scrapes cluster, node and workload targets to monitor the system.
+    assertions: [mon-prometheus-scraping]
+  - control: SI-4(5)
+    statement: Alertmanager notifies personnel through at least one configured receiver when alerts fire.
+    assertions: [mon-alert-receivers]
+  - control: IR-6
+    statement: Security-relevant alerts are routed to a reporting channel through Alertmanager receivers.
+    assertions: [mon-alert-receivers]

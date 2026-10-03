@@ -1,0 +1,27 @@
+id: envoy-gateway
+uuid: 04151364-51c0-4cbe-a10c-c4f38aedea47
+title: Envoy Gateway (Gateway API)
+type: service
+purpose: Single ingress point; terminates TLS and enforces OIDC authentication per route.
+description: >-
+  The shared `Gateway` terminates TLS for every Nebari hostname with a cert-manager issued
+  certificate. Per-application `SecurityPolicy` objects (rendered by the nebari-operator or by a
+  pack chart) enforce OIDC login and group authorization before traffic reaches the workload.
+implemented-requirements:
+  - control: SC-8
+    statement: >-
+      External traffic is served on an HTTPS listener; routes attached to plain HTTP listeners only
+      redirect to HTTPS.
+    assertions: [gw-https-listener, gw-http-redirect]
+  - control: SC-8(1)
+    statement: TLS 1.2 or later protects data in transit between clients and the gateway.
+    assertions: [gw-tls-min-version]
+  - control: SC-13
+    statement: TLS cipher suites and protocol versions are restricted to modern, approved algorithms.
+    assertions: [gw-tls-min-version]
+  - control: SC-23
+    statement: Session authenticity is protected by TLS on every authenticated route (no session cookies over HTTP).
+    assertions: [gw-https-listener, gw-http-redirect]
+  - control: AC-3
+    statement: The gateway enforces the OIDC SecurityPolicy (authentication + group claim) for protected routes.
+    assertions: [app-gateway-auth]

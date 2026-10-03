@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from posture.config import Settings
 from posture.db.models import Base
+import posture.controls_engine.models  # noqa: E402,F401  (DESIGN §13 tables)
 
 target_metadata = Base.metadata
 

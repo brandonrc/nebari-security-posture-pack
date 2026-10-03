@@ -165,7 +165,8 @@ async def test_01_empty_state_shapes(env):
     assert len((await c.get("/scanners")).json()) == 3
     assert (await c.get("/export?format=csv")).status_code == 200
     assert (await c.get("/export?format=json")).json()["images"] == []
-    assert (await c.get("/compliance/controls")).json()[0]["status"] == "not_assessed"
+    ctl0 = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
+    assert ctl0["RA-5"]["findingStatus"] == "not_assessed" and ctl0["RA-5"]["status"] == "unknown"
     assert (await c.get("/images/123")).status_code == 404
     assert (await c.get("/me")).json()["isAdmin"] is True
     assert (await c.get("/openapi.json")).status_code == 200
@@ -247,7 +248,7 @@ async def test_02_scan_pipeline(env):
     assert "attachment" in exp.headers["content-disposition"] and len(rows) == 4
     assert (await c.get("/export")).json()["summary"]["score"] == s["score"]
     ctl = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
-    assert ctl["RA-5"]["findingsOpen"] == 4 and ctl["SI-2(2)"]["findingsOpen"] == 3 and ctl["AC-6"]["status"] == "open"
+    assert ctl["RA-5"]["findingsOpen"] == 4 and ctl["SI-2(2)"]["findingsOpen"] == 3 and ctl["AC-6"]["findingStatus"] == "open"
 
     scanners = (await c.get("/scanners")).json()
     assert all(x["version"] for x in scanners) and all(x["lastRunAt"] for x in scanners)

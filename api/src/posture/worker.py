@@ -328,6 +328,8 @@ class Worker:
                 prov_task.cancel()
         if completed and settings.reports.auto_generate:
             await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
+        if completed:  # DESIGN §13: control evidence stage after every completed scan
+            await self.run_controls(trigger="scan", scan_id=scan_id)
 
     async def scanners_not_ready(self, enabled: list[str]) -> list[str]:
         """Reasons why an enabled scanner would fail or return empty results right now."""
@@ -676,6 +678,41 @@ class Worker:
             await s.execute(update(ImageScan).where(ImageScan.started_at < old, ImageScan.raw_gz.isnot(None))
                             .values(raw_gz=None))
 
+    # ------------------------------------------------------------ controls (DESIGN §13)
+    async def run_controls(self, trigger: str = "scan", scan_id: int | None = None,
+                           run_id: int | None = None) -> int | None:
+        """Run the control evidence engine once (best effort; never fails the worker)."""
+        if not self.s.controls_engine_enabled:
+            return None
+        from .controls_engine import engine as controls_engine
+
+        try:
+            return await controls_engine.execute(self.sm, self.s, run_id=run_id, trigger=trigger, scan_id=scan_id,
+                                                 context_factory=getattr(self, "controls_context_factory", None))
+        except Exception:  # noqa: BLE001
+            log.exception("controls.failed", trigger=trigger)
+            return None
+
+    async def poll_controls(self) -> bool:
+        """On-demand runs: `control_assertion_runs` rows queued by POST /compliance/assertions/run."""
+        if not self.s.controls_engine_enabled:
+            return False
+        from .controls_engine import engine as controls_engine
+
+        run_id = await controls_engine.claim_queued(self.sm)
+        if run_id is None:
+            return False
+        await self.run_controls(trigger="manual", run_id=run_id)
+        return True
+
+    async def recover_controls(self) -> None:
+        from .controls_engine import engine as controls_engine
+
+        try:
+            await controls_engine.fail_stale(self.sm, timedelta(0))
+        except Exception:  # noqa: BLE001  (tables missing before migration)
+            log.warning("controls.recover_failed")
+
     # ------------------------------------------------------------ main loop
     async def heartbeat(self) -> None:
         self.last_loop_beat = time.monotonic()
@@ -690,7 +727,7 @@ class Worker:
     async def poll_once(self) -> bool:
         scan_id = await self.claim_next()
         if scan_id is None:
-            return False
+            return await self.poll_controls()
         await self.run_scan(scan_id)
         return True
 
@@ -733,6 +770,7 @@ class Worker:
     async def run_forever(self) -> None:
         await self.wait_for_db()
         await self.recover_stale()
+        await self.recover_controls()
         self.start_scheduler()
         await self._sync_schedule()
         if self.s.scan_on_start:

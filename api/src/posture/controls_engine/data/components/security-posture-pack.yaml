@@ -1,0 +1,31 @@
+id: security-posture
+uuid: 960549f3-03bc-4540-8cb3-61d99d289b9b
+title: Nebari Security Posture pack
+type: software
+purpose: Continuous vulnerability scanning, configuration posture checks and compliance evidence.
+description: >-
+  Inventories every container in the cluster, scans each unique image with Trivy, Grype and Clair,
+  evaluates workload posture checks, tracks remediation SLAs, generates POA&M/STIG/OSCAL reports
+  and runs this control evidence engine.
+implemented-requirements:
+  - control: RA-5
+    statement: All running container images are scanned for vulnerabilities on a schedule and on demand by three scanners.
+    assertions: [pack-scan-recent]
+  - control: RA-5(2)
+    statement: Scanner vulnerability databases are updated automatically and checked for freshness before scans.
+    assertions: [pack-scan-recent, pack-scanner-db-fresh]
+  - control: SI-2
+    statement: Open findings are tracked against severity-based remediation SLAs; overdue findings are reported.
+    assertions: [pack-sla-overdue]
+  - control: SI-5
+    statement: Scanner advisory feeds (NVD, distro, GHSA) are ingested at least every 72 hours.
+    assertions: [pack-scanner-db-fresh]
+  - control: CA-5
+    statement: A POA&M covering every open finding is generated from the latest scan.
+    assertions: [pack-poam-current]
+  - control: CA-7
+    statement: Scans, posture checks and control assertions run continuously and feed OSCAL assessment results.
+    assertions: [pack-scan-recent]
+  - control: CM-8
+    statement: The component inventory (every container image, digest and workload) is refreshed on each scan.
+    assertions: [pack-inventory-current]

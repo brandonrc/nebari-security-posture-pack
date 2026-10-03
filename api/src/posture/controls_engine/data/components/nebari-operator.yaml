@@ -1,0 +1,23 @@
+id: nebari-operator
+uuid: 9c2e85d8-9aef-4545-8f18-84874a91f83a
+title: Nebari operator (NebariApp)
+type: software
+purpose: Declarative onboarding of applications (routing, TLS, OIDC client, auth policy, landing page).
+description: >-
+  The nebari-operator reconciles `NebariApp` resources into an HTTPRoute, a Keycloak OIDC client,
+  an Envoy Gateway SecurityPolicy (when `auth.enforceAtGateway`) and a landing-page entry whose
+  visibility follows the app's required groups.
+implemented-requirements:
+  - control: AC-3
+    statement: >-
+      Every NebariApp with `auth.enabled` is protected by a gateway SecurityPolicy, or documents an
+      equivalent in-application check (annotation `posture.nebari.dev/in-app-auth`).
+    assertions: [app-gateway-auth, app-landing-visibility]
+  - control: AC-22
+    statement: >-
+      Landing-page entries of authenticated applications are not publicly listed; visibility is
+      restricted to the groups allowed to use the application.
+    assertions: [app-landing-visibility]
+  - control: IA-2
+    statement: Applications onboarded with `auth.enabled` require an authenticated Keycloak identity.
+    assertions: [app-gateway-auth]

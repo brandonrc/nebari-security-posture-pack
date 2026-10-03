@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
+# The worker runs the control evidence engine (DESIGN §13) after each scan; keep the shared harness
+# hermetic (no live cluster / Keycloak). tests/controls_engine enable it with fake clients.
+os.environ.setdefault("CONTROLS_ENGINE_ENABLED", "false")
 
 
 @pytest.fixture

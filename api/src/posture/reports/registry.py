@@ -88,6 +88,26 @@ REPORT_TYPES: list[dict[str, Any]] = [
         "description": "Flat findings export, one row per (image, CVE, package) with each scanner's severity; "
                        "CycloneDX 1.6 VEX JSON for tool ingest.",
     },
+    {
+        "type": "oscal-ssp",
+        "title": "OSCAL System Security Plan",
+        "formats": ["json"],
+        "scopes": ["cluster"],
+        "options": ["systemName", "baseline"],
+        "description": "NIST OSCAL 1.1.2 system-security-plan importing the NIST SP 800-53 rev5 baseline profile: "
+                       "per-control implementation status derived from live control assertions, by-component "
+                       "statements and embedded evidence (DESIGN §13).",
+    },
+    {
+        "type": "oscal-component-definition",
+        "title": "OSCAL Component Definition",
+        "formats": ["json"],
+        "scopes": ["cluster"],
+        "options": [],
+        "description": "NIST OSCAL 1.1.2 component-definition for the Nebari platform components (Keycloak, Envoy "
+                       "Gateway, cert-manager, nebari-operator, Loki, Prometheus, Kubernetes, registry, this pack) "
+                       "with the 800-53 controls each implements and the assertions that verify them.",
+    },
 ]
 
 _MODULES = {
@@ -97,6 +117,8 @@ _MODULES = {
     "oscal-ar": "oscal",
     "inventory": "inventory",
     "vuln-export": "vuln_export",
+    "oscal-ssp": "oscal_ssp",
+    "oscal-component-definition": "oscal_component",
 }
 
 

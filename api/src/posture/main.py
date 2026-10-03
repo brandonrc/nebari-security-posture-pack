@@ -18,6 +18,7 @@ from .logs import get_logger, setup_logging
 from .routers import (
     checks,
     compliance,
+    controls,
     export,
     health,
     images,
@@ -93,6 +94,8 @@ def create_app() -> FastAPI:
               checks.router, scans.router, scanners.router, settings.router, export.router, compliance.router,
               reports.router, supply_chain.router):
         admin.include_router(r)
+
+    admin.include_router(controls.router)  # DESIGN §13 control evidence engine (/compliance/controls, ...)
 
     @admin.get("/openapi.json", include_in_schema=False)
     async def openapi_json():

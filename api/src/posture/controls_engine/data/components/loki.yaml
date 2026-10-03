@@ -1,0 +1,24 @@
+id: loki
+uuid: ce29a69c-6b2f-460e-b689-7074c8829834
+title: Loki / Promtail (lgtm pack)
+type: service
+purpose: Central collection and retention of container and node logs.
+description: >-
+  Promtail (or Grafana Alloy) ships the logs of every pod to Loki, where they are retained and
+  searchable from Grafana.
+implemented-requirements:
+  - control: AU-2
+    statement: Container logs of every namespace are collected centrally.
+    assertions: [log-ingest-all-namespaces]
+  - control: AU-4
+    statement: Log storage is sized and retained per the configured Loki retention period.
+    assertions: [log-retention]
+  - control: AU-6
+    statement: Collected logs are searchable from Grafana for review and analysis.
+    assertions: [log-ingest-all-namespaces]
+  - control: AU-11
+    statement: Logs are retained for at least the organization-defined period (`controlsEngine.minLogRetentionDays`).
+    assertions: [log-retention]
+  - control: AU-12
+    statement: Every running namespace produces log records that reach Loki.
+    assertions: [log-ingest-all-namespaces]

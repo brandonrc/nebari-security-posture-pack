@@ -1,0 +1,57 @@
+id: kubernetes
+uuid: d38a94d4-e58f-4be6-aa25-ca5ed00a5c64
+title: Kubernetes platform
+type: software
+purpose: Container orchestration (Pod Security admission, RBAC, NetworkPolicy, ServiceAccounts).
+description: >-
+  The Kubernetes control plane enforces Pod Security Standards per namespace, RBAC for API access,
+  and NetworkPolicy for pod-to-pod traffic.
+implemented-requirements:
+  - control: AC-6
+    statement: Workloads run without privileged mode, host namespaces or added capabilities unless required.
+    assertions: [k8s-workload-least-privilege]
+  - control: AC-6(1)
+    statement: cluster-admin is bound only to system subjects and the approved administrator allowlist.
+    assertions: [k8s-cluster-admin-bindings]
+  - control: AC-6(10)
+    statement: Default ServiceAccounts do not automount API tokens, so pods get no API access unless granted.
+    assertions: [k8s-default-sa-automount]
+  - control: AC-14
+    statement: No RBAC binding grants permissions to `system:anonymous` or `system:unauthenticated` beyond public discovery.
+    assertions: [k8s-no-anonymous-access]
+  - control: AU-2
+    statement: Kubernetes API server audit logging records API requests.
+    assertions: [k8s-api-audit-logging]
+  - control: AU-12
+    statement: The API server audit policy generates audit records for API activity.
+    assertions: [k8s-api-audit-logging]
+  - control: CM-6
+    statement: Namespaces enforce a Pod Security Standard (`pod-security.kubernetes.io/enforce` baseline or restricted).
+    assertions: [k8s-pod-security-admission]
+  - control: CM-7
+    statement: Pod Security admission and workload settings restrict containers to least functionality.
+    assertions: [k8s-pod-security-admission, k8s-workload-least-privilege]
+  - control: SC-7
+    statement: NetworkPolicies restrict ingress to application pods.
+    assertions: [k8s-default-deny-ingress]
+  - control: SC-7(5)
+    statement: Each application namespace has a default-deny ingress NetworkPolicy; allowed flows are explicit exceptions.
+    assertions: [k8s-default-deny-ingress]
+  - control: SI-2
+    statement: Nodes run a Kubernetes minor version that is still supported upstream (receives security patches).
+    assertions: [k8s-supported-version]
+  - control: PE-2
+    statement: Physical access authorizations for the nodes are provided by the hosting facility or cloud provider.
+    inherited: true
+  - control: PE-3
+    statement: Physical access control to the nodes is provided by the hosting facility or cloud provider.
+    inherited: true
+  - control: PE-6
+    statement: Physical access monitoring is provided by the hosting facility or cloud provider.
+    inherited: true
+  - control: PE-13
+    statement: Fire protection is provided by the hosting facility or cloud provider.
+    inherited: true
+  - control: PE-14
+    statement: Environmental controls are provided by the hosting facility or cloud provider.
+    inherited: true

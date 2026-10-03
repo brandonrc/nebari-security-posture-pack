@@ -1,17 +1,17 @@
-"""`GET /compliance/controls` (DESIGN §11). Other /compliance and /reports routes are
-owned by the reports package."""
+"""Control coverage from scan evidence (DESIGN §11). `GET /compliance/controls` itself is served by
+routers/controls.py (DESIGN §13), which extends these rows with engine statuses. Other /compliance and
+/reports routes are owned by the reports package."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..controls import all_controls, check_controls, control_title, vuln_controls
 from ..db.models import ConsensusFindingRow, Image, PostureResultRow
-from ..db.session import get_session
 from ..views import latest_done_scan
 
 router = APIRouter(tags=["compliance"])
@@ -42,7 +42,3 @@ async def control_coverage(session: AsyncSession) -> list[dict[str, Any]]:
         out.append({"control": c, "title": control_title(c), "findingsOpen": f, "checksFailed": k, "status": status})
     return out
 
-
-@router.get("/compliance/controls")
-async def controls(session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
-    return await control_coverage(session)

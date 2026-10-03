@@ -1,0 +1,59 @@
+# OSCAL-style component definition (converted to OSCAL 1.1.2 by controls_engine.ssp).
+id: keycloak
+uuid: 0686a48a-2477-4d58-b225-66a0c4f07490
+title: Keycloak
+type: service
+purpose: Identity provider (OIDC) for every Nebari application and for the Kubernetes-facing tools.
+description: >-
+  Keycloak realm `nebari` authenticates all users of Nebari applications. The Envoy Gateway
+  SecurityPolicies rendered by the nebari-operator delegate authentication to it, and groups in
+  the realm drive authorization (NebariApp `auth.groups`).
+implemented-requirements:
+  - control: AC-2
+    statement: >-
+      Accounts are created by administrators in the Keycloak realm; self-service registration is
+      disabled so no account exists without an administrator action.
+    assertions: [kc-self-registration-disabled]
+  - control: AC-6(5)
+    statement: >-
+      The realm `admin` role is held only by the subjects listed in the approved privileged-account
+      allowlist (`controlsEngine.adminSubjects`).
+    assertions: [kc-admin-role-allowlist]
+  - control: AC-7
+    statement: >-
+      Keycloak brute-force detection temporarily locks an account after the configured number of
+      consecutive failed logon attempts.
+    assertions: [kc-brute-force-protection]
+  - control: AC-11
+    statement: >-
+      SSO sessions expire after the configured idle timeout, which forces re-authentication of an
+      inactive session.
+    assertions: [kc-session-timeouts]
+  - control: AC-12
+    statement: >-
+      SSO sessions are terminated after the idle timeout and the maximum session lifespan; the
+      "remember me" option that would extend sessions is disabled.
+    assertions: [kc-session-timeouts, kc-remember-me-disabled]
+  - control: AU-2
+    statement: >-
+      Keycloak records login events (successful and failed authentication, logout, token
+      exchange) and administrative events for the realm.
+    assertions: [kc-login-events, kc-admin-events]
+  - control: AU-3
+    statement: Admin events include the full representation of the change (who, what, when, from where).
+    assertions: [kc-admin-events]
+  - control: AU-12
+    statement: Event generation is enabled for the realm with a stored-event retention period.
+    assertions: [kc-login-events, kc-admin-events]
+  - control: IA-2
+    statement: Every interactive user of a Nebari application is uniquely identified and authenticated by Keycloak.
+    assertions: [app-gateway-auth]
+  - control: IA-2(1)
+    statement: Members of the administrator group are required to use a second factor (OTP or WebAuthn).
+    assertions: [kc-admin-mfa]
+  - control: IA-5(1)
+    statement: The realm password policy enforces minimum length and complexity for password authenticators.
+    assertions: [kc-password-policy]
+  - control: SC-8
+    statement: The realm requires TLS for external requests (`sslRequired`).
+    assertions: [kc-ssl-required]

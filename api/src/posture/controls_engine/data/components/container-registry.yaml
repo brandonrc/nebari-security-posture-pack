@@ -1,0 +1,15 @@
+id: container-registry
+uuid: 1ade64be-821a-482b-b567-1cd734dd8e9f
+title: Container registry
+type: service
+purpose: Stores the container images deployed to the cluster (and the scan mirror).
+description: >-
+  The in-cluster OCI registry stores platform and application images. Write access must require
+  authentication or the registry must be reachable from inside the cluster only.
+implemented-requirements:
+  - control: CM-14
+    statement: Only authenticated or cluster-internal clients can push images, so deployed components come from controlled sources.
+    assertions: [reg-access-restricted]
+  - control: SR-4
+    statement: Image provenance is preserved by restricting who can write to the registry.
+    assertions: [reg-access-restricted]

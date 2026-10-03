@@ -95,6 +95,32 @@ class Settings(BaseSettings):
     provenance_compat_internal_port: int | None = None  # unauthenticated /api/reports* listener (Grafana)
     cosign_bin: str = "cosign"
 
+    # control evidence engine (DESIGN §13)
+    controls_engine_enabled: bool = True
+    controls_baseline: str = "moderate"  # default for settings controlsEngine.baseline
+    controls_system_namespaces: CsvList = ["kube-system", "kube-public", "kube-node-lease"]
+    controls_admin_subjects: CsvList = []  # default for settings controlsEngine.adminSubjects
+    controls_keycloak_url: str = "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth"
+    controls_keycloak_realm: str = "nebari"
+    controls_keycloak_admin_realm: str = ""  # realm of the admin credentials; "" = target realm, then master
+    controls_keycloak_client_id: str = "admin-cli"
+    controls_keycloak_admin_secret_name: str = "nebari-realm-admin-credentials"
+    controls_keycloak_admin_secret_namespace: str = "keycloak"
+    controls_keycloak_admin_group: str = ""  # "" = first of ADMIN_GROUPS
+    controls_keycloak_verify_tls: bool = True
+    controls_loki_url: str = ""  # "" = discover Services
+    controls_prometheus_url: str = ""
+    controls_alertmanager_url: str = ""
+    controls_registry_url: str = ""  # "" = MIRROR_REGISTRY
+    controls_discover_cluster_ip: bool = False
+    controls_timeout_seconds: float = 30
+    controls_tls_probe: bool = True
+
+    @field_validator("controls_system_namespaces", "controls_admin_subjects", mode="before")
+    @classmethod
+    def _controls_csv(cls, v: object) -> list[str]:
+        return _split(v)
+
     # misc
     cache_dir: str = "/cache"
     log_level: str = "INFO"

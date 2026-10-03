@@ -8,9 +8,12 @@ from posture.reports.registry import REPORT_TYPES, GeneratedReport, UnsupportedR
 
 def test_catalogue_shape():
     types = {t["type"]: t for t in REPORT_TYPES}
-    assert set(types) == {"poam", "stig-checklist", "sar", "oscal-ar", "inventory", "vuln-export"}
+    assert set(types) == {"poam", "stig-checklist", "sar", "oscal-ar", "inventory", "vuln-export", "oscal-ssp",
+                          "oscal-component-definition"}
+    system_level = {"oscal-ssp", "oscal-component-definition"}  # DESIGN §13: whole-system documents
     for t in REPORT_TYPES:
-        assert t["formats"] and t["description"] and t["scopes"] == ["cluster", "namespace", "workload"]
+        assert t["formats"] and t["description"]
+        assert t["scopes"] == (["cluster"] if t["type"] in system_level else ["cluster", "namespace", "workload"])
     assert types["stig-checklist"]["formats"] == ["ckl", "cklb"]
     assert types["poam"]["formats"] == ["xlsx", "csv"]
 

@@ -131,6 +131,10 @@ async def run_report(sm: async_sessionmaker[AsyncSession], report_id: uuid.UUID 
     try:
         async with sm() as s:
             snapshot = await build_snapshot(s, scan_id, scope)
+            if rtype == "oscal-ssp":  # DESIGN §13: latest control evidence engine run
+                from .controls_engine.reporting import attach
+
+                await attach(s, snapshot)
         rep = await asyncio.to_thread(registry.generate, rtype, fmt, snapshot, options)
         path = reports_dir() / f"{rid}.{fmt}"
         await asyncio.to_thread(_write_atomic, path, rep.content)

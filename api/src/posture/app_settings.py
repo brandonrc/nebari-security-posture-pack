@@ -9,6 +9,7 @@ from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings, get_settings
+from .controls_engine.settings import ControlsEngineSettings
 from .db.models import Setting
 
 
@@ -83,6 +84,7 @@ class AppSettings(CamelModel):
     organization: str = ""
     remediation_sla_days: SlaDays = Field(default_factory=SlaDays)
     reports: ReportsSettings = Field(default_factory=ReportsSettings)
+    controls_engine: ControlsEngineSettings = Field(default_factory=ControlsEngineSettings)  # DESIGN §13
     provenance: ProvenanceSettings = Field(default_factory=ProvenanceSettings)
     admin_groups: list[str] = Field(default_factory=list)  # read-only (from env)
 
@@ -94,6 +96,7 @@ class AppSettings(CamelModel):
 
 EDITABLE = {"scan_interval_hours", "rescan_after_hours", "excluded_namespaces", "scanners", "parallelism",
             "system_name", "organization", "remediation_sla_days", "reports", "provenance"}
+EDITABLE = EDITABLE | {"controls_engine"}
 
 
 def defaults(env: Settings | None = None) -> AppSettings:
@@ -115,6 +118,8 @@ def defaults(env: Settings | None = None) -> AppSettings:
             check_updates=env.provenance_check_updates, skip_prerelease=env.provenance_skip_prerelease,
             update_level=env.provenance_update_level, helm_releases=env.provenance_helm_enabled,
             recheck_hours=env.provenance_recheck_hours),
+        controls_engine=ControlsEngineSettings(enabled=env.controls_engine_enabled, baseline=env.controls_baseline,
+                                               admin_subjects=env.controls_admin_subjects),
         admin_groups=sorted(env.admin_group_set),
     )
 
@@ -128,6 +133,7 @@ async def load(session: AsyncSession, env: Settings | None = None) -> AppSetting
     stored = AppSettings.model_validate({**base.model_dump(by_alias=True), **row.data}).model_dump()
     for k in EDITABLE:
         merged[k] = stored[k]
+    merged["controls_engine"]["enabled"] = base.controls_engine.enabled  # read-only (env)
     return AppSettings.model_validate(merged)
 
 
