@@ -359,3 +359,27 @@ async def test_pod_watcher_queues_one_targeted_scan(env):
     async with env["sm"]() as s, s.begin():
         for sc in (await s.execute(select(Scan).where(Scan.status == "queued"))).scalars():
             sc.status = "cancelled"
+
+
+async def test_metrics_ignore_targeted_scans(env):
+    """Scan gauges come from the latest done *full* scan: a later event scan of one namespace
+    must neither shrink posture_scan_images nor refresh the last-success timestamp."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from posture import metrics
+    from posture.db.models import Scan
+
+    async with env["sm"]() as s:
+        full = (await s.execute(select(Scan).where(
+            Scan.status == "done", Scan.target_image_ids.is_(None), Scan.target_namespaces.is_(None))
+            .order_by(Scan.id.desc()).limit(1))).scalar_one()
+        full_total, full_finished = full.images_total, full.finished_at.timestamp()
+        later = datetime.now(UTC) + timedelta(hours=1)
+        s.add(Scan(trigger="event", status="done", requested_by="pod-watcher", target_namespaces=["kube-system"],
+                   images_total=1, images_done=1, images_failed=0, started_at=later, finished_at=later))
+        await s.commit()
+        await metrics._refresh(s)
+    assert metrics.SCAN_IMAGES.labels("total")._value.get() == full_total
+    assert metrics.LAST_SUCCESS._value.get() == full_finished

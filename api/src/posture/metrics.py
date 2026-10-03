@@ -51,12 +51,12 @@ REPORTS_GENERATED = Counter("posture_reports_generated_total", "Reports finished
 
 # ---------------------------------------------------------------- state gauges (from the DB)
 LAST_SUCCESS = Gauge("posture_last_successful_scan_timestamp_seconds",
-                     "Finish time of the latest scan with status done (0 = never).")
+                     "Finish time of the latest full (untargeted) scan with status done (0 = never).")
 SCAN_INTERVAL = Gauge("posture_scan_interval_seconds", "Configured scheduled-scan interval (settings).")
-SCAN_IMAGES = Gauge("posture_scan_images", "Images of the latest done scan, by status (total, done, failed).",
+SCAN_IMAGES = Gauge("posture_scan_images", "Images of the latest done full scan, by status (total, done, failed).",
                     ["status"])
 SCAN_SCANNER_RESULTS = Gauge("posture_scan_scanner_results",
-                             "Per-image scanner results of the latest done scan, by scanner and result (ok, error).",
+                             "Per-image scanner results of the latest done full scan, by scanner and result (ok, error).",
                              ["scanner", "result"])
 SCANNER_DB_AGE = Gauge("posture_scanner_db_age_seconds", "Age of each scanner's vulnerability database.", ["scanner"])
 SCANNER_HEALTHY = Gauge("posture_scanner_healthy", "1 when the worker last saw the scanner healthy.", ["scanner"])
@@ -114,8 +114,12 @@ async def _refresh(session: AsyncSession) -> None:
     from .db.models import Report, Scan, ScannerStatus
 
     now = datetime.now(UTC)
+    # Full scans only: targeted scans (pod-watcher event scans, image rescans) cover a few
+    # images, so they would report a handful of images and keep PostureScanStale quiet while
+    # the scheduled full scans fail. Same definition as the scheduler's next_scan_due().
+    full = Scan.target_image_ids.is_(None) & Scan.target_namespaces.is_(None)
     latest = (await session.execute(
-        select(Scan).where(Scan.status == "done").order_by(Scan.id.desc()).limit(1))).scalar_one_or_none()
+        select(Scan).where(Scan.status == "done", full).order_by(Scan.id.desc()).limit(1))).scalar_one_or_none()
     LAST_SUCCESS.set(latest.finished_at.timestamp() if latest and latest.finished_at else 0)
     if latest is not None:
         SCAN_IMAGES.labels("total").set(latest.images_total)

@@ -31,10 +31,10 @@ which pod is scraped:
 
 | Metric | Meaning |
 |---|---|
-| `posture_last_successful_scan_timestamp_seconds` | finish time of the newest `done` scan (0 = never) |
+| `posture_last_successful_scan_timestamp_seconds` | finish time of the newest `done` full scan (0 = never) |
 | `posture_scan_interval_seconds` | settings `scanIntervalHours` |
-| `posture_scan_images{status=total\|done\|failed}` | latest done scan |
-| `posture_scan_scanner_results{scanner,result=ok\|error}` | per-image scanner results of the latest done scan |
+| `posture_scan_images{status=total\|done\|failed}` | latest done full scan (targeted event / image rescans are ignored) |
+| `posture_scan_scanner_results{scanner,result=ok\|error}` | per-image scanner results of the latest done full scan |
 | `posture_scanner_db_age_seconds{scanner}`, `posture_scanner_healthy{scanner}` | `scanner_status` |
 | `posture_queue_depth{kind}`, `posture_queue_running{kind}`, `posture_queue_oldest_age_seconds{kind}` | `kind` = scans, reports, controls |
 | `posture_reports{status}`, `posture_reports_failed_last_24h` | `reports` table |
