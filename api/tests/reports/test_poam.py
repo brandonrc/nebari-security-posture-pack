@@ -213,7 +213,7 @@ def test_office_org_is_required_and_profiles(snapshot, opts):
 
     from posture.reports.registry import UnsupportedReport
 
-    snap = make_snapshot(system={"name": "grace", "organization": ""})
+    snap = make_snapshot(system={"name": "lab", "organization": ""})
     with pytest.raises(UnsupportedReport, match="Office/Org"):
         generate("poam", "xlsx", snap, {**opts, "requireOrganization": True})
     info = {r[0].value: r[1].value for r in _wb(snap, opts)["Info"].iter_rows()}

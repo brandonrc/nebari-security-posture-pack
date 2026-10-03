@@ -69,7 +69,7 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     w = good_world()
     w["keycloak"][""]["failureFactor"] = 30  # AC-7 fails
     data = await engine_data(w)
-    doc = build_ssp(data, system_name="grace", organization="Quansight", baseline="moderate",
+    doc = build_ssp(data, system_name="lab", organization="Quansight", baseline="moderate",
                     generated_at=datetime(2026, 10, 3, tzinfo=UTC))
     assert _errors(ssp_validator, doc) == []
     ssp = doc["system-security-plan"]
@@ -84,7 +84,7 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     ac7 = reqs["ac-7"]
     # M2: failing is `planned` only when a POA&M item tracks it
     assert ac7["by-components"][0]["implementation-status"]["state"] == "not-implemented"
-    with_poam = build_ssp(data, system_name="grace", generated_at=datetime(2026, 10, 3, tzinfo=UTC),
+    with_poam = build_ssp(data, system_name="lab", generated_at=datetime(2026, 10, 3, tzinfo=UTC),
                           poam_controls={"AC-7"})
     ac7p = next(r for r in with_poam["system-security-plan"]["control-implementation"]["implemented-requirements"]
                 if r["control-id"] == "ac-7")
@@ -109,7 +109,7 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     assert status("ac-2") == "partial" and ac2["implementation-status"]["state"] == "partial"
     assert "AC-2 a-l" in ac2["export"]["responsibilities"][0]["description"]
     # deterministic
-    again = build_ssp(data, system_name="grace", organization="Quansight", generated_at=datetime(2026, 10, 3, tzinfo=UTC))
+    again = build_ssp(data, system_name="lab", organization="Quansight", generated_at=datetime(2026, 10, 3, tzinfo=UTC))
     assert again == doc
 
 
@@ -161,7 +161,7 @@ def test_component_definition_validates(comp_validator):
         "props"]
 
 
-SNAPSHOT = {"generated_at": "2026-10-03T00:00:00Z", "system": {"name": "grace", "organization": "Org"},
+SNAPSHOT = {"generated_at": "2026-10-03T00:00:00Z", "system": {"name": "lab", "organization": "Org"},
             "scan": {"id": 42, "finished_at": "2026-10-03T00:00:00Z"}}
 
 
@@ -171,12 +171,12 @@ async def test_report_generators(ssp_validator, comp_validator):
     snap = {**SNAPSHOT, "controls_engine": {"data": await engine_data(), "baseline": "moderate",
                                             "organizationStatement": "", "notApplicable": {}}}
     rep = generate("oscal-ssp", "json", snap, {})
-    assert rep.filename == "grace-oscal-ssp-scan42-20261003.json" and rep.content_type == "application/json"
+    assert rep.filename == "lab-oscal-ssp-scan42-20261003.json" and rep.content_type == "application/json"
     assert _errors(ssp_validator, json.loads(rep.content)) == []
     rep = generate("oscal-ssp", "json", SNAPSHOT, {"baseline": "low"})  # no engine data attached
     assert _errors(ssp_validator, json.loads(rep.content)) == []
     rep = generate("oscal-component-definition", "json", SNAPSHOT, {})
-    assert rep.filename.startswith("grace-oscal-component-definition-scan42")
+    assert rep.filename.startswith("lab-oscal-component-definition-scan42")
     assert _errors(comp_validator, json.loads(rep.content)) == []
 
 
@@ -201,7 +201,7 @@ async def test_ssp_set_parameters_statements_origination_and_draft(ssp_validator
     from posture.controls_engine.catalog import odp_profile
 
     params = {k: v["value"] for k, v in odp_profile("cnssi-1253-mod-mod-mod").items()}
-    doc = build_ssp(await engine_data(), system_name="grace", baseline="moderate", parameters=params,
+    doc = build_ssp(await engine_data(), system_name="lab", baseline="moderate", parameters=params,
                     parameter_extra={"adminSubjects": ["alice"], "approvedIssuers": ["org-ca"],
                                      "slaDays": {"critical": 15, "high": 30}})
     assert _errors(ssp_validator, doc) == []

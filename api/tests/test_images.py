@@ -23,7 +23,7 @@ D = "sha256:" + "a" * 64
     ("quay.io/jetstack/cert-manager-controller:v1.16.2", "quay.io", "jetstack/cert-manager-controller", "v1.16.2", None),
     (f"ghcr.io/org/app:1.0@{D}", "ghcr.io", "org/app", "1.0", D),
     (f"registry.k8s.io/pause@{D}", "registry.k8s.io", "pause", None, D),
-    ("artifacts.100-89-230-107.sslip.io/ray/ray-polars:2.56.0", "artifacts.100-89-230-107.sslip.io", "ray/ray-polars",
+    ("artifacts.example.org/ray/ray-polars:2.56.0", "artifacts.example.org", "ray/ray-polars",
      "2.56.0", None),
     ("registry.local:5000/a/b/c", "registry.local:5000", "a/b/c", None, None),
 ])

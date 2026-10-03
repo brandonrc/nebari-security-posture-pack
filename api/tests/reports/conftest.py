@@ -23,7 +23,6 @@ if str(SRC) not in sys.path:
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from _snapshot_stub import ReportSnapshot as StubSnapshot  # noqa: E402
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 SCAN_START = NOW - timedelta(minutes=14)
@@ -184,10 +183,10 @@ def snapshot_data(**over: Any) -> dict[str, Any]:
                 score=70.0, grade="C") for ns, k, n, p, ids, c in WORKLOADS]
     data = dict(
         generated_at=NOW,
-        system=dict(name="grace", organization="Quansight / Nebari Dev", cluster_name="grace-microk8s",
+        system=dict(name="lab", organization="Quansight / Nebari Dev", cluster_name="lab-microk8s",
                     description="Nebari development platform on a single-node MicroK8s cluster.",
-                    hostname="security.100-89-230-107.sslip.io", ip_address="192.168.42.150",
-                    poc_name="Brandon Geraci", poc_email="isso@example.org", emass_system_id="12345"),
+                    hostname="security.example.org", ip_address="192.0.2.10",
+                    poc_name="Jane Example", poc_email="isso@example.org", emass_system_id="12345"),
         scan=dict(id=42, status="done", trigger="scheduled", started_at=SCAN_START, finished_at=NOW - timedelta(minutes=1),
                   requested_by="scheduler", score=63.4, grade="D", vuln_score=58.1, posture_score=75.8),
         scope=dict(kind="cluster"),
@@ -222,14 +221,12 @@ def _model():
 
 
 def make_snapshot(**over: Any):
-    data = snapshot_data(**over)
+    """The real ReportSnapshot, validated. No silent fallback to the stub model: a factory that
+    the real model rejects is model drift and must fail the test (quality review m8)."""
     real = _model()
-    if real is not None:
-        try:
-            return real.model_validate(data)
-        except Exception:
-            pass
-    return StubSnapshot.model_validate(data)
+    if real is None:
+        raise RuntimeError("posture.reports.models.ReportSnapshot is not importable")
+    return real.model_validate(snapshot_data(**over))
 
 
 @pytest.fixture

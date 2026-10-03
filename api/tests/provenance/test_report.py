@@ -138,7 +138,7 @@ def test_image_entries_dedup_and_per_tag_update():
     entries = image_entries(containers, images, prov)
     assert [(e.namespace, e.image) for e in entries] == [("app", "ghcr.io/org/web:1.0"), ("app", "alpine:3.17.0"),
                                                          ("kube-system", "alpine:3.17.0"), ("batch", "busybox")]
-    doc = build_report_document(ReportInput(generated_at=GEN, cluster_name="grace", images=entries,
+    doc = build_report_document(ReportInput(generated_at=GEN, cluster_name="lab", images=entries,
                                             namespaces_scanned=["app", "batch", "kube-system"]))
     alpine = doc["images"][1]
     assert alpine["update"]["latestInMajor"] == "3.20.3" and "sbom" not in alpine and alpine["signature"]["signed"] is False

@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 async def env():
     url = os.environ["TEST_DATABASE_URL"]
     os.environ.update({"DATABASE_URL": url, "AUTH_MODE": "disabled", "ADMIN_GROUPS": "admin",
-                       "CACHE_DIR": "/tmp/posture-test-cache", "CLUSTER_NAME": "grace-test"})
+                       "CACHE_DIR": "/tmp/posture-test-cache", "CLUSTER_NAME": "lab-test"})
     from posture.config import get_settings
 
     get_settings.cache_clear()
@@ -157,7 +157,7 @@ async def test_02_scan_with_provenance(env):
     assert (await c.get("/api/v1/helm-releases", params={"namespace": "kube-system"})).json()[0]["status"] == "failed"
 
     lst = (await c.get("/api/reports")).json()
-    assert len(lst) == 1 and lst[0]["clusterName"] == "grace-test"
+    assert len(lst) == 1 and lst[0]["clusterName"] == "lab-test"
     rep = await c.get(f"/api/reports/{lst[0]['filename']}")
     doc = rep.json()
     assert doc == (await c.get("/api/reports/latest")).json()

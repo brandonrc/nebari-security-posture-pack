@@ -37,7 +37,7 @@ def test_crm_rows_cover_the_baseline_with_responsibility_and_customer_text():
 async def test_crm_report_xlsx_and_csv():
     snap = {**SNAPSHOT, "controls_engine": {"data": await engine_data(), "baseline": "moderate"}}
     rep = generate("crm", "xlsx", snap, {})
-    assert rep.filename == "grace-crm-scan42-20261003.xlsx"
+    assert rep.filename == "lab-crm-scan42-20261003.xlsx"
     wb = load_workbook(io.BytesIO(rep.content))
     ws = wb["CRM"]
     header = [c.value for c in ws[1]]

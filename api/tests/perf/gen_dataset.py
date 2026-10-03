@@ -5,7 +5,7 @@
 
 Drops and recreates the schema of PERF_DATABASE_URL, migrates to head, then writes one done
 scan with N images (default 500), ~360 consensus findings per image (~180k rows, as measured
-on grace: 28k rows for 79 images) drawn from a pool of 20k CVEs with a long-tail
+on the lab cluster: 28k rows for 79 images) drawn from a pool of 20k CVEs with a long-tail
 distribution, 1-3 workloads per image across 60 namespaces, and the scan's cluster snapshot
 and vuln_rollup (what the worker writes at scan end).
 """

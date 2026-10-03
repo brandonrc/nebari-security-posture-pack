@@ -57,7 +57,7 @@ def test_ckl_structure(snapshot, opts):
     assert [c.tag for c in asset] == ["ROLE", "ASSET_TYPE", "MARKING", "HOST_NAME", "HOST_IP", "HOST_MAC", "HOST_FQDN",
                                       "TARGET_COMMENT", "TECH_AREA", "TARGET_KEY", "WEB_OR_DATABASE", "WEB_DB_SITE",
                                       "WEB_DB_INSTANCE"]
-    assert asset.findtext("HOST_NAME") == "security.100-89-230-107.sslip.io"
+    assert asset.findtext("HOST_NAME") == "security.example.org"
     assert asset.findtext("TARGET_KEY") == "5376"
     istigs = root.findall("STIGS/iSTIG")
     assert len(istigs) == 2
@@ -149,14 +149,14 @@ def test_v233234_uses_the_fix_release_date(opts):
 
 
 def test_asset_identifier_warning(opts):
-    snap = make_snapshot(system={"name": "grace"})
+    snap = make_snapshot(system={"name": "lab"})
     root = _ckl(snap, opts)
     assert "WARNING: HOST_NAME, HOST_IP, HOST_FQDN not configured" in root.findtext("ASSET/TARGET_COMMENT")
-    snap = make_snapshot(system={"name": "grace", "host_name": "grace", "ip_address": "192.168.42.150",
-                                 "hostname": "grace.lab.example", "mac_address": "aa:bb:cc:dd:ee:ff"})
+    snap = make_snapshot(system={"name": "lab", "host_name": "lab", "ip_address": "192.0.2.10",
+                                 "hostname": "host.lab.example", "mac_address": "aa:bb:cc:dd:ee:ff"})
     root = _ckl(snap, opts)
     assert "WARNING" not in root.findtext("ASSET/TARGET_COMMENT")
-    assert root.findtext("ASSET/HOST_NAME") == "grace" and root.findtext("ASSET/HOST_MAC") == "aa:bb:cc:dd:ee:ff"
+    assert root.findtext("ASSET/HOST_NAME") == "lab" and root.findtext("ASSET/HOST_MAC") == "aa:bb:cc:dd:ee:ff"
 
 
 def test_include_srg_false(snapshot, opts):
@@ -171,7 +171,7 @@ def test_cklb_structure(snapshot, opts):
     assert {"title", "id", "stigs", "target_data", "cklb_version"} <= set(d)
     assert d["cklb_version"] == "1.0"
     assert d["target_data"]["target_type"] == "Computing"
-    assert d["target_data"]["host_name"] == "security.100-89-230-107.sslip.io"
+    assert d["target_data"]["host_name"] == "security.example.org"
     assert [s["stig_id"] for s in d["stigs"]] == ["Kubernetes_STIG", "Container_Platform_SRG"]
     k8s = d["stigs"][0]
     assert k8s["size"] == len(k8s["rules"]) == K8S_RULES

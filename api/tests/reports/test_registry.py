@@ -31,7 +31,7 @@ def test_every_type_generates(snapshot, opts, t, fmt):
     assert isinstance(rep, GeneratedReport)
     data, name, ctype = rep  # tuple-compatible
     assert data and isinstance(data, bytes)
-    assert name.startswith("grace-") and "scan42" in name
+    assert name.startswith("lab-") and "scan42" in name
     assert ctype
 
 
