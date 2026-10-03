@@ -67,7 +67,8 @@ from .mirror import Mirror, ScanTarget
 from .posture_checks import evaluate_inventory
 from .provenance import stage as provenance_stage
 from .scanners import ClairScanner, GrypeScanner, Scanner, ScanResult, TrivyScanner
-from .scanners.base import RAW_MAX_BYTES
+from .scanners.base import pack_raw_text, raw_summary
+from .admission import order_for_admission, probe_size
 from .views import ACTIVE_SCAN_STATUSES  # queued, running, scanned, finalizing
 
 log = get_logger("posture.worker")
@@ -148,22 +149,23 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
-def compress_raw(raw: str | None) -> tuple[bytes | None, int, bool]:
-    if raw is None:
+def pack_raw(r: ScanResult, max_gz: int) -> tuple[bytes | None, int, bool]:
+    """gzip raw scanner output for `image_scans.raw_gz`, never cut into invalid JSON: output whose
+    gzip exceeds RAW_MAX_GZ_BYTES is replaced by a small `{"truncated": true, ...}` summary."""
+    if r.raw_gz is not None:
+        if len(r.raw_gz) <= max_gz:
+            return r.raw_gz, r.raw_size, r.raw_truncated
+        return gzip.compress(raw_summary(r.scanner, r.raw_size, max_gz, len(r.findings))), r.raw_size, True
+    if r.raw is None:
         return None, 0, False
-    data = raw.encode("utf-8", "replace")
-    size = len(data)
-    truncated = size > RAW_MAX_BYTES
-    if truncated:
-        data = data[:RAW_MAX_BYTES]
-    return gzip.compress(data, compresslevel=6), size, truncated
+    return pack_raw_text(r.raw, r.scanner, max_gz, len(r.findings))
 
 
 def build_scanners(s: Settings) -> dict[str, Scanner]:
     docker_config = os.environ.get("DOCKER_CONFIG")
     return {
-        "trivy": TrivyScanner(s.trivy_server_url, s.trivy_bin, s.cache_dir, docker_config),
-        "grype": GrypeScanner(s.grype_bin, s.cache_dir, docker_config),
+        "trivy": TrivyScanner(s.trivy_server_url, s.trivy_bin, s.cache_dir, docker_config, s.raw_max_gz_bytes),
+        "grype": GrypeScanner(s.grype_bin, s.cache_dir, docker_config, s.grype_max_concurrent, s.raw_max_gz_bytes),
         "clair": ClairScanner(s.clair_url, s.clairctl_bin, s.cache_dir, s.mirror_registry, docker_config),
     }
 
@@ -214,6 +216,7 @@ class Worker:
         self._next_due: datetime | None = None
         self._versions: dict[str, str] = {}
         self._metrics_at = 0.0
+        self._parallelism = settings.scan_parallelism
         self.report_worker = None
         self.provenance_stage: provenance_stage.ProvenanceStage | None = (
             provenance_stage.ProvenanceStage(settings, sessionmaker) if "provenance" in self.stages else None)
@@ -412,21 +415,39 @@ class Worker:
                 await self._wait_scanners_ready(ctx, enabled)
             if enabled:
                 await self.refresh_scanner_status(enabled)
-            sem = asyncio.Semaphore(max(1, settings.parallelism))
+            self._parallelism = max(1, settings.parallelism)
+            sem = asyncio.Semaphore(self._parallelism)
+            max_bytes = int(max(0.0, self.s.scan_max_image_gb) * 1024**3)
+            sizes = await self._image_sizes(to_scan) if max_bytes else {}
+            to_scan, deferred = order_for_admission(to_scan, sizes, max_bytes)
+
+            async def one(image_id: int) -> None:
+                try:
+                    await self._process_image(ctx, image_id)
+                except Exception as e:  # noqa: BLE001  (never fail the scan for one image)
+                    log.exception("image.failed", scan_id=scan_id, image_id=image_id)
+                    ctx.failed += 1
+                    ctx.done += 1
+                    ctx.add_log(f"image {image_id}: internal error {e}")
 
             async def guarded(image_id: int) -> None:
                 async with sem:
                     if ctx.cancelled:
                         return
-                    try:
-                        await self._process_image(ctx, image_id)
-                    except Exception as e:  # noqa: BLE001  (never fail the scan for one image)
-                        log.exception("image.failed", scan_id=scan_id, image_id=image_id)
-                        ctx.failed += 1
-                        ctx.done += 1
-                        ctx.add_log(f"image {image_id}: internal error {e}")
+                    if max_bytes and sizes.get(image_id) is None and not await self._admit(ctx, image_id, max_bytes):
+                        deferred.append(image_id)
+                        return
+                    await one(image_id)
 
             await asyncio.gather(*(guarded(i) for i in to_scan))
+            if deferred and not ctx.cancelled:  # admission (M2): big images last, one at a time
+                ctx.add_log(f"warning: {len(deferred)} image(s) larger than {self.s.scan_max_image_gb:g} GB "
+                            "(SCAN_MAX_IMAGE_GB) scanned last, one at a time")
+                metrics.IMAGES_DEFERRED.inc(len(deferred))
+                for image_id in deferred:
+                    if ctx.cancelled:
+                        break
+                    await one(image_id)
             await self._flush_progress(ctx)
             if ctx.cancelled:
                 await provenance_stage.finish(prov_task, ctx.add_log, cancel=True)
@@ -585,6 +606,9 @@ class Worker:
                 ctx.add_log(f"error: {error}")
             ctx.add_log(f"scan {status}" if status != STATUS_SCANNED else "scan stage finished")
             scan.log = list(ctx.log_lines)
+            if status in ("done", "failed", "cancelled") and scan.started_at is not None:
+                metrics.SCAN_DURATION.labels(scan.trigger, status).observe(
+                    max(0.0, (scan.finished_at - scan.started_at).total_seconds()))
         log.info("scan.finished", scan_id=ctx.scan_id, status=status, images_done=ctx.done, images_failed=ctx.failed)
 
     async def _upsert_images(self, inv: InventorySnapshot) -> dict[str, int]:
@@ -677,15 +701,49 @@ class Worker:
 
     async def _scan_one_raw(self, name: str, target: ScanTarget) -> ScanResult:
         scanner = self.scanners[name]
+        # an adapter with a concurrency cap (grype) may wait for a slot before its own timeout
+        # starts: the safety net covers the wait for the runs queued ahead of it
+        cap = getattr(scanner, "max_concurrent", None)
+        rounds = 1 + (-(-max(1, self._parallelism) // cap) if isinstance(cap, int) and cap > 0 else 0)
         try:
             return await asyncio.wait_for(
                 scanner.scan(target.ref, insecure=target.insecure, timeout=self.s.scan_timeout_seconds),
-                self.s.scan_timeout_seconds + 30,
+                self.s.scan_timeout_seconds * rounds + 30,
             )
         except (TimeoutError, asyncio.TimeoutError):
             return ScanResult(name, "timeout", error=f"timed out after {self.s.scan_timeout_seconds}s")
         except Exception as e:  # noqa: BLE001
             return ScanResult(name, "error", error=f"adapter error: {e}")
+
+    async def _image_sizes(self, ids: list[int]) -> dict[int, int | None]:
+        async with self.sm() as s:
+            return {i: size for i, size in (await s.execute(
+                select(Image.id, Image.size_bytes).where(Image.id.in_(ids or [0])))).all()}
+
+    async def _admit(self, ctx: ScanContext, image_id: int, max_bytes: int) -> bool:
+        """Probe an image's size once per digest (kept in images.size_bytes); False = defer it."""
+        async with self.sm() as s:
+            img = await s.get(Image, image_id)
+            if img is None:
+                return True
+            ref, display = self._image_ref(img), img.ref
+        size = await probe_size(self.mirror, ref)
+        if size is None:
+            return True
+        async with self.sm() as s, s.begin():
+            await s.execute(update(Image).where(Image.id == image_id).values(size_bytes=size))
+        if size > max_bytes:
+            ctx.add_log(f"{display}: {size / 1024**3:.1f} GB exceeds SCAN_MAX_IMAGE_GB; moved to the end of the queue")
+            log.warning("scan.image_deferred", scan_id=ctx.scan_id, image_id=image_id, size=size)
+            return False
+        return True
+
+    @staticmethod
+    def _image_ref(img: Image):
+        ref = parse_image_ref(img.key)
+        if img.tag and not ref.tag:
+            ref = type(ref)(ref.registry, ref.repository, img.tag, ref.digest)
+        return ref
 
     async def _process_image(self, ctx: ScanContext, image_id: int) -> None:
         async with self.sm() as s:
@@ -693,9 +751,7 @@ class Worker:
             if img is None:
                 ctx.done += 1
                 return
-            ref = parse_image_ref(img.key)
-            if img.tag and not ref.tag:
-                ref = type(ref)(ref.registry, ref.repository, img.tag, ref.digest)
+            ref = self._image_ref(img)
             display = img.ref
         started = now()
         target = await self.mirror.prepare(ref)
@@ -704,6 +760,7 @@ class Worker:
         results = await asyncio.gather(*(self._scan_one(n, target) for n in ctx.enabled)) if ctx.enabled else []
         analysis = analyze(list(results))
         for r in results:
+            metrics.observe_scanner(r.scanner, r.status, r.duration_ms)
             bucket = ctx.per_scanner.setdefault(r.scanner, {"ok": 0, "error": 0})
             bucket["ok" if r.ok else "error"] += 1
             if not r.ok:
@@ -724,7 +781,7 @@ class Worker:
         async with self.sm() as s, s.begin():
             img = await s.get(Image, image_id, with_for_update=True)
             for r in results:
-                raw_gz, raw_size, truncated = compress_raw(r.raw)
+                raw_gz, raw_size, truncated = pack_raw(r, self.s.raw_max_gz_bytes)
                 isc = ImageScan(scan_id=ctx.scan_id, image_id=image_id, scanner=r.scanner, status=r.status,
                                 error=r.error, version=r.version, db_updated_at=r.db_updated_at, started_at=started,
                                 duration_ms=r.duration_ms, findings_count=len(r.findings), scanned_ref=target.ref,

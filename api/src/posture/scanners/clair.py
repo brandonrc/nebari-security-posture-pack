@@ -17,7 +17,7 @@ from ..severity import normalize_severity
 import tempfile
 
 from ..images import safe_ref_arg
-from .base import (Finding, ScanResult, Scanner, extract_cve, first_float, parse_time, read_capped, run_proc,
+from .base import (Finding, ScanResult, Scanner, extract_cve, first_float, parse_time, pack_raw_text, run_proc, RAW_MAX_GZ_BYTES,
                    scratch_dir, tail)
 
 NAME = "clair"
@@ -263,15 +263,18 @@ class ClairScanner(Scanner):
                                   duration_ms=res.duration_ms)
             with open(out, "rb") as fh:
                 text = fh.read().decode("utf-8", "replace")
-            raw = read_capped(out)
         if res.returncode != 0 or not text.strip():
             return ScanResult(NAME, "error", error=tail(res.stderr or text) or f"exit {res.returncode}",
                               duration_ms=res.duration_ms)
         try:
             doc = _first_json_object(text)
         except json.JSONDecodeError as e:
+            gz, size, cut = pack_raw_text(text, NAME)
             return ScanResult(NAME, "error", error=f"invalid JSON from clairctl: {e}", duration_ms=res.duration_ms,
-                              raw=raw)
+                              raw_gz=gz, raw_size=size, raw_truncated=cut)
         findings, meta = parse_clair_json(doc)
-        return ScanResult(NAME, "ok", findings=findings, duration_ms=res.duration_ms, raw=raw,
+        # store the report itself (clairctl may print log noise before it): valid JSON or a summary
+        gz, size, cut = await asyncio.to_thread(pack_raw_text, json.dumps(doc), NAME, RAW_MAX_GZ_BYTES, len(findings))
+        return ScanResult(NAME, "ok", findings=findings, duration_ms=res.duration_ms, raw_gz=gz, raw_size=size,
+                          raw_truncated=cut,
                           os_family=meta.get("os_family"), os_name=meta.get("os_name"))

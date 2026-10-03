@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -13,58 +14,72 @@ from ..severity import normalize_severity
 import tempfile
 
 from ..images import safe_ref_arg
-from .base import (Finding, ScanResult, Scanner, extract_cve, first_float, parse_time, read_capped, run_proc,
-                   scratch_dir, tail)
+from .base import (RAW_MAX_GZ_BYTES, Finding, ScanResult, Scanner, extract_cve, first_float, first_json_item,
+                   iter_json_items, pack_raw_file, parse_time, run_proc, scratch_dir, tail)
 
 NAME = "trivy"
 
 
-def parse_trivy_json(doc: dict[str, Any]) -> tuple[list[Finding], dict[str, Any]]:
-    """Parse `trivy image --format json` output -> findings + metadata."""
+def trivy_findings(result: dict[str, Any]) -> list[Finding]:
+    """Findings of one entry of trivy's top-level `Results`."""
     findings: list[Finding] = []
-    for result in doc.get("Results") or []:
-        rtype = result.get("Type") or result.get("Class")
-        for v in result.get("Vulnerabilities") or []:
-            vid = v.get("VulnerabilityID") or ""
-            if not vid:
-                continue
-            cvss = None
-            scores: list[float] = []
-            for src in (v.get("CVSS") or {}).values():
-                if isinstance(src, dict):
-                    s = first_float(src.get("V3Score"), src.get("V40Score"), src.get("V2Score"))
-                    if s:
-                        scores.append(s)
-            nvd = (v.get("CVSS") or {}).get("nvd") or {}
-            cvss = first_float(nvd.get("V3Score"), nvd.get("V40Score")) or (max(scores) if scores else None)
-            findings.append(
-                Finding(
-                    vuln_id=extract_cve(vid) or vid,
-                    severity=normalize_severity(v.get("Severity")),
-                    package=v.get("PkgName") or "",
-                    installed_version=v.get("InstalledVersion"),
-                    fixed_version=(v.get("FixedVersion") or None),
-                    pkg_type=rtype,
-                    scanner=NAME,
-                    cvss=cvss,
-                    title=v.get("Title") or (v.get("Description") or "")[:200] or None,
-                    url=v.get("PrimaryURL") or None,
-                )
+    rtype = result.get("Type") or result.get("Class")
+    for v in result.get("Vulnerabilities") or []:
+        vid = v.get("VulnerabilityID") or ""
+        if not vid:
+            continue
+        scores: list[float] = []
+        for src in (v.get("CVSS") or {}).values():
+            if isinstance(src, dict):
+                s = first_float(src.get("V3Score"), src.get("V40Score"), src.get("V2Score"))
+                if s:
+                    scores.append(s)
+        nvd = (v.get("CVSS") or {}).get("nvd") or {}
+        cvss = first_float(nvd.get("V3Score"), nvd.get("V40Score")) or (max(scores) if scores else None)
+        findings.append(
+            Finding(
+                vuln_id=extract_cve(vid) or vid,
+                severity=normalize_severity(v.get("Severity")),
+                package=v.get("PkgName") or "",
+                installed_version=v.get("InstalledVersion"),
+                fixed_version=(v.get("FixedVersion") or None),
+                pkg_type=rtype,
+                scanner=NAME,
+                cvss=cvss,
+                title=v.get("Title") or (v.get("Description") or "")[:200] or None,
+                url=v.get("PrimaryURL") or None,
             )
+        )
+    return findings
+
+
+def trivy_meta(os_: dict[str, Any] | None, version: str | None) -> dict[str, Any]:
     meta: dict[str, Any] = {}
-    os_ = (doc.get("Metadata") or {}).get("OS") or {}
     if os_:
         meta["os_family"] = os_.get("Family")
         meta["os_name"] = os_.get("Name")
-    meta["version"] = (doc.get("Trivy") or {}).get("Version")
-    return findings, meta
+    meta["version"] = version
+    return meta
+
+
+def parse_trivy_json(doc: dict[str, Any]) -> tuple[list[Finding], dict[str, Any]]:
+    """Parse `trivy image --format json` output -> findings + metadata."""
+    findings = [f for result in doc.get("Results") or [] for f in trivy_findings(result)]
+    return findings, trivy_meta((doc.get("Metadata") or {}).get("OS"), (doc.get("Trivy") or {}).get("Version"))
+
+
+def parse_trivy_file(path: str) -> tuple[list[Finding], dict[str, Any]]:
+    """Streaming parse (ijson): one `Results` entry in memory at a time."""
+    findings = [f for result in iter_json_items(path, "Results.item") for f in trivy_findings(result)]
+    return findings, trivy_meta(first_json_item(path, "Metadata.OS"), first_json_item(path, "Trivy.Version"))
 
 
 class TrivyScanner(Scanner):
     name = NAME
 
     def __init__(self, server_url: str, binary: str = "trivy", cache_dir: str = "/cache",
-                 docker_config: str | None = None):
+                 docker_config: str | None = None, raw_max_gz: int = RAW_MAX_GZ_BYTES):
+        self.raw_max_gz = raw_max_gz
         self.server_url = server_url.rstrip("/")
         self.binary = binary
         self.cache_dir = os.path.join(cache_dir, "trivy-client")
@@ -108,6 +123,12 @@ class TrivyScanner(Scanner):
                 "--timeout", f"{int(timeout)}s"]
         if insecure:
             argv.append("--insecure")
+        if ref.startswith("oci-dir:"):  # MIRROR_MODE=local: per-digest OCI layout on the cache volume
+            path = ref[len("oci-dir:"):]
+            if not path.startswith("/") or ".." in path.split("/"):
+                raise ValueError(f"refusing OCI layout path: {path[:80]!r}")
+            argv += ["--input", path]
+            return argv
         argv += ["--", safe_ref_arg(ref)]
         return argv
 
@@ -133,13 +154,12 @@ class TrivyScanner(Scanner):
                 return ScanResult(NAME, "error", error="trivy output exceeded the size cap",
                                   duration_ms=res.duration_ms)
             try:
-                with open(out, "rb") as fh:
-                    doc = json.load(fh)
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                findings, meta = await asyncio.to_thread(parse_trivy_file, out)
+            except Exception as e:  # noqa: BLE001  (ijson.JSONError, UnicodeDecodeError)
+                gz, size, cut = await asyncio.to_thread(pack_raw_file, out, NAME, self.raw_max_gz)
                 return ScanResult(NAME, "error", error=f"invalid JSON from trivy: {e}", duration_ms=res.duration_ms,
-                                  raw=read_capped(out))
-            raw = read_capped(out)
-        findings, meta = parse_trivy_json(doc)
+                                  raw_gz=gz, raw_size=size, raw_truncated=cut)
+            gz, size, cut = await asyncio.to_thread(pack_raw_file, out, NAME, self.raw_max_gz, len(findings), meta)
         return ScanResult(NAME, "ok", version=meta.get("version"), findings=findings,
-                          duration_ms=res.duration_ms, raw=raw,
+                          duration_ms=res.duration_ms, raw_gz=gz, raw_size=size, raw_truncated=cut,
                           os_family=meta.get("os_family"), os_name=meta.get("os_name"))

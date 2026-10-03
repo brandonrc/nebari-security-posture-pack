@@ -60,6 +60,11 @@ class ScanResult:
     raw: str | None = None
     os_family: str | None = None
     os_name: str | None = None
+    # raw output already packed by the adapter (pack_raw_file): gzip bytes, uncompressed size and
+    # whether the findings payload was dropped for size (the stored document is still valid JSON)
+    raw_gz: bytes | None = None
+    raw_size: int = 0
+    raw_truncated: bool = False
 
     @property
     def ok(self) -> bool:
@@ -237,6 +242,71 @@ def scratch_dir(cache_dir: str) -> str:
         return d
     except OSError:
         return tempfile.gettempdir()
+
+
+# ---------------------------------------------------------------- raw output (architecture M2 / M6)
+RAW_MAX_GZ_BYTES = 4 * 1024 * 1024  # default for RAW_MAX_GZ_BYTES (settings.raw_max_gz_bytes)
+
+
+def raw_summary(scanner: str, raw_size: int, max_gz: int, findings: int | None = None,
+                meta: dict[str, Any] | None = None) -> bytes:
+    """Stand-in stored instead of an oversized raw document: valid JSON, findings payload dropped."""
+    import json
+
+    doc: dict[str, Any] = {"truncated": True, "scanner": scanner, "rawSize": raw_size, "maxGzipBytes": max_gz,
+                           "reason": "raw scanner output exceeded the stored size limit; the findings payload was "
+                                     "dropped (normalized findings are in the database)"}
+    if findings is not None:
+        doc["findingsCount"] = findings
+    if meta:
+        doc["metadata"] = meta
+    return json.dumps(doc).encode()
+
+
+def pack_raw_file(path: str, scanner: str, max_gz: int = RAW_MAX_GZ_BYTES, findings: int | None = None,
+                  meta: dict[str, Any] | None = None) -> tuple[bytes, int, bool]:
+    """Gzip a raw output file in chunks -> (gz bytes, uncompressed size, truncated). Never cuts a
+    document in the middle: past `max_gz` compressed bytes it stores `raw_summary` instead."""
+    import gzip
+    import io
+
+    size = os.path.getsize(path)
+    buf = io.BytesIO()
+    over = False
+    with open(path, "rb") as src, gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as gz:
+        while chunk := src.read(1 << 20):
+            gz.write(chunk)
+            if buf.tell() > max_gz:
+                over = True
+                break
+    if over or len(buf.getvalue()) > max_gz:
+        return gzip.compress(raw_summary(scanner, size, max_gz, findings, meta)), size, True
+    return buf.getvalue(), size, False
+
+
+def pack_raw_text(text: str, scanner: str, max_gz: int = RAW_MAX_GZ_BYTES, findings: int | None = None,
+                  meta: dict[str, Any] | None = None) -> tuple[bytes, int, bool]:
+    import gzip
+
+    data = text.encode("utf-8", "replace")
+    gz = gzip.compress(data, compresslevel=6)
+    if len(gz) > max_gz:
+        return gzip.compress(raw_summary(scanner, len(data), max_gz, findings, meta)), len(data), True
+    return gz, len(data), False
+
+
+def iter_json_items(path: str, prefix: str):
+    """Stream the items at `prefix` (ijson syntax, e.g. `matches.item`) without loading the file."""
+    import ijson
+
+    with open(path, "rb") as fh:
+        yield from ijson.items(fh, prefix, use_float=True)
+
+
+def first_json_item(path: str, prefix: str) -> Any:
+    for item in iter_json_items(path, prefix):
+        return item
+    return None
 
 
 def read_capped(path: str, limit: int = RAW_MAX_BYTES + 1) -> str:

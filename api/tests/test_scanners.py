@@ -1,4 +1,5 @@
 import json
+import gzip
 import os
 import stat
 from datetime import UTC, datetime
@@ -88,7 +89,8 @@ async def test_trivy_adapter_runs_binary(tmp_path, fixtures_dir):
     out = fixtures_dir / "trivy.json"
     binary = fake_bin(tmp_path, "trivy", f'echo "$@" > {tmp_path}/args\ncat {out}\n')
     r = await TrivyScanner("http://trivy:4954", binary, str(tmp_path)).scan("reg:5000/a:b", insecure=True, timeout=30)
-    assert r.status == "ok" and len(r.findings) == 3 and r.version == "0.75.0" and r.raw
+    assert r.status == "ok" and len(r.findings) == 3 and r.version == "0.75.0" and r.raw_gz
+    assert json.loads(gzip.decompress(r.raw_gz)) == json.loads(out.read_text()) and not r.raw_truncated
     args = (tmp_path / "args").read_text()
     assert "--server http://trivy:4954" in args and "--insecure" in args and "--scanners vuln" in args
     assert args.strip().endswith("-- reg:5000/a:b")
