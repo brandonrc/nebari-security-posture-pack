@@ -1,11 +1,13 @@
 {{/*
-  Ingress-only policies (egress stays open: registries, Keycloak JWKS,
-  vulnerability DB feeds, the Kubernetes API).
-    api      <- ui, worker               :8000
-    postgres <- api, worker, clair       :5432
-    trivy    <- worker                   :4954
-    clair    <- worker                   :6060, :8089
-    ui       <- gatewayNamespaces + uiAllowedNamespaces (pod port)
+  Ingress:
+    api            <- ui, worker, worker-privileged          :8000
+    postgres       <- api, workers, report-worker, clair (shared), migrate, backup :5432
+    clair-postgres <- clair                                  :5432
+    trivy          <- worker                                 :4954
+    clair          <- worker                                 :6060, :8089
+    ui             <- gatewayNamespaces + uiAllowedNamespaces (pod port)
+  Egress (networkPolicy.workerEgress, both workers): DNS, this release's pods,
+  allowedNamespaces, TCP `ports` to any address outside exceptCidrs.
   Kubelet probes are not subject to these policies on common CNIs.
 */}}
 {{- if .Values.networkPolicy.enabled }}
@@ -25,6 +27,7 @@ spec:
     - from:
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "ui") | nindent 8 }}
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker-privileged") | nindent 8 }}
       ports:
         - port: 8000
           protocol: TCP
@@ -46,10 +49,37 @@ spec:
     - from:
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "api") | nindent 8 }}
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker-privileged") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "report-worker") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "migrate") | nindent 8 }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "backup") | nindent 8 }}
+        {{- if not (include "security-posture.db.clairDedicated" .) }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "clair") | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- if include "security-posture.db.clairDedicated" . }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "clair-postgres") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "clair-postgres") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "clair") | nindent 8 }}
       ports:
         - port: 5432
           protocol: TCP
+{{- end }}
 {{- end }}
 {{- if .Values.scanner.trivy.enabled }}
 ---
@@ -124,4 +154,70 @@ spec:
         # Pod port, not Service port: policies match after DNAT.
         - port: {{ .Values.ui.containerPort }}
           protocol: TCP
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.workerEgress.enabled }}
+{{- $eg := .Values.networkPolicy.workerEgress }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "worker") }}-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name | quote }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [worker, worker-privileged]
+  policyTypes: [Egress]
+  egress:
+    # DNS (CoreDNS pods, or a node-local cache on a host address)
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # this release's pods: api, postgres, trivy, clair
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    {{- with $eg.allowedNamespaces }}
+    # Keycloak, Loki, Prometheus/Alertmanager, in-cluster registry
+    - to:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- if not .Values.postgresql.enabled }}
+    # external database (any address on its port)
+    - ports:
+        - port: {{ .Values.externalDatabase.port | default 5432 }}
+          protocol: TCP
+    {{- end }}
+    {{- with $eg.ports }}
+    # registries, vulnerability DB feeds, the Kubernetes API
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with $eg.exceptCidrs }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+      ports:
+        {{- range . }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with $eg.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

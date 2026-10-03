@@ -1,6 +1,8 @@
 {{ include "security-posture.fullname" . }} (Security Posture pack {{ .Chart.AppVersion }}) has been deployed to namespace {{ .Release.Namespace }}.
 
-Components: ui, api, worker{{ if .Values.scanner.trivy.enabled }}, trivy{{ end }}{{ if .Values.scanner.clair.enabled }}, clair{{ end }}{{ if .Values.postgresql.enabled }}, postgres{{ end }}
+Components: ui, api, worker{{ if .Values.worker.splitPrivileged }}, worker-privileged{{ end }}{{ if .Values.scanner.trivy.enabled }}, trivy{{ end }}{{ if .Values.scanner.clair.enabled }}, clair{{ if include "security-posture.db.clairDedicated" . }}, clair-postgres{{ end }}{{ end }}{{ if .Values.postgresql.enabled }}, postgres{{ end }}{{ if .Values.postgresql.backup.enabled }}, backup (CronJob){{ end }}
+ServiceAccounts: {{ include "security-posture.saName" (dict "ctx" . "role" "api") }} (api, ui; no token), {{ include "security-posture.saName" (dict "ctx" . "role" "scanner") }} (scan worker; no Secrets), {{ include "security-posture.saName" (dict "ctx" . "role" "controls") }} (privileged worker){{ if and .Values.provenance.enabled .Values.provenance.helmReleases.enabled }}
+WARNING: provenance.helmReleases is on - {{ include "security-posture.saName" (dict "ctx" . "role" "controls") }} can read every Secret in the cluster.{{ end }}
 Enabled scanners: {{ include "security-posture.enabledScanners" . }}
 Admin groups:     {{ include "security-posture.adminGroups" . }}
 
@@ -34,10 +36,18 @@ auth.mode=disabled.
 {{- end }}
 {{- if and (eq .Values.auth.mode "oidc") (not .Values.auth.issuers) }}
 
-WARNING: auth.issuers is empty - the API will reject every token. Set it to
-the Keycloak realm issuer URL(s) (internal and external).
-{{- end }}
-{{- if eq .Values.auth.mode "disabled" }}
+WARNING: auth.issuers is empty - the API refuses to start. Set it to the
+Keycloak realm issuer URL(s) (internal and external).
+{{- else if and (eq .Values.auth.mode "oidc") (eq (len .Values.auth.issuers) 1) (contains ".svc.cluster.local" (first .Values.auth.issuers)) }}
 
-WARNING: auth.mode=disabled - the API performs NO authentication. Development only.
+NOTE: auth.issuers only lists the in-cluster Keycloak URL. Browser tokens carry
+the EXTERNAL issuer (https://<keycloak host>/auth/realms/<realm>): add it or
+every UI request gets 401.
+{{- end }}
+{{- if include "security-posture.compatEnabled" . }}
+
+Grafana compat listener: http://{{ include "security-posture.provenanceInternalServiceName" . }}.{{ .Release.Namespace }}.svc:{{ .Values.provenance.compat.internalService.port }}/api/reports/latest
+It requires `Authorization: Bearer <token>` (add it as a header in the Infinity
+datasource):
+  kubectl get secret {{ include "security-posture.compatTokenSecret" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.token}' | base64 -d
 {{- end }}

@@ -14,6 +14,8 @@ compat listener) and worker (checks). Keys: values.yaml `provenance:`.
   value: {{ $p.cosign.certificateIdentityRegexp | default "" | quote }}
 - name: PROVENANCE_COSIGN_CERTIFICATE_OIDC_ISSUER_REGEXP
   value: {{ $p.cosign.certificateOidcIssuerRegexp | default "" | quote }}
+- name: PROVENANCE_TRUST_SETTINGS_LOCKED
+  value: {{ ternary $p.cosign.lockTrustSettings true (hasKey $p.cosign "lockTrustSettings") | quote }}
 - name: PROVENANCE_CHECK_SBOM
   value: {{ $p.checkSBOM | quote }}
 - name: PROVENANCE_CHECK_PROVENANCE

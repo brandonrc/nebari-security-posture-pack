@@ -22,4 +22,4 @@ maintainers:
 dependencies:
   - name: nebari-app
     repository: oci://quay.io/nebari/charts
-    version: ">=0.1.1"
+    version: "0.1.1"

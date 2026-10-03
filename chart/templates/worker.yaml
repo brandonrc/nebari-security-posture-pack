@@ -1,73 +1,81 @@
 {{/*
-  worker - inventory + mirror + scan (trivy client, grype, clairctl) +
-  scheduler. Exactly one replica (APScheduler + Postgres-as-queue), Recreate
-  because the /cache PVC is ReadWriteOnce.
+  Workers (DESIGN §4; same image, same DB queue, `python -m posture.worker`).
+
+  worker.splitPrivileged=true (default):
+    <fullname>-worker             --stages inventory,scan
+                                  SA <fullname>-scanner (no Secrets). Inventory,
+                                  mirror, trivy client, grype, clairctl; owns the
+                                  /cache PVC and the scan scheduler. Marks scans
+                                  `scanned`.
+    <fullname>-worker-privileged  --stages provenance,controls,reports
+                                  SA <fullname>-controls. Claims `scanned` scans:
+                                  provenance (registry probes, cosign, Helm
+                                  releases), posture snapshot -> `done`, then the
+                                  controls engine; queues auto-generated reports
+                                  for <fullname>-report-worker (report-worker.yaml).
+                                  Without reportWorker.enabled it generates them
+                                  itself (reports PVC, co-located with the api).
+  worker.splitPrivileged=false: one <fullname>-worker runs every stage with
+  SA <fullname>-controls.
+
+  Exactly one replica each, Recreate (RWO volumes; Postgres-as-queue).
+  Probes: the worker's health server on :9000/healthz (503 when the main loop
+  has not beaten for max(600 s, 3 x scan timeout)).
 */}}
-{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "worker") }}
+{{- define "security-posture.worker.deployment" -}}
+{{- $ctx := .ctx }}
+{{- $component := .component }}
+{{- $scan := .scan }}
+{{- $final := .final }}
+{{- /* without a report-worker Deployment the reports stage generates in-process (embedded) */}}
+{{- $reportsHere := and $final (not $ctx.Values.reportWorker.enabled) }}
+{{- $name := include "security-posture.componentName" (dict "ctx" $ctx "component" $component) }}
+{{- with $ctx }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ $name }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "worker") | nindent 4 }}
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" $component) | nindent 4 }}
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" $component) | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "worker") | nindent 8 }}
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" $component) | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "security-posture.serviceAccountName" . }}
-      # Inventories the cluster through the read-only ClusterRole.
+      serviceAccountName: {{ include "security-posture.saName" (dict "ctx" . "role" $.sa) }}
       automountServiceAccountToken: true
       enableServiceLinks: false
       securityContext:
         {{- toYaml .Values.worker.podSecurityContext | nindent 8 }}
       initContainers:
         {{- include "security-posture.waitForDb" . | nindent 8 }}
-        {{- if .Values.extraCACerts.secretName }}
-        # System bundle + extra CAs -> one file (httpx ignores the system
-        # directories once SSL_CERT_FILE is set, Go tools read the file).
-        - name: ca-bundle
-          image: {{ include "security-posture.image" .Values.images.worker | quote }}
-          imagePullPolicy: {{ .Values.images.worker.pullPolicy }}
-          command:
-            - sh
-            - -ec
-            - |
-              cat /etc/ssl/certs/ca-certificates.crt > /etc/posture/ca/ca-bundle.crt
-              for f in /etc/posture/extra-ca/*.crt /etc/posture/extra-ca/*.pem; do
-                [ -f "$f" ] || continue
-                echo >> /etc/posture/ca/ca-bundle.crt
-                cat "$f" >> /etc/posture/ca/ca-bundle.crt
-              done
-          securityContext:
-            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          resources:
-            requests: { cpu: 10m, memory: 16Mi }
-            limits: { cpu: 100m, memory: 64Mi }
-          volumeMounts:
-            - name: extra-ca
-              mountPath: /etc/posture/extra-ca
-              readOnly: true
-            - name: ca-bundle
-              mountPath: /etc/posture/ca
-        {{- end }}
+        {{- include "security-posture.caBundle.init" (dict "ctx" . "image" .Values.images.worker) | nindent 8 }}
       containers:
         - name: worker
           image: {{ include "security-posture.image" .Values.images.worker | quote }}
           imagePullPolicy: {{ .Values.images.worker.pullPolicy }}
-          command: ["python", "-m", "posture.worker"]
+          command: ["python", "-m", "posture.worker", "--stages", {{ $.stages | quote }}]
           env:
             {{- include "security-posture.commonEnv" . | nindent 12 }}
             - name: CACHE_DIR
               value: /cache
+            - name: WORKER_HEALTH_PORT
+              value: "9000"
+            - name: REPORT_WORKER_EMBEDDED
+              value: {{ ternary "true" "false" $reportsHere | quote }}
+            {{- if $reportsHere }}
+            - name: REPORT_TIMEOUT_SECONDS
+              value: {{ .Values.reportWorker.timeoutSeconds | quote }}
+            {{- end }}
+            {{- if $scan }}
             # grype runs in-process; DB on the PVC, refreshed by the worker's
             # schedule rather than on every invocation.
             - name: GRYPE_DB_CACHE_DIR
@@ -80,60 +88,83 @@ spec:
               value: /cache/trivy-client
             - name: TRIVY_INSECURE
               value: {{ .Values.scanner.mirror.insecure | quote }}
+            - name: GRYPE_MAX_CONCURRENT
+              value: {{ .Values.scanner.grype.maxConcurrent | quote }}
+            - name: SCAN_MAX_IMAGE_GB
+              value: {{ .Values.scanner.maxImageGB | quote }}
+            {{- end }}
             {{- if .Values.registryAuth.existingSecret }}
             - name: DOCKER_CONFIG
               value: /etc/posture/docker
             - name: REGISTRY_AUTH_FILE
               value: /etc/posture/docker/config.json
             {{- end }}
-            {{- if .Values.extraCACerts.secretName }}
-            - name: SSL_CERT_FILE
-              value: /etc/posture/ca/ca-bundle.crt
-            - name: REQUESTS_CA_BUNDLE
-              value: /etc/posture/ca/ca-bundle.crt
-            {{- end }}
+            {{- include "security-posture.caBundle.env" . | nindent 12 }}
             {{- include "security-posture.provenanceEnv" . | nindent 12 }}
             {{- include "security-posture.controlsEnv" . | nindent 12 }}
+            {{- if $final }}
+            {{- include "security-posture.keycloakClientEnv" . | nindent 12 }}
+            {{- end }}
             {{- with .Values.worker.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          ports:
+            - name: health
+              containerPort: 9000
+              protocol: TCP
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
-            {{- toYaml .Values.worker.resources | nindent 12 }}
+            {{- toYaml $.resources | nindent 12 }}
           volumeMounts:
             - name: cache
               mountPath: /cache
             - name: tmp
               mountPath: /tmp
+            {{- if $reportsHere }}
             - name: reports
               mountPath: {{ .Values.reports.dir }}
+            {{- end }}
             {{- if .Values.registryAuth.existingSecret }}
             - name: registry-auth
               mountPath: /etc/posture/docker
               readOnly: true
             {{- end }}
-            {{- if .Values.provenance.cosign.existingSecret }}
+            {{- if and $final .Values.provenance.cosign.existingSecret }}
             - name: cosign-key
               mountPath: /etc/posture/cosign
               readOnly: true
             {{- end }}
-            {{- if .Values.extraCACerts.secretName }}
-            - name: ca-bundle
-              mountPath: /etc/posture/ca
+            {{- if and $final .Values.controlsEngine.enabled .Values.controlsEngine.keycloak.viewClient.existingSecret }}
+            - name: keycloak-client
+              mountPath: /etc/posture/keycloak
               readOnly: true
             {{- end }}
+            {{- include "security-posture.caBundle.mount" . | nindent 12 }}
       volumes:
         - name: cache
-          {{- if .Values.persistence.enabled }}
+          {{- if and $scan .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ $name }}-cache
+            claimName: {{ include "security-posture.componentName" (dict "ctx" . "component" "worker") }}-cache
           {{- else }}
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.worker.privileged.cacheSizeLimit }}
           {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- if $reportsHere }}
         {{- include "security-posture.reportsVolume" . | nindent 8 }}
+        {{- end }}
         {{- if .Values.registryAuth.existingSecret }}
         - name: registry-auth
           secret:
@@ -142,7 +173,7 @@ spec:
               - key: .dockerconfigjson
                 path: config.json
         {{- end }}
-        {{- if .Values.provenance.cosign.existingSecret }}
+        {{- if and $final .Values.provenance.cosign.existingSecret }}
         - name: cosign-key
           secret:
             secretName: {{ .Values.provenance.cosign.existingSecret }}
@@ -150,13 +181,15 @@ spec:
               - key: cosign.pub
                 path: cosign.pub
         {{- end }}
-        {{- if .Values.extraCACerts.secretName }}
-        - name: extra-ca
+        {{- if and $final .Values.controlsEngine.enabled .Values.controlsEngine.keycloak.viewClient.existingSecret }}
+        - name: keycloak-client
           secret:
-            secretName: {{ .Values.extraCACerts.secretName }}
-        - name: ca-bundle
-          emptyDir: {}
+            secretName: {{ .Values.controlsEngine.keycloak.viewClient.existingSecret }}
+            items:
+              - key: {{ .Values.controlsEngine.keycloak.viewClient.secretKey | default "client-secret" }}
+                path: client-secret
         {{- end }}
+        {{- include "security-posture.caBundle.volumes" . | nindent 8 }}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -168,7 +201,7 @@ spec:
       {{- if .Values.worker.affinity }}
       affinity:
         {{- toYaml .Values.worker.affinity | nindent 8 }}
-      {{- else if and .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
+      {{- else if and $reportsHere .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
       # Shares the ReadWriteOnce reports PVC with the api: same node.
       affinity:
         podAffinity:
@@ -178,3 +211,16 @@ spec:
                 matchLabels:
                   {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 18 }}
       {{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.worker.splitPrivileged }}
+{{ include "security-posture.worker.deployment" (dict "ctx" . "component" "worker" "sa" "scanner"
+     "stages" "inventory,scan" "scan" true "final" false "resources" .Values.worker.resources) }}
+---
+{{ include "security-posture.worker.deployment" (dict "ctx" . "component" "worker-privileged" "sa" "controls"
+     "stages" "provenance,controls,reports" "scan" false "final" true
+     "resources" .Values.worker.privileged.resources) }}
+{{- else }}
+{{ include "security-posture.worker.deployment" (dict "ctx" . "component" "worker" "sa" "controls"
+     "stages" "all" "scan" true "final" true "resources" .Values.worker.resources) }}
+{{- end }}

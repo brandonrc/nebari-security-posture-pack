@@ -1,0 +1,121 @@
+{{/*
+  Nightly logical backup of the posture database (architecture review M6):
+  `pg_dump -Fc` into PVC <fullname>-backup, newest postgresql.backup.retention
+  dumps kept. Works for the bundled and an external Postgres (same host/user/
+  password helpers as the app). Clair's database is not backed up: it is
+  rebuilt by Clair's updaters.
+*/}}
+{{- if .Values.postgresql.backup.enabled }}
+{{- $b := .Values.postgresql.backup }}
+{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "backup") }}
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "backup") | nindent 4 }}
+  annotations:
+    # Backups must outlive the release.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $b.size }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "backup") | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "backup") | nindent 12 }}
+        spec:
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          restartPolicy: Never
+          securityContext:
+            {{- toYaml .Values.postgres.podSecurityContext | nindent 12 }}
+          containers:
+            - name: pg-dump
+              image: {{ include "security-posture.image" .Values.images.postgres | quote }}
+              imagePullPolicy: {{ .Values.images.postgres.pullPolicy }}
+              command:
+                - sh
+                - -ec
+                - |
+                  ts=$(date -u +%Y%m%dT%H%M%SZ)
+                  out="/backup/${PGDATABASE}-${ts}.dump"
+                  pg_dump -Fc --no-owner -f "${out}.partial"
+                  mv "${out}.partial" "${out}"
+                  echo "wrote ${out} ($(du -h "${out}" | cut -f1))"
+                  ls -1t /backup/"${PGDATABASE}"-*.dump | tail -n +$((RETENTION + 1)) | while read -r old; do
+                    echo "pruning ${old}"; rm -f "${old}"
+                  done
+                  rm -f /backup/*.partial
+              env:
+                - name: PGHOST
+                  value: {{ include "security-posture.db.host" . | quote }}
+                - name: PGPORT
+                  value: {{ include "security-posture.db.port" . | quote }}
+                - name: PGUSER
+                  value: {{ include "security-posture.db.user" . | quote }}
+                - name: PGDATABASE
+                  value: {{ include "security-posture.db.name" . | quote }}
+                - name: PGSSLMODE
+                  value: {{ include "security-posture.db.sslmode" . | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "security-posture.db.secretName" . }}
+                      key: {{ include "security-posture.db.passwordKey" . }}
+                - name: RETENTION
+                  value: {{ $b.retention | quote }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backup
+              {{- if .Values.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ $name }}
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+            - name: tmp
+              emptyDir: {}
+          {{- with .Values.postgres.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.postgres.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

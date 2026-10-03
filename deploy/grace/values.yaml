@@ -32,6 +32,10 @@ auth:
 scanner:
   # grace has 40 cores and is mostly idle.
   parallelism: 6
+  # Clair stays on here (chart default is off): grace's Clair database is
+  # already ingested on the main Postgres (clair.postgres.dedicated=false).
+  clair:
+    enabled: true
   mirror:
     enabled: true
     registry: registry.container-registry.svc.cluster.local:5000
@@ -39,30 +43,68 @@ scanner:
     rewrite:
       "localhost:32000": registry.container-registry.svc.cluster.local:5000
 
-# grype/trivy/skopeo on multi-GB images (ray, jupyter) need ~2Gi per parallel
-# image; 6Gi OOMKilled the worker at parallelism 6.
+# grype/trivy/skopeo on multi-GB images (ray, jupyter); 6Gi OOMKilled the
+# worker at parallelism 6 (peak 7.3Gi). grace's memory requests are ~99%
+# allocated: requests stay below the chart defaults here.
 worker:
+  splitPrivileged: true
   resources:
-    # grace's memory requests are ~98% allocated: keep the request small.
     requests: { cpu: "1", memory: 1Gi }
     limits: { cpu: "8", memory: 16Gi }
+  privileged:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "2", memory: 2Gi }
 
-# Report generation runs in the api process (BackgroundTask). With scan #5's
-# ~25k consensus findings, nine concurrent reports OOMKilled the api at 1Gi.
-api:
+# Reports (all six auto-generated after each scan; OSCAL AR ~87 MB built in
+# memory) run in the report-worker, one at a time.
+reportWorker:
+  enabled: true
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "2", memory: 4Gi }
 
+# The api only queues reports now (it serves the downloads).
+api:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 2Gi }
+
 # Clair OOMKilled at 4Gi while its updaters ingested RHEL/Debian data and the
-# indexer unpacked large images concurrently.
+# indexer unpacked large images concurrently (peak 7.5Gi).
 clair:
   resources:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { cpu: "4", memory: 8Gi }
+  postgres:
+    # Keep Clair's ~8 GB database on the main Postgres (no re-ingest).
+    dedicated: false
+
+trivy:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1536Mi }
+
+# Shared with Clair here: 2 cores were saturated during Clair's updater ingest.
+postgresql:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 2Gi }
+  config:
+    shared_buffers: 512MB
+    effective_cache_size: 1536MB
+    work_mem: 8MB
+    maintenance_work_mem: 256MB
+    max_connections: "100"
+    checkpoint_completion_target: "0.9"
+    wal_compression: "on"
+    random_page_cost: "1.1"
 
 persistence:
   storageClass: microk8s-hostpath
+  # PVCs cannot shrink: keep the sizes grace was installed with.
+  worker: 20Gi
+  trivy: 10Gi
 
 networkPolicy:
   enabled: true
@@ -72,6 +114,13 @@ networkPolicy:
   uiAllowedNamespaces:
     - nebari-landing
     - nebari-operator-system
+  workerEgress:
+    enabled: true
+    # + envoy-gateway-system: the controls engine's TLS probe of the gateway
+    allowedNamespaces: [keycloak, monitoring, observability, container-registry, envoy-gateway-system]
+    # 16443: MicroK8s API server (the `kubernetes` Service DNATs to it);
+    # 8443: the tailscale-served Keycloak/gateway.
+    ports: [443, 80, 6443, 16443, 8443]
 
 # Grace's operator enforces auth.groups at the gateway, so the chart's own
 # SecurityPolicy stays off here (layer 1 + layer 3).
@@ -108,6 +157,9 @@ provenance:
     certificateOidcIssuerRegexp: '^https://accounts\.google\.com$'
   helmReleases:
     enabled: true
+    # Bound only to security-posture-controls (the privileged worker), not to
+    # the api or the scan worker.
+    iUnderstandClusterSecretsRead: true
     # Chart update check (PROVENANCE.md): first source that knows the chart wins,
     # so the index.yaml repos go first and the OCI prefixes (one tag list per
     # chart, `<prefix>/<chart>`) last, quay before Docker Hub. Covers grace's

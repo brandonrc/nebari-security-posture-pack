@@ -1,6 +1,7 @@
 {{/*
-  clair - Clair v4 in combo mode (indexer + matcher + notifier in one
-  process) on Postgres database `clair`. The config Secret carries no
+  clair - opt-in (scanner.clair.enabled). Clair v4 in combo mode (indexer +
+  matcher + notifier in one process) on Postgres database `clair`, on its own
+  server <fullname>-clair-postgres unless clair.postgres.dedicated=false. The config Secret carries no
   credential: the connstrings omit the password and pgx reads PGPASSWORD.
   :6060 serves the API (worker's clairctl), :8089 serves introspection
   (/healthz, /readyz, /metrics).
@@ -70,7 +71,7 @@ spec:
       securityContext:
         {{- toYaml .Values.clair.podSecurityContext | nindent 8 }}
       initContainers:
-        {{- include "security-posture.waitForDb" . | nindent 8 }}
+        {{- include "security-posture.waitForDbHost" (dict "ctx" . "host" (include "security-posture.db.clairHost" .)) | nindent 8 }}
       containers:
         - name: clair
           image: {{ include "security-posture.image" .Values.images.clair | quote }}

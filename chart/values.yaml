@@ -5,14 +5,23 @@
 # when nebariapp.enabled is true or the nebari-operator ignores the NebariApp.
 #
 # This file contains NO secrets. Database credentials are generated into
-# Secret <fullname>-db on first install (and kept across upgrades), or read
-# from an existing Secret you name.
+# Secret <fullname>-db by a pre-install/pre-upgrade hook Job (Argo CD: PreSync)
+# that only creates it when it is missing, or read from an existing Secret you
+# name (postgresql.existingSecret - recommended under Argo CD / GitOps).
+#
+# values.schema.json validates the types and enums of this file.
 
 # =============================================================================
 # Images
 # =============================================================================
 # First-party images (api, worker, ui) are built from this repo. Third-party
-# images are pinned. A non-empty `digest` (sha256:...) wins over `tag`.
+# images are pinned by tag AND digest. A non-empty `digest` (sha256:...) wins
+# over `tag`; the tag is kept for readability. The digests are the multi-arch
+# index digests of the tags, resolved with any of:
+#   skopeo inspect --format '{{.Digest}}' docker://docker.io/library/postgres:16.15-alpine
+#   crane digest postgres:16.15-alpine
+#   docker buildx imagetools inspect postgres:16.15-alpine   (the "Digest:" line)
+# Bump tag and digest together.
 images:
   api:
     repository: quay.io/nebari/nebari-security-posture-pack-api
@@ -33,18 +42,19 @@ images:
   trivy:
     repository: aquasec/trivy
     tag: "0.75.0"
-    digest: ""
+    digest: "sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"
     pullPolicy: IfNotPresent
   clair:
     repository: quay.io/projectquay/clair
     tag: "4.9.0"
-    digest: ""
+    digest: "sha256:23329c3368e4425514af425c98e61dcc2492e0578f100655b83f0ddb3a8f2f93"
     pullPolicy: IfNotPresent
   postgres:
-    # Also used for the wait-for-db init containers (pg_isready).
+    # Also used for the wait-for-db init containers (pg_isready) and the
+    # pg_dump backup CronJob.
     repository: postgres
-    tag: "16-alpine"
-    digest: ""
+    tag: "16.15-alpine"
+    digest: "sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea"
     pullPolicy: IfNotPresent
 
 # =============================================================================
@@ -106,15 +116,27 @@ auth:
   mode: oidc
   # JWKS endpoint used to verify token signatures (in-cluster URL).
   jwksUrl: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari/protocol/openid-connect/certs
-  # Accepted `iss` values (list both internal and external issuers). REQUIRED
-  # for mode=oidc: with an empty list the API rejects every token.
-  issuers: []
+  # Accepted `iss` values: list the EXTERNAL issuer your browser tokens carry
+  # (https://<keycloak host>/auth/realms/nebari) and the internal one. The API
+  # refuses to start with an empty list (fail closed). The default only accepts
+  # tokens minted against the in-cluster URL, i.e. normally none: add yours.
+  issuers:
+    - http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
+  # Accepted client ids: a token's `aud` must contain, or its `azp` equal, one
+  # of these (OIDC_CLIENT_IDS). "" = the operator-provisioned client
+  # "<namespace>-<fullname>" (or adminGate.securityPolicy.clientID) when
+  # nebariapp.enabled; empty otherwise (check skipped with a warning).
+  clientIds: []
+  # Extra accepted audiences (OIDC_AUDIENCES).
+  audiences: []
 
 # =============================================================================
 # Scanning
 # =============================================================================
 scanner:
-  # Images scanned in parallel (each image runs its three scanners concurrently).
+  # Images scanned in parallel (each image runs its scanners concurrently).
+  # Memory is governed by grype (up to ~3.2Gi per large image): size
+  # worker.resources.limits.memory accordingly.
   parallelism: 3
   # Per-scanner, per-image timeout.
   timeoutSeconds: 600
@@ -127,12 +149,24 @@ scanner:
   trivy:
     # Deploys the trivy server (Deployment + PVC + Service).
     enabled: true
+  # Images larger than this (GB, from the manifest) are scanned last, one at a
+  # time (SCAN_MAX_IMAGE_GB); 0 disables the admission rule.
+  maxImageGB: 20
   grype:
     # Grype runs inside the worker; its DB lives on the worker PVC.
     enabled: true
+    # Concurrent grype processes regardless of parallelism (GRYPE_MAX_CONCURRENT);
+    # each can take ~3.2Gi on a large image.
+    maxConcurrent: 2
   clair:
-    # Deploys Clair in combo mode (uses Postgres database `clair`).
-    enabled: true
+    # Deploys Clair in combo mode. OFF by default: on grace it found 58 unique
+    # findings out of 28,467 (0.2 %, none critical/high) while costing ~8 GB of
+    # Postgres (independent of cluster size), 7.5 GiB memory spikes during
+    # updater ingest, Postgres CPU saturation, updater egress to ~12 distro
+    # feeds (blocks air-gap), and scan start gated on its first updater run.
+    # Turning it on raises confidence (scanner agreement), not coverage. It gets
+    # its own Postgres (clair.postgres) unless clair.postgres.dedicated=false.
+    enabled: false
   mirror:
     # skopeo-copy each digest into an in-cluster registry before scanning so
     # all three scanners see identical bytes and upstreams are pulled once.
@@ -164,14 +198,24 @@ extraCACerts:
 
 logLevel: info
 
+# Scan history retention (HISTORY_RETAIN_SCANS): newest done scans whose
+# per-scan rows (containers, posture results, workloads, snapshots) are kept.
+history:
+  retainScans: 30
+
 # Compliance reports (DESIGN §11).
 reports:
   # Where report files are written (PVC persistence.reports when persistence is
   # enabled, else an emptyDir - files are then lost on restart and reports the
   # worker generates are not downloadable from the api).
   dir: /data/reports
-  # Retention: newest N finished reports per type.
-  keepPerType: 50
+  retention:
+    # Newest N finished reports per type (REPORTS_KEEP_PER_TYPE).
+    perType: 20
+    # Total bytes kept on the reports volume, oldest pruned first
+    # (REPORTS_RETENTION_MAX_TOTAL_BYTES; Kubernetes quantity). Keep it below
+    # persistence.reports.
+    maxTotalBytes: 2Gi
   # Default for settings `reports.autoGenerate` (editable in the UI): report
   # types generated after every completed scan, cluster scope, default format
   # (poam=xlsx, stig-checklist=cklb, sar=pdf, oscal-ar=json, inventory=xlsx,
@@ -206,6 +250,9 @@ provenance:
     # issuer "^https://accounts\.google\.com$".
     certificateIdentityRegexp: ""
     certificateOidcIssuerRegexp: ""
+    # PROVENANCE_TRUST_SETTINGS_LOCKED: the three trust anchors above come only
+    # from these values; PUT /settings may not change them (security L5).
+    lockTrustSettings: true
   checkSBOM: true
   checkProvenance: true
   checkUpdates: true
@@ -226,21 +273,29 @@ provenance:
   concurrency: 8
   registryTimeoutSeconds: 30
   helmReleases:
-    # Read sh.helm.release.v1.* Secrets cluster-wide. Adds cluster-wide
-    # Secrets get/list to the ClusterRole (every Secret, not only Helm's:
-    # RBAC cannot filter by label). Off by default; theirs: config.helmEnabled.
+    # Read sh.helm.release.v1.* Secrets cluster-wide. Grants get/list on EVERY
+    # Secret in the cluster (RBAC cannot filter by label: CA keys, Keycloak
+    # admin, OIDC client secrets, ...) to the privileged worker's
+    # ServiceAccount (<fullname>-controls) only - never to the api or the scan
+    # worker that parses untrusted images. Off by default; theirs:
+    # config.helmEnabled. Rendering fails unless iUnderstandClusterSecretsRead
+    # is also true.
     enabled: false
+    iUnderstandClusterSecretsRead: false
     # Optional chart sources for the chart update check (theirs never fills
     # helmReleases[].update): classic repos (index.yaml) and/or OCI prefixes,
     # e.g. [https://charts.jetstack.io, oci://quay.io/nebari/charts].
     chartRepos: []
   compat:
     # Their Grafana dashboards read /api/reports/latest over an in-cluster
-    # Service without auth. internalService.enabled starts a second listener
-    # in the api (port 8081, ONLY /api/reports*, /api/export, /healthz, no
-    # auth) behind ClusterIP Service <fullname>-web-internal (or `name`). It is
-    # never routed by the gateway; with networkPolicy.enabled only
-    # allowedNamespaces may reach it. Grafana Infinity URL:
+    # Service. internalService.enabled starts a second listener in the api
+    # (port 8081, ONLY /api/reports*, /api/export, /healthz) behind ClusterIP
+    # Service <fullname>-web-internal (or `name`). It is never routed by the
+    # gateway. Callers must send `Authorization: Bearer <token>` with the token
+    # from Secret <fullname>-compat-token (key `token`, generated once by a
+    # hook Job, mounted at PROVENANCE_COMPAT_TOKEN_FILE); put it in the Grafana
+    # Infinity datasource as a header. The NetworkPolicy admits only pods
+    # matching grafanaPodSelector in allowedNamespaces. Grafana Infinity URL:
     #   http://<service>.<namespace>.svc:<port>/api/reports/latest
     internalService:
       enabled: false
@@ -252,6 +307,15 @@ provenance:
       # Namespaces allowed through the NetworkPolicy (e.g. Grafana's).
       allowedNamespaces:
         - monitoring
+      # Pods (in allowedNamespaces) allowed through the NetworkPolicy.
+      grafanaPodSelector:
+        app.kubernetes.io/name: grafana
+      # Existing Secret (release namespace, key `token`) instead of the
+      # generated <fullname>-compat-token.
+      tokenSecret: ""
+      # Rendering fails when this listener is enabled without
+      # networkPolicy.enabled (any pod could then reach it) unless this is true.
+      allowAnonymousNetwork: false
 
 # =============================================================================
 # Control evidence engine (DESIGN §13, docs/CONTROLS.md)
@@ -281,12 +345,23 @@ controlsEngine:
     # Group whose members must have OTP/WebAuthn (IA-2(1)); "" = first adminGroups entry.
     adminGroup: ""
     verifyTls: true
-    # Secret with `username`/`password` (or `client-id`/`client-secret`, optional
-    # `realm`). The chart grants the ServiceAccount `get` on this one Secret via
-    # a Role in its namespace; nothing else in that namespace is readable.
+    # Preferred: a dedicated confidential client with only the realm-management
+    # view-* roles (client_credentials grant; security review M4). Secret in
+    # the RELEASE namespace; with viewClient.clientId set the admin Secret below
+    # is neither granted nor read.
+    viewClient:
+      clientId: ""          # KEYCLOAK_CLIENT_ID
+      existingSecret: ""    # mounted at KEYCLOAK_CLIENT_SECRET_FILE
+      secretKey: client-secret
+    # Fallback (password grant): Secret with `username`/`password` (or
+    # `client-id`/`client-secret`, optional `realm`). The chart grants the
+    # privileged worker's ServiceAccount `get` on this one Secret via a Role in
+    # its namespace; nothing else in that namespace is readable.
     adminSecret:
       name: nebari-realm-admin-credentials
       namespace: keycloak
+    # Retry the admin login against the `master` realm (KEYCLOAK_ALLOW_MASTER_FALLBACK).
+    allowMasterFallback: false
   # Service URLs; "" = discover Services in the cluster (loki:3100,
   # *prometheus*:9090, *alertmanager*:9093).
   lokiUrl: ""
@@ -312,16 +387,47 @@ database:
 postgresql:
   enabled: true
   # Existing Secret with keys `password` (app user) and `postgres-password`
-  # (superuser). Empty: the chart generates <fullname>-db once and keeps it.
+  # (superuser). Empty: a pre-install/pre-upgrade hook Job (Argo CD: PreSync)
+  # creates <fullname>-db with random values ONLY when it does not exist and
+  # never rewrites it (no Helm `lookup`, so `helm template` / Argo CD renders
+  # are stable). The Secret is annotated helm.sh/resource-policy=keep and
+  # argocd.argoproj.io/sync-options=Prune=false because the data directory
+  # outlives the release. Under Argo CD / GitOps the recommended setup is
+  # still to create the Secret yourself (sealed-secrets, external-secrets,
+  # SOPS) and name it here.
   existingSecret: ""
   auth:
     username: posture
     database: posture
-    # Second database owned by the same user, used by Clair.
+    # Clair's database name (on clair.postgres when dedicated, else on this server).
     clairDatabase: clair
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { cpu: "2", memory: 2Gi }
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1536Mi }
+  # postgresql.conf settings, rendered into ConfigMap <fullname>-postgres-config
+  # and passed as `-c key=value` (changes roll the pod). Sized for the 1.5Gi
+  # limit: shared_buffers ~25 %.
+  config:
+    shared_buffers: 384MB
+    effective_cache_size: 1GB
+    work_mem: 8MB
+    maintenance_work_mem: 128MB
+    max_connections: "100"
+    checkpoint_completion_target: "0.9"
+    wal_compression: "on"
+    random_page_cost: "1.1"
+  # Nightly logical backup of the posture database: `pg_dump -Fc` to PVC
+  # <fullname>-backup, newest `retention` dumps kept. Clair's database is not
+  # backed up (it is rebuilt from the updaters). Restore:
+  #   pg_restore --clean --if-exists -d posture /backup/posture-<ts>.dump
+  backup:
+    enabled: true
+    schedule: "17 3 * * *"
+    retention: 7
+    size: 5Gi
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: "1", memory: 512Mi }
 
 # External Postgres, used when postgresql.enabled is false. Both databases
 # must exist and be owned by `user` (Clair needs CREATE on its database and
@@ -346,10 +452,12 @@ persistence:
   # "" = cluster default StorageClass.
   storageClass: ""
   accessMode: ReadWriteOnce
-  # Worker cache: grype DB, skopeo scratch, clairctl state.
-  worker: 20Gi
-  # Trivy server vulnerability DB cache.
-  trivy: 10Gi
+  # Scan worker cache: grype DB (~3 GB), trivy client layers (~1.5 GB),
+  # skopeo scratch, clairctl state. PVCs cannot shrink: existing installs
+  # must keep their current size (set it explicitly when upgrading).
+  worker: 15Gi
+  # Trivy server vulnerability DB cache (~1 GB used).
+  trivy: 3Gi
   postgres: 10Gi
   # Generated compliance reports (bytes; metadata is in Postgres). Mounted at
   # reports.dir in the api AND the worker (reports.autoGenerate). With
@@ -362,8 +470,10 @@ persistence:
 # =============================================================================
 api:
   replicas: 1
+  # Report generation still runs in the api process when requested from the
+  # UI; raise the limit if large on-demand reports OOM it.
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
+    requests: { cpu: 100m, memory: 384Mi }
     limits: { cpu: "1", memory: 1Gi }
   podSecurityContext:
     runAsNonRoot: true
@@ -376,11 +486,29 @@ api:
   affinity: {}
 
 worker:
-  # Budget ~2Gi memory per parallel image (scanner.parallelism): grype and the
-  # trivy client load large images' package catalogues in memory.
+  # Run provenance, controls and reports in a second Deployment
+  # <fullname>-worker-privileged with ServiceAccount <fullname>-controls
+  # (Keycloak credentials, optional cluster-wide Secrets read), while
+  # <fullname>-worker runs only inventory + CVE scanning with the
+  # least-privileged <fullname>-scanner ServiceAccount (no Secrets). false: one
+  # worker runs every stage with the <fullname>-controls ServiceAccount.
+  splitPrivileged: true
+  # Scan worker. Memory is set by grype (measured peak 3.2Gi per large image,
+  # two concurrent at parallelism 3); requests near the real peak so a scan
+  # does not evict other tenants' pods.
   resources:
-    requests: { cpu: 500m, memory: 1Gi }
-    limits: { cpu: "4", memory: 6Gi }
+    requests: { cpu: 500m, memory: 4Gi }
+    limits: { cpu: "3", memory: 7Gi }
+  # Privileged worker (splitPrivileged): registry probes, cosign, Helm
+  # releases, posture snapshot, controls engine. Reports go to the
+  # report-worker (or are generated here when reportWorker.enabled=false: then
+  # size it like reportWorker.resources).
+  privileged:
+    resources:
+      requests: { cpu: 100m, memory: 384Mi }
+      limits: { cpu: "1", memory: 1536Mi }
+    # Scratch for cosign/sigstore and the CACHE_DIR temp files (emptyDir).
+    cacheSizeLimit: 2Gi
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 10001
@@ -419,9 +547,10 @@ ui:
   affinity: {}
 
 trivy:
+  # Measured: 89Mi idle, 0.21Gi peak.
   resources:
-    requests: { cpu: 200m, memory: 512Mi }
-    limits: { cpu: "2", memory: 4Gi }
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1536Mi }
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 65534
@@ -433,9 +562,27 @@ trivy:
   affinity: {}
 
 clair:
+  # Measured peak 7.5Gi during updater ingest (OOMKilled 5x at 4Gi).
   resources:
-    requests: { cpu: 200m, memory: 512Mi }
-    limits: { cpu: "2", memory: 4Gi }
+    requests: { cpu: 250m, memory: 1536Mi }
+    limits: { cpu: "2", memory: 8Gi }
+  # Clair's own Postgres (StatefulSet <fullname>-clair-postgres, same image,
+  # same credentials Secret). Its database reaches ~8 GB regardless of cluster
+  # size. dedicated=false keeps Clair's database on the main Postgres (the
+  # pre-0.2 layout; avoids re-ingesting on existing installs). Ignored with
+  # postgresql.enabled=false (externalDatabase.clairDatabase is used).
+  postgres:
+    dedicated: true
+    size: 15Gi
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits: { cpu: "2", memory: 2Gi }
+    config:
+      shared_buffers: 512MB
+      effective_cache_size: 1GB
+      work_mem: 16MB
+      maintenance_work_mem: 256MB
+      max_connections: "100"
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 65534
@@ -464,6 +611,23 @@ postgres:
   tolerations: []
   affinity: {}
 
+# Report worker (architecture M3): generates queued reports one at a time,
+# each in a child process with a timeout, and applies reports.retention. The
+# api and the workers only queue. false: the worker with the `reports` stage
+# generates them in-process (REPORT_WORKER_EMBEDDED).
+reportWorker:
+  enabled: true
+  # Per-report wall clock limit (REPORT_TIMEOUT_SECONDS).
+  timeoutSeconds: 1200
+  # process (child per report, killable, memory returned) | inline
+  isolation: process
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 3Gi }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Container-level security context applied to every container.
 containerSecurityContext:
   allowPrivilegeEscalation: false
@@ -471,23 +635,47 @@ containerSecurityContext:
   capabilities:
     drop: ["ALL"]
 
+# One ServiceAccount per privilege level (security C1 / architecture B4):
+#   api      <fullname>-api       no RBAC, token not mounted (api, ui pods)
+#   scanner  <fullname>-scanner   read pods/namespaces/workloads/netpols/NebariApps; NO Secrets
+#   controls <fullname>-controls  privileged worker: controls engine ClusterRole,
+#                                 the Keycloak Secret Role, and cluster-wide
+#                                 Secrets read only with provenance.helmReleases
 serviceAccount:
-  # ServiceAccount for api + worker, bound to the read-only ClusterRole.
   create: true
-  name: ""
+  # Name overrides ("" = <fullname>-<role>). With create=false they must exist.
+  names:
+    api: ""
+    scanner: ""
+    controls: ""
   annotations: {}
 
 rbac:
-  # ClusterRole + ClusterRoleBinding: get/list/watch on workloads, pods,
-  # namespaces, nodes, networkpolicies, serviceaccounts and NebariApps.
-  # No Secret access unless provenance.helmReleases.enabled (get/list).
+  # ClusterRoles/Roles and their bindings for the ServiceAccounts above.
   create: true
+
+# Helm hook Jobs (pre-install/pre-upgrade; Argo CD maps both to PreSync):
+#   weight -5  ensure-secrets: create <fullname>-db / <fullname>-compat-token if missing
+#   weight  0  migrate: alembic upgrade head under pg_advisory_lock, before
+#              new pods start on an upgrade (skipped when the DB is unreachable,
+#              e.g. the first Argo CD sync; the api init container migrates then)
+# They run the api image. ServiceAccount <fullname>-hooks may create Secrets
+# in the release namespace and get/patch only the two names above.
+hooks:
+  migrate:
+    enabled: true
+    # Seconds to wait for the database before skipping.
+    dbWaitSeconds: 120
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
 
 # =============================================================================
 # NetworkPolicy
 # =============================================================================
-# api <- ui, worker | postgres <- api, worker, clair | trivy, clair <- worker
-# ui <- gatewayNamespaces + uiAllowedNamespaces. Egress is unrestricted.
+# Ingress: api <- ui, workers | postgres <- api, workers, migrate, backup |
+# trivy, clair <- worker | clair-postgres <- clair | ui <- gatewayNamespaces +
+# uiAllowedNamespaces. Egress is restricted only for the workers (workerEgress).
 networkPolicy:
   enabled: true
   # Namespace(s) running the Envoy Gateway data plane.
@@ -496,6 +684,23 @@ networkPolicy:
   # Extra namespaces allowed to reach the ui directly (e.g. the landing-page
   # health prober).
   uiAllowedNamespaces: []
+  # Worker egress (both workers; they parse untrusted images and hold the
+  # most credentials). Allowed: DNS; this release's pods; every pod in
+  # allowedNamespaces (Keycloak, Loki, Prometheus, in-cluster registry); TCP
+  # `ports` to any address outside exceptCidrs (registries, vulnerability DB
+  # feeds, the Kubernetes API). Everything else is denied. Add your pod and
+  # service CIDRs to exceptCidrs to also block in-cluster targets on those
+  # ports (keep the API server reachable).
+  workerEgress:
+    enabled: true
+    allowedNamespaces: [keycloak, monitoring, observability, container-registry]
+    # 443/80: registries + feeds; 6443: Kubernetes API on most distributions.
+    ports: [443, 80, 6443]
+    exceptCidrs:
+      - 169.254.0.0/16   # link-local / cloud metadata
+    # Extra NetworkPolicyEgressRule entries appended verbatim (e.g. IPv6
+    # ipBlocks, a registry on a non-standard port).
+    extraRules: []
 
 # =============================================================================
 # Nebari Integration

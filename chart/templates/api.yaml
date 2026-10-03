@@ -1,8 +1,10 @@
 {{/*
-  api - FastAPI (:8000). Init containers wait for Postgres, then apply schema
-  migrations (`python -m posture.migrate` = alembic upgrade head). Only the
-  api migrates; the worker waits for the database and tolerates a schema that
-  is still being created.
+  api - FastAPI (:8000). ServiceAccount <fullname>-api with no RBAC and no
+  mounted token: the api never calls the Kubernetes API (B4).
+  Migrations: the pre-upgrade hook Job (hooks.yaml) migrates before new pods
+  start on an upgrade; the `migrate` init container covers the first install
+  (and is a no-op afterwards). Both take pg_advisory_lock in alembic/env.py.
+  Strategy stays Recreate while the RWO reports PVC is mounted here.
 */}}
 {{- $name := include "security-posture.componentName" (dict "ctx" . "component" "api") }}
 apiVersion: apps/v1
@@ -27,14 +29,14 @@ spec:
       labels:
         {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "security-posture.serviceAccountName" . }}
-      # Reads NebariApps / namespaces for the UI via the read-only ClusterRole.
-      automountServiceAccountToken: true
+      serviceAccountName: {{ include "security-posture.saName" (dict "ctx" . "role" "api") }}
+      automountServiceAccountToken: false
       enableServiceLinks: false
       securityContext:
         {{- toYaml .Values.api.podSecurityContext | nindent 8 }}
       initContainers:
         {{- include "security-posture.waitForDb" . | nindent 8 }}
+        {{- include "security-posture.caBundle.init" (dict "ctx" . "image" .Values.images.api) | nindent 8 }}
         - name: migrate
           image: {{ include "security-posture.image" .Values.images.api | quote }}
           imagePullPolicy: {{ .Values.images.api.pullPolicy }}
@@ -59,18 +61,21 @@ spec:
             {{- include "security-posture.commonEnv" . | nindent 12 }}
             - name: CACHE_DIR
               value: /tmp
+            {{- include "security-posture.caBundle.env" . | nindent 12 }}
             {{- include "security-posture.provenanceEnv" . | nindent 12 }}
             {{- include "security-posture.controlsEnv" . | nindent 12 }}
-            {{- if .Values.provenance.compat.internalService.enabled }}
+            {{- if include "security-posture.compatEnabled" . }}
             - name: PROVENANCE_COMPAT_INTERNAL_PORT
               value: {{ .Values.provenance.compat.internalService.containerPort | quote }}
+            - name: PROVENANCE_COMPAT_TOKEN_FILE
+              value: /etc/posture/compat/token
             {{- end }}
           ports:
             - name: http
               containerPort: 8000
               protocol: TCP
-            {{- if .Values.provenance.compat.internalService.enabled }}
-            # unauthenticated read-only provenance-collector-pack API (Grafana); see provenance-internal-service.yaml
+            {{- if include "security-posture.compatEnabled" . }}
+            # bearer-token read-only provenance-collector-pack API (Grafana); see provenance-internal-service.yaml
             - name: compat
               containerPort: {{ .Values.provenance.compat.internalService.containerPort }}
               protocol: TCP
@@ -96,10 +101,25 @@ spec:
               mountPath: /tmp
             - name: reports
               mountPath: {{ .Values.reports.dir }}
+            {{- include "security-posture.caBundle.mount" . | nindent 12 }}
+            {{- if include "security-posture.compatEnabled" . }}
+            - name: compat-token
+              mountPath: /etc/posture/compat
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
         {{- include "security-posture.reportsVolume" . | nindent 8 }}
+        {{- include "security-posture.caBundle.volumes" . | nindent 8 }}
+        {{- if include "security-posture.compatEnabled" . }}
+        - name: compat-token
+          secret:
+            secretName: {{ include "security-posture.compatTokenSecret" . }}
+            items:
+              - key: token
+                path: token
+        {{- end }}
       {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

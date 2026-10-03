@@ -1,0 +1,203 @@
+{{/*
+  Helm hooks (pre-install,pre-upgrade; Argo CD maps both to PreSync and honours
+  the weights as waves):
+
+    -10  ServiceAccount/Role/RoleBinding <fullname>-hooks (kept between runs:
+         before-hook-creation only, so Argo CD and Helm see them during the
+         whole hook phase)
+     -5  Job <fullname>-ensure-secrets: `python -m posture.bootstrap
+         ensure-secret` creates <fullname>-db and <fullname>-compat-token ONLY
+         when absent (architecture B1: replaces Helm `lookup`, which returns
+         nothing under helm template / Argo CD and rotated the DB password on
+         every render)
+      0  Job <fullname>-migrate (pre-upgrade): alembic upgrade head under
+         pg_advisory_lock before new pods start; exits 0 without migrating
+         when the database is unreachable (first install / first Argo CD
+         sync, where the api init container migrates)
+
+  Both Jobs run the api image (Python + kubernetes client, already pinned);
+  registry.k8s.io/kubectl has no shell to script "create if missing".
+*/}}
+{{- $fullname := include "security-posture.fullname" . }}
+{{- $sa := include "security-posture.saName" (dict "ctx" . "role" "hooks") }}
+{{- $secrets := list }}
+{{- if and .Values.postgresql.enabled (not .Values.postgresql.existingSecret) }}
+{{- $secrets = append $secrets (dict "name" (include "security-posture.db.secretName" .) "keys" (list "password" "postgres-password")) }}
+{{- end }}
+{{- if and (include "security-posture.compatEnabled" .) (not .Values.provenance.compat.internalService.tokenSecret) }}
+{{- $secrets = append $secrets (dict "name" (include "security-posture.compatTokenSecret" .) "keys" (list "token") "length" 48) }}
+{{- end }}
+{{- $migrate := .Values.hooks.migrate.enabled }}
+{{- if or $secrets $migrate }}
+{{- $hookLabels := include "security-posture.componentLabels" (dict "ctx" . "component" "hooks") }}
+{{- if $secrets }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $sa }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $hookLabels | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $sa }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $hookLabels | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  # `create` cannot be restricted by resourceNames; read/patch can.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range $secrets }}
+      - {{ .name | quote }}
+      {{- end }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $sa }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $hookLabels | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $sa }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-ensure-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $hookLabels | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "hooks") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $sa }}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.api.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ensure-secrets
+          image: {{ include "security-posture.image" .Values.images.api | quote }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          command:
+            - sh
+            - -ec
+            - |
+              {{- range $secrets }}
+              python -m posture.bootstrap ensure-secret --namespace "$POD_NAMESPACE" \
+                --name {{ .name | quote }}{{ range .keys }} --key {{ . | quote }}{{ end }} --length {{ .length | default 32 }} \
+                --label app.kubernetes.io/part-of=nebari-security-posture-pack \
+                --label app.kubernetes.io/instance={{ $.Release.Name }} \
+                --annotation helm.sh/resource-policy=keep \
+                --annotation argocd.argoproj.io/sync-options=Prune=false
+              {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: HOME
+              value: /tmp
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.hooks.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- if $migrate }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "migrate") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.api.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "security-posture.image" .Values.images.api | quote }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          command: ["python", "-m", "posture.migrate", "--if-reachable", {{ .Values.hooks.migrate.dbWaitSeconds | quote }}]
+          env:
+            {{- include "security-posture.db.passwordEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              value: {{ include "security-posture.db.url" . | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: HOME
+              value: /tmp
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.hooks.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- end }}

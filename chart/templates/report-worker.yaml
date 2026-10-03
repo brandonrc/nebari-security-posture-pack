@@ -1,0 +1,104 @@
+{{/*
+  report-worker - `python -m posture.report_worker` (architecture review M3):
+  claims queued `reports` rows with a lease (SKIP LOCKED), generates one at a
+  time in a child process per report (REPORT_TIMEOUT_SECONDS kills it; an OOM
+  fails only that report), applies retention (REPORTS_RETENTION_*). The api
+  and the workers only queue reports (REPORT_WORKER_EMBEDDED=false).
+  ServiceAccount <fullname>-api without a token: it only needs the database
+  and the reports volume, which it shares with the api (downloads), hence the
+  required podAffinity with a ReadWriteOnce PVC.
+*/}}
+{{- if .Values.reportWorker.enabled }}
+{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "report-worker") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "report-worker") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "report-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "report-worker") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "security-posture.saName" (dict "ctx" . "role" "api") }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.api.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- include "security-posture.waitForDb" . | nindent 8 }}
+      containers:
+        - name: report-worker
+          image: {{ include "security-posture.image" .Values.images.api | quote }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          command: ["python", "-m", "posture.report_worker"]
+          env:
+            {{- include "security-posture.commonEnv" . | nindent 12 }}
+            - name: CACHE_DIR
+              value: /tmp
+            - name: WORKER_HEALTH_PORT
+              value: "9000"
+            - name: REPORT_TIMEOUT_SECONDS
+              value: {{ .Values.reportWorker.timeoutSeconds | quote }}
+            - name: REPORT_WORKER_ISOLATION
+              value: {{ .Values.reportWorker.isolation | quote }}
+            {{- include "security-posture.provenanceEnv" . | nindent 12 }}
+            {{- include "security-posture.controlsEnv" . | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: 9000
+              protocol: TCP
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.reportWorker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: reports
+              mountPath: {{ .Values.reports.dir }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- include "security-posture.reportsVolume" . | nindent 8 }}
+      {{- with .Values.reportWorker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.reportWorker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.reportWorker.affinity }}
+      affinity:
+        {{- toYaml .Values.reportWorker.affinity | nindent 8 }}
+      {{- else if and .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
+      # Shares the ReadWriteOnce reports PVC with the api: same node.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 18 }}
+      {{- end }}
+{{- end }}

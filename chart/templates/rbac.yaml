@@ -1,30 +1,52 @@
 {{/*
-  Read-only cluster access for api + worker: inventory every pod and its
-  owner chain, namespaces/nodes for context, NetworkPolicies and
-  ServiceAccounts for the posture checks (no-netpol, automount-sa-token),
-  and NebariApps to attribute workloads to packs. Deliberately NO access to
-  Secrets (imagePullSecrets are not discovered in v0.1).
+  One ServiceAccount per privilege level (security review C1, architecture B4):
+
+    <fullname>-api       api + ui pods. No RBAC; the token is never mounted.
+    <fullname>-scanner   scan worker (inventory + CVE scanners): read-only
+                         pods, owner workloads, namespaces, nodes,
+                         serviceaccounts, networkpolicies, NebariApps. NO Secrets.
+    <fullname>-controls  privileged worker (provenance, controls engine,
+                         reports): the controls ClusterRole (RBAC bindings,
+                         gateway / cert-manager / Envoy CRs), `get` on the one
+                         Keycloak admin Secret (Role in its namespace), and -
+                         only with provenance.helmReleases.enabled +
+                         iUnderstandClusterSecretsRead - get/list on all
+                         Secrets for Helm release discovery.
+
+  worker.splitPrivileged=false runs a single worker with <fullname>-controls;
+  it then also gets the inventory ClusterRole.
 */}}
+{{- include "security-posture.validate" . }}
+{{- $fullname := include "security-posture.fullname" . }}
+{{- $prefix := printf "%s-%s" $fullname .Release.Namespace }}
+{{- $split := include "security-posture.workerSplit" . }}
 {{- if .Values.serviceAccount.create }}
+{{- range $role := list "api" "scanner" "controls" }}
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "security-posture.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "security-posture.saName" (dict "ctx" $ "role" $role) }}
+  namespace: {{ $.Release.Namespace }}
   labels:
-    {{- include "security-posture.labels" . | nindent 4 }}
-  {{- with .Values.serviceAccount.annotations }}
+    {{- include "security-posture.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
+  {{- with $.Values.serviceAccount.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 automountServiceAccountToken: false
----
+{{- end }}
 {{- end }}
 {{- if .Values.rbac.create }}
+---
+# Inventory: every pod and its owner chain, namespaces/nodes for context,
+# NetworkPolicies and ServiceAccounts for the posture checks, NebariApps to
+# attribute workloads to packs.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-reader
+  name: {{ $prefix }}-reader
   labels:
     {{- include "security-posture.labels" . | nindent 4 }}
 rules:
@@ -47,29 +69,27 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-reader
+  name: {{ $prefix }}-reader
   labels:
     {{- include "security-posture.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-reader
+  name: {{ $prefix }}-reader
 subjects:
   - kind: ServiceAccount
-    name: {{ include "security-posture.serviceAccountName" . }}
+    name: {{ include "security-posture.saName" (dict "ctx" . "role" (ternary "scanner" "controls" (eq $split "true"))) }}
     namespace: {{ .Release.Namespace }}
-{{- end }}
-{{- /* ---------------------------------------------------------------- # provenance
-  DESIGN §12: Helm release discovery reads sh.helm.release.v1.* Secrets in every
-  namespace (label owner=helm). RBAC cannot filter by label, so this grants
-  get/list on ALL Secrets cluster-wide to the api/worker ServiceAccount. Only
-  rendered with provenance.helmReleases.enabled (default false). */}}
-{{- if and .Values.rbac.create .Values.provenance.enabled .Values.provenance.helmReleases.enabled }}
+{{- if and .Values.provenance.enabled .Values.provenance.helmReleases.enabled }}
 ---
+# DESIGN §12 Helm release discovery reads sh.helm.release.v1.* Secrets in every
+# namespace (label owner=helm). RBAC cannot filter by label, so this is get/list
+# on ALL Secrets, bound ONLY to the privileged worker's ServiceAccount.
+# Acknowledged via provenance.helmReleases.iUnderstandClusterSecretsRead.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-helm-releases
+  name: {{ $prefix }}-helm-releases
   labels:
     {{- include "security-posture.labels" . | nindent 4 }}
 rules:
@@ -80,29 +100,26 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-helm-releases
+  name: {{ $prefix }}-helm-releases
   labels:
     {{- include "security-posture.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-helm-releases
+  name: {{ $prefix }}-helm-releases
 subjects:
   - kind: ServiceAccount
-    name: {{ include "security-posture.serviceAccountName" . }}
+    name: {{ include "security-posture.saName" (dict "ctx" . "role" "controls") }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
-{{- /* ---------------------------------------------------------------- # end provenance */}}
-{{- /* ---------------------------------------------------------------- # controls-engine
-  DESIGN §13 control evidence engine (worker): read-only access to the platform
-  objects its assertions inspect, plus `get` on exactly one Secret (the Keycloak
-  admin credentials) through a Role in that Secret's namespace. */}}
-{{- if and .Values.rbac.create .Values.controlsEngine.enabled }}
+{{- if .Values.controlsEngine.enabled }}
 ---
+# DESIGN §13 control evidence engine: read-only access to the platform objects
+# its assertions inspect.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-controls
+  name: {{ $prefix }}-controls
   labels:
     {{- include "security-posture.labels" . | nindent 4 }}
 rules:
@@ -131,49 +148,50 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-controls
+  name: {{ $prefix }}-controls
   labels:
     {{- include "security-posture.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-controls
+  name: {{ $prefix }}-controls
 subjects:
   - kind: ServiceAccount
-    name: {{ include "security-posture.serviceAccountName" . }}
+    name: {{ include "security-posture.saName" (dict "ctx" . "role" "controls") }}
     namespace: {{ .Release.Namespace }}
-{{- with .Values.controlsEngine.keycloak.adminSecret }}
-{{- if and .name .namespace }}
+{{- $kc := .Values.controlsEngine.keycloak }}
+{{- /* The admin Secret is only read without a dedicated view client (security M4). */}}
+{{- if and (not ($kc.viewClient | default dict).clientId) $kc.adminSecret.name $kc.adminSecret.namespace }}
 ---
+# `get` on exactly one Secret: the Keycloak admin credentials.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "security-posture.fullname" $ }}-{{ $.Release.Namespace }}-keycloak-admin
-  namespace: {{ .namespace }}
+  name: {{ $prefix }}-keycloak-admin
+  namespace: {{ $kc.adminSecret.namespace }}
   labels:
-    {{- include "security-posture.labels" $ | nindent 4 }}
+    {{- include "security-posture.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: [{{ .name | quote }}]
+    resourceNames: [{{ $kc.adminSecret.name | quote }}]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "security-posture.fullname" $ }}-{{ $.Release.Namespace }}-keycloak-admin
-  namespace: {{ .namespace }}
+  name: {{ $prefix }}-keycloak-admin
+  namespace: {{ $kc.adminSecret.namespace }}
   labels:
-    {{- include "security-posture.labels" $ | nindent 4 }}
+    {{- include "security-posture.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "security-posture.fullname" $ }}-{{ $.Release.Namespace }}-keycloak-admin
+  name: {{ $prefix }}-keycloak-admin
 subjects:
   - kind: ServiceAccount
-    name: {{ include "security-posture.serviceAccountName" $ }}
-    namespace: {{ $.Release.Namespace }}
+    name: {{ include "security-posture.saName" (dict "ctx" . "role" "controls") }}
+    namespace: {{ .Release.Namespace }}
 {{- end }}
 {{- end }}
 {{- end }}
-{{- /* ---------------------------------------------------------------- # end controls-engine */}}

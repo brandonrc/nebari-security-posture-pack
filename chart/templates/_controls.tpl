@@ -40,3 +40,24 @@
 - name: CONTROLS_TLS_PROBE
   value: {{ $c.tlsProbe | quote }}
 {{- end }}
+
+{{/*
+  Keycloak credentials for the controls engine (privileged worker only;
+  security review M4): a dedicated view-only client (KEYCLOAK_CLIENT_ID +
+  KEYCLOAK_CLIENT_SECRET_FILE) when configured, else the admin Secret named
+  in CONTROLS_KEYCLOAK_ADMIN_SECRET_* is read through the Role in rbac.yaml.
+*/}}
+{{- define "security-posture.keycloakClientEnv" -}}
+{{- $kc := .Values.controlsEngine.keycloak -}}
+{{- $vc := $kc.viewClient | default dict -}}
+- name: KEYCLOAK_ALLOW_MASTER_FALLBACK
+  value: {{ $kc.allowMasterFallback | default false | quote }}
+{{- if and .Values.controlsEngine.enabled $vc.clientId }}
+- name: KEYCLOAK_CLIENT_ID
+  value: {{ $vc.clientId | quote }}
+{{- if $vc.existingSecret }}
+- name: KEYCLOAK_CLIENT_SECRET_FILE
+  value: /etc/posture/keycloak/client-secret
+{{- end }}
+{{- end }}
+{{- end }}
