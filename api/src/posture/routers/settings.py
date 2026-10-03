@@ -24,6 +24,11 @@ async def get_settings_(session: AsyncSession = Depends(get_session)) -> dict[st
 async def put_settings(body: dict[str, Any] = Body(...), user: User = Depends(require_admin),
                        session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     current = await app_settings.load(session)
+    locked = app_settings.locked_trust_changes(current, body)
+    if locked:
+        log.warning("settings.trust_change_refused", user=user.username, fields=",".join(locked))
+        raise HTTPException(403, detail=f"signature trust settings are locked (PROVENANCE_TRUST_SETTINGS_LOCKED): "
+                                        f"{', '.join(locked)}; change them in the chart values")
     try:
         new = app_settings.apply_patch(current, body)
     except ValidationError as e:

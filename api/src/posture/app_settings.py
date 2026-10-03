@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -124,6 +125,29 @@ def defaults(env: Settings | None = None) -> AppSettings:
     )
 
 
+# Signature trust anchors (security review L5). With PROVENANCE_TRUST_SETTINGS_LOCKED=true (chart
+# default) they come only from the env (PROVENANCE_COSIGN_*), PUT /settings refuses to change them
+# and any value stored earlier is ignored.
+TRUST_FIELDS = ("cosign_public_key", "cosign_certificate_identity_regexp", "cosign_certificate_oidc_issuer_regexp")
+
+
+def trust_settings_locked() -> bool:
+    return os.environ.get("PROVENANCE_TRUST_SETTINGS_LOCKED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def locked_trust_changes(current: AppSettings, patch: dict[str, Any]) -> list[str]:
+    """camelCase names of trust fields the patch would change while locked."""
+    if not trust_settings_locked() or not isinstance(patch.get("provenance"), dict):
+        return []
+    prov = patch["provenance"]
+    out = []
+    for f in TRUST_FIELDS:
+        alias = ProvenanceSettings.model_fields[f].alias or f
+        if any(k in prov and prov[k] != getattr(current.provenance, f) for k in (alias, f)):
+            out.append(alias)
+    return sorted(set(out))
+
+
 async def load(session: AsyncSession, env: Settings | None = None) -> AppSettings:
     base = defaults(env)
     row = await session.get(Setting, 1)
@@ -134,6 +158,9 @@ async def load(session: AsyncSession, env: Settings | None = None) -> AppSetting
     for k in EDITABLE:
         merged[k] = stored[k]
     merged["controls_engine"]["enabled"] = base.controls_engine.enabled  # read-only (env)
+    if trust_settings_locked():
+        for f in TRUST_FIELDS:
+            merged["provenance"][f] = getattr(base.provenance, f)
     return AppSettings.model_validate(merged)
 
 
