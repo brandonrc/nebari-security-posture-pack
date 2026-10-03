@@ -366,7 +366,7 @@ export const handlers = [
   http.post(`${API}/compliance/assertions/run`, () => {
     if (assertionRunStarted !== null) return HttpResponse.json({ detail: 'an assertion run is already in progress' }, { status: 409 });
     assertionRunStarted = Date.now();
-    return HttpResponse.json({ status: 'queued', startedAt: new Date(assertionRunStarted).toISOString() }, { status: 202 });
+    return HttpResponse.json({ id: 1, status: 'queued', trigger: 'manual', createdAt: new Date(assertionRunStarted).toISOString(), startedAt: null }, { status: 202 });
   }),
   http.get(`${API}/compliance/assertions/:id`, ({ params }) => {
     settleAssertionRun();

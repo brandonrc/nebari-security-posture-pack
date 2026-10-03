@@ -125,7 +125,8 @@ const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
  */
 async function runAssertionsAndWait() {
   const res = await api.runAssertions();
-  const parsed = res?.startedAt ? Date.parse(res.startedAt) : Number.NaN;
+  const stamp = res?.createdAt ?? res?.startedAt;
+  const parsed = stamp ? Date.parse(stamp) : Number.NaN;
   const startedAt = Number.isNaN(parsed) ? Date.now() - 1000 : parsed;
   toast.add({ title: 'Assertion run started', description: 'Evaluating control assertions against live cluster state…', type: 'info' });
   const deadline = Date.now() + RUN_TIMEOUT_MS;

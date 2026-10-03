@@ -163,3 +163,16 @@ describe('Overview §12/§13 tiles', () => {
     expect(await screen.findByRole('link', { name: /Details/ })).toHaveAttribute('href', '/supply-chain');
   });
 });
+
+describe('Settings §12/§13', () => {
+  it('renders the supply-chain and control engine sections from the flat API shape', async () => {
+    renderApp('/settings');
+    expect(await screen.findByText('Control evidence engine')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Verify signatures').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('Discover Helm releases').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('Update level').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('Control baseline').length).toBeGreaterThan(0);
+    expect(screen.getByText('User/admin')).toBeInTheDocument();
+    expect(screen.getByLabelText('Certificate OIDC issuer')).toHaveValue('https://token.actions.githubusercontent.com');
+  });
+});

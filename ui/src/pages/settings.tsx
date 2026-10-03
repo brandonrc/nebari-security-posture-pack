@@ -65,13 +65,15 @@ const UPDATE_LEVELS: Array<{ value: UpdateLevel; label: string }> = [
 
 const DEFAULT_PROVENANCE: ProvenanceSettings = {
   verifySignatures: true,
-  cosign: { mode: 'keyless', publicKey: '', certificateIdentity: '', certificateOidcIssuer: '' },
+  cosignPublicKey: '',
+  cosignCertificateIdentityRegexp: '',
+  cosignCertificateOidcIssuerRegexp: '',
   checkSbom: true,
   checkProvenance: true,
   checkUpdates: true,
-  updateLevel: 'minor',
+  updateLevel: 'patch',
   skipPrerelease: true,
-  helmReleases: { enabled: true },
+  helmReleases: true,
 };
 const DEFAULT_CONTROLS: ControlsEngineSettings = { enabled: true, baseline: 'moderate', adminSubjects: [] };
 
@@ -80,12 +82,7 @@ function normalise(s: Settings): Required<Settings> {
   const c = s.controlsEngine;
   return {
     ...s,
-    provenance: {
-      ...DEFAULT_PROVENANCE,
-      ...p,
-      cosign: { ...DEFAULT_PROVENANCE.cosign, ...p?.cosign },
-      helmReleases: { ...DEFAULT_PROVENANCE.helmReleases, ...p?.helmReleases },
-    },
+    provenance: { ...DEFAULT_PROVENANCE, ...p },
     controlsEngine: { ...DEFAULT_CONTROLS, ...c, adminSubjects: c?.adminSubjects ?? [] },
     systemName: s.systemName ?? '',
     organization: s.organization ?? '',
@@ -100,10 +97,14 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<Required<Settings> | null>(() => (data ? normalise(data) : null));
   const [source, setSource] = useState(data);
+  // key vs keyless is implied by cosignPublicKey; keep the user's pick while the key is still empty
+  const [keyModeChoice, setKeyMode] = useState<boolean | null>(null);
+  const keyMode = keyModeChoice ?? Boolean(form?.provenance.cosignPublicKey);
   // re-seed the form whenever fresh server data arrives (load or after save)
   if (data !== source) {
     setSource(data);
     setForm(data ? normalise(data) : null);
+    setKeyMode(null);
   }
 
   const save = useMutation({
@@ -127,7 +128,7 @@ export function SettingsPage() {
     form.parallelism <= 16 &&
     SLA_KEYS.every((k) => form.remediationSlaDays[k] >= 1) &&
     SCANNERS.some((s) => form.scanners[s]) &&
-    (!form.provenance.verifySignatures || form.provenance.cosign.mode === 'keyless' || Boolean(form.provenance.cosign.publicKey?.trim()));
+    (!form.provenance.verifySignatures || !keyMode || Boolean(form.provenance.cosignPublicKey.trim()));
   const prov = form?.provenance;
   const setProv = (patch: Partial<ProvenanceSettings>) => form && set('provenance', { ...form.provenance, ...patch });
   const setCtl = (patch: Partial<ControlsEngineSettings>) => form && set('controlsEngine', { ...form.controlsEngine, ...patch });
@@ -240,6 +241,9 @@ export function SettingsPage() {
                 <CardDescription>Signature, SBOM, SLSA provenance and update checks run per image after inventory (DESIGN §12).</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-5">
+                <Row label="Stage">
+                  <Toggle label="Run supply-chain checks during scans" checked={prov.enabled ?? true} onChange={(v) => setProv({ enabled: v })} />
+                </Row>
                 <Row label="Signatures" hint="cosign verify; without verification only signature existence is checked.">
                   <div className="flex flex-col gap-3">
                     <Toggle label="Verify signatures" checked={prov.verifySignatures} onChange={(v) => setProv({ verifySignatures: v })} />
@@ -248,9 +252,12 @@ export function SettingsPage() {
                       <SimpleSelect
                         ariaLabel="Cosign verification mode"
                         className="w-44"
-                        value={prov.cosign.mode}
+                        value={keyMode ? 'key' : 'keyless'}
                         disabled={!prov.verifySignatures}
-                        onChange={(v) => setProv({ cosign: { ...prov.cosign, mode: v === 'key' ? 'key' : 'keyless' } })}
+                        onChange={(v) => {
+                          setKeyMode(v === 'key');
+                          if (v !== 'key') setProv({ cosignPublicKey: '' });
+                        }}
                         options={[
                           { value: 'keyless', label: 'Keyless (Fulcio/Rekor)' },
                           { value: 'key', label: 'Public key' },
@@ -259,25 +266,25 @@ export function SettingsPage() {
                     </div>
                   </div>
                 </Row>
-                {prov.cosign.mode === 'key' ? (
-                  <Row id="cosign-key" label="Cosign public key" hint="PEM, or a reference such as k8s://namespace/secret.">
+                {keyMode ? (
+                  <Row id="cosign-key" label="Cosign public key" hint="PEM text, a file path or a KMS URI.">
                     <Textarea
                       id="cosign-key"
                       rows={4}
                       className="font-mono text-xs"
                       placeholder="-----BEGIN PUBLIC KEY-----"
-                      value={prov.cosign.publicKey ?? ''}
+                      value={prov.cosignPublicKey}
                       disabled={!prov.verifySignatures}
-                      aria-invalid={prov.verifySignatures && !prov.cosign.publicKey?.trim() ? true : undefined}
-                      onChange={(e) => setProv({ cosign: { ...prov.cosign, publicKey: e.target.value } })}
+                      aria-invalid={prov.verifySignatures && !prov.cosignPublicKey.trim() ? true : undefined}
+                      onChange={(e) => setProv({ cosignPublicKey: e.target.value })}
                     />
-                    {prov.verifySignatures && !prov.cosign.publicKey?.trim() ? <p className="mt-1 text-destructive-foreground text-xs">A public key is required in key mode.</p> : null}
+                    {prov.verifySignatures && !prov.cosignPublicKey.trim() ? <p className="mt-1 text-destructive-foreground text-xs">A public key is required in key mode.</p> : null}
                   </Row>
                 ) : (
-                  <Row id="cosign-identity" label="Keyless identity" hint="Certificate identity (regexp) and OIDC issuer accepted for keyless verification.">
+                  <Row id="cosign-identity" label="Keyless identity" hint="Certificate identity and OIDC issuer (regular expressions) accepted for keyless verification.">
                     <div className="grid max-w-xl gap-2">
-                      <Input id="cosign-identity" placeholder="https://github.com/org/.*" value={prov.cosign.certificateIdentity ?? ''} disabled={!prov.verifySignatures} onChange={(e) => setProv({ cosign: { ...prov.cosign, certificateIdentity: e.target.value } })} />
-                      <Input aria-label="Certificate OIDC issuer" placeholder="https://token.actions.githubusercontent.com" value={prov.cosign.certificateOidcIssuer ?? ''} disabled={!prov.verifySignatures} onChange={(e) => setProv({ cosign: { ...prov.cosign, certificateOidcIssuer: e.target.value } })} />
+                      <Input id="cosign-identity" placeholder="https://github.com/org/.*" value={prov.cosignCertificateIdentityRegexp} disabled={!prov.verifySignatures} onChange={(e) => setProv({ cosignCertificateIdentityRegexp: e.target.value })} />
+                      <Input aria-label="Certificate OIDC issuer" placeholder="https://token.actions.githubusercontent.com" value={prov.cosignCertificateOidcIssuerRegexp} disabled={!prov.verifySignatures} onChange={(e) => setProv({ cosignCertificateOidcIssuerRegexp: e.target.value })} />
                     </div>
                   </Row>
                 )}
@@ -300,7 +307,7 @@ export function SettingsPage() {
                   </div>
                 </Row>
                 <Row label="Helm releases" hint="Reads sh.helm.release.v1.* secrets cluster-wide (needs the optional RBAC rule).">
-                  <Toggle label="Discover Helm releases" checked={prov.helmReleases.enabled} onChange={(v) => setProv({ helmReleases: { enabled: v } })} />
+                  <Toggle label="Discover Helm releases" checked={prov.helmReleases} onChange={(v) => setProv({ helmReleases: v })} />
                 </Row>
               </CardContent>
             </Card>
@@ -313,7 +320,8 @@ export function SettingsPage() {
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
               <Row label="Engine">
-                <Toggle label="Run control assertions after each scan" checked={form.controlsEngine.enabled} onChange={(v) => setCtl({ enabled: v })} />
+                <Toggle label="Run control assertions after each scan" checked={form.controlsEngine.enabled} disabled onChange={(v) => setCtl({ enabled: v })} />
+                <p className="mt-1 text-muted-foreground text-xs">Set by the Helm value <code className="font-mono">controlsEngine.enabled</code>; read-only here.</p>
               </Row>
               <Row label="Baseline" hint="NIST SP 800-53B baseline used for coverage and the SSP.">
                 <SimpleSelect

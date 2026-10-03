@@ -465,19 +465,26 @@ export interface Settings {
 export type Baseline = 'low' | 'moderate' | 'high';
 export const BASELINES: Baseline[] = ['low', 'moderate', 'high'];
 
-/** §12 `provenance.*` settings (names assumed, mirroring chart values). */
+/**
+ * §12 `provenance` settings — flat, as served by the API's `ProvenanceSettings`.
+ * Key vs keyless is implied: a non-empty `cosignPublicKey` means key mode.
+ */
 export interface ProvenanceSettings {
+  enabled?: boolean;
   verifySignatures: boolean;
-  cosign: { mode: 'keyless' | 'key'; publicKey?: string; certificateIdentity?: string; certificateOidcIssuer?: string };
+  cosignPublicKey: string;
+  cosignCertificateIdentityRegexp: string;
+  cosignCertificateOidcIssuerRegexp: string;
   checkSbom: boolean;
   checkProvenance: boolean;
   checkUpdates: boolean;
   updateLevel: UpdateLevel;
   skipPrerelease: boolean;
-  helmReleases: { enabled: boolean };
+  helmReleases: boolean;
+  recheckHours?: number;
 }
 
-/** §13 `controlsEngine.*` settings (names assumed). */
+/** §13 `controlsEngine` settings (`enabled` is read-only: set from Helm values). */
 export interface ControlsEngineSettings {
   enabled: boolean;
   baseline: Baseline;
@@ -570,9 +577,10 @@ export interface Assertion extends ControlAssertion {
   severity?: string;
 }
 
-/** `POST /compliance/assertions/run` 202 body (assumed). */
+/** `POST /compliance/assertions/run` 202 body (a queued run row). */
 export interface AssertionRun {
   status: string;
+  createdAt?: string | null;
   startedAt?: string | null;
   id?: string | number | null;
 }
