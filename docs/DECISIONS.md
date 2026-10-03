@@ -313,3 +313,71 @@
   512MB shared_buffers, PVC sizes kept, `iUnderstandClusterSecretsRead: true`, requests kept small
   (node ~99% allocated). Not deployed yet. After the deploy, Grafana's Infinity datasource needs the
   bearer token header (`deploy.sh` prints the command).
+- 2026-10-03 (architecture review fixes, api/worker side; details in docs/OPERATIONS.md):
+  - **Reports (M3):** the api and the workers only queue `reports` rows; `posture.report_worker`
+    claims them (SKIP LOCKED, lease + heartbeat, expired leases requeued, failed after
+    `REPORT_MAX_ATTEMPTS`), one at a time, each in a child process with a minimal env and
+    `REPORT_TIMEOUT_SECONDS` (20 min). `REPORT_WORKER_EMBEDDED` (default true) runs the same loop in
+    the worker with the `reports` stage when no report-worker Deployment exists. Retention after
+    every report: `REPORTS_RETENTION_PER_TYPE` (20, old `REPORTS_KEEP_PER_TYPE` still honoured) and
+    `REPORTS_RETENTION_MAX_TOTAL_BYTES` / `REPORTS_MAX_TOTAL_BYTES` (2 GiB), each deletion logged.
+  - **History (M6):** `HISTORY_RETAIN_SCANS` (30) prunes image_scans (raw JSON), scan_snapshots
+    and compat_reports of older finished scans; the newest done scan and every image_scans row the
+    current findings reference stay. Raw scanner JSON is stored gzip'd and never cut: past
+    `RAW_MAX_GZ_BYTES` (4 MiB compressed) the row holds a `{"truncated": true, ...}` summary.
+  - **List endpoints (M4):** per-scan `vuln_rollup` (pg_trgm index for `q`) serves
+    `/vulnerabilities` with SQL filter/sort/offset or keyset (`cursor` / `nextCursor`);
+    `/images/{id}` paginates findings in SQL; `/compliance/stig` reads posture_results and fixable
+    findings directly; `/summary` reads counts / fixable / topRisks from the cluster snapshot.
+    Measured on 500 synthetic images (172k findings, `api/tests/perf`): `/vulnerabilities` 63.9 s /
+    1 GiB -> 31 ms / 0.8 MiB; `/images/{id}` (840 findings) 136 ms / 437 KiB -> 29 ms / 28 KiB per page.
+  - **UI follow-up (findings paging):** `/images/{id}` without `page` still returns findings, capped
+    at the first 500 (severity order) with `truncated: true` and `findingsTotal`, so the current UI
+    keeps working but silently misses findings past 500 on huge images. The UI should switch the
+    findings tab to server paging: `page`, `pageSize`, `severity`, `q`, `fixable`, `disagree`,
+    `sort` (severity|cvss|vulnId|package|agreement|firstSeenAt), `order`, and take the summary line
+    ("N flagged by all scanners") from `findingsSummary.flaggedByAll` instead of computing it over
+    the loaded rows. `/vulnerabilities` items gained `kev` (always false until a KEV feed exists)
+    and `firstSeenAt`; the UI can use `nextCursor` for "load more".
+  - **Scan memory (M2):** `GRYPE_MAX_CONCURRENT` (2) caps grype processes independently of
+    `parallelism`; grype/trivy JSON is streamed from the output file with ijson; images larger than
+    `SCAN_MAX_IMAGE_GB` (20, manifest size probed once per digest into `images.size_bytes`) are
+    scanned last, one at a time.
+  - **Follow-up, not implemented: SBOM once, re-match daily.** The structural fix for 2,000 images:
+    on a new digest, generate an SBOM once (syft / `trivy image --format cyclonedx`) and keep it
+    (compressed, per digest, on the cache volume or in Postgres); daily rescans become
+    `grype sbom:<file>` / `trivy sbom <file>` re-matches against the current DBs (~300 MB and a
+    few seconds each instead of a full layer pull and unpack). Triggers: new digest (pod watcher),
+    vuln-DB update (scanner DB timestamp changed), plus the daily full sweep. Cost: both scanners
+    then share one cataloguer's package list, which lowers the independence the agreement score
+    assumes; SCORING.md must say so, and Clair (indexes layers itself) stays independent.
+  - **Mirror (M7):** `MIRROR_MODE` = `registry` (copy into MIRROR_REGISTRY, needed by Clair;
+    grace) | `local` (default; per-digest OCI layout under `CACHE_DIR/images`, verified against the
+    source digest like the registry mirror, scanned in place by trivy `--input` and grype
+    `oci-dir:`, LRU by `IMAGE_CACHE_MAX_BYTES`) | `off`. Clair is skipped (logged) unless
+    `registry`.
+  - **m7/m9/m11:** grype DB updates and scans exclude each other; `images` rows are only written
+    when a value changes (`last_seen_at` hourly); the scan worker's pod watcher
+    (`EVENT_SCANS_ENABLED`, `EVENT_SCAN_DEBOUNCE_SECONDS` 60) queues one namespace-targeted
+    `trigger=event` scan for new digests; such scans neither reset the schedule nor auto-generate
+    reports.
+  - **Compat (§1):** the worker renders the provenance-collector report once per scan into
+    `compat_reports`; the compat routes serve the stored bytes.
+  - **Metrics (M9):** `/metrics` on api :8000 (no auth; not proxied by the UI, NetworkPolicy only)
+    and on the workers / report-worker :9000. Alert examples and the runbook: docs/OPERATIONS.md.
+  - **Needs chart (not yet in the chart as of 136e9a4):**
+    - Prometheus scraping: `ServiceMonitor` for the api Service port 8000 path `/metrics`, and a
+      `PodMonitor` for components `worker`, `worker-privileged`, `report-worker` port 9000 path
+      `/metrics` (values e.g. `metrics.serviceMonitor.enabled`, `metrics.podMonitor.enabled`,
+      `metrics.labels` for the Prometheus selector); optional `PrometheusRule` from
+      docs/OPERATIONS.md (`metrics.prometheusRule.enabled`).
+    - NetworkPolicy: ingress to api :8000 and to worker / worker-privileged / report-worker :9000
+      from the monitoring namespace(s) (`networkPolicy.allowedNamespaces` / a `metrics` peer), only
+      for `/metrics` scraping. Named container ports `metrics` (9000) on the workers.
+    - Worker liveness/readiness on `:9000/healthz` for scan worker, privileged worker and
+      report-worker (report-worker /healthz tolerates a running report up to
+      REPORT_TIMEOUT_SECONDS + lease).
+    - Optional env: `RAW_MAX_GZ_BYTES` (worker), `REPORT_LEASE_SECONDS`, `REPORT_MAX_ATTEMPTS`
+      (report-worker). Already wired: GRYPE_MAX_CONCURRENT, SCAN_MAX_IMAGE_GB, MIRROR_MODE,
+      IMAGE_CACHE_MAX_BYTES (quantities like `8Gi` are accepted), EVENT_SCANS_*,
+      REPORT_WORKER_EMBEDDED / ISOLATION / TIMEOUT, REPORTS_RETENTION_*, HISTORY_RETAIN_SCANS.
