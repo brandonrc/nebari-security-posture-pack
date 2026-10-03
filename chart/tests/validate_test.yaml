@@ -1,0 +1,90 @@
+suite: render-time safety checks and the ServiceAccount split (rbac.yaml)
+templates:
+  - templates/rbac.yaml
+release:
+  name: security-posture
+  namespace: security-posture
+tests:
+  - it: one ServiceAccount per privilege level by default
+    asserts:
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          any: true
+          name: security-posture-api
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          any: true
+          name: security-posture-scanner
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          any: true
+          name: security-posture-controls
+
+  - it: refuses the removed serviceAccount.name key
+    set:
+      serviceAccount.name: legacy
+    asserts:
+      - failedTemplate:
+          errorPattern: serviceAccount.name was replaced by serviceAccount.names
+
+  - it: refuses the removed reports.keepPerType key
+    set:
+      reports.keepPerType: 5
+    asserts:
+      - failedTemplate:
+          errorPattern: reports.keepPerType was replaced by reports.retention.perType
+
+  - it: needs explicit names when it does not create ServiceAccounts
+    set:
+      serviceAccount.create: false
+    asserts:
+      - failedTemplate:
+          errorPattern: serviceAccount.names.scanner is required when serviceAccount.create is false
+
+  - it: Helm release discovery needs the cluster-wide Secrets acknowledgement
+    set:
+      provenance.helmReleases.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: Set provenance.helmReleases.iUnderstandClusterSecretsRead=true
+
+  - it: with the acknowledgement, Secrets read is bound only to the controls ServiceAccount
+    set:
+      provenance.helmReleases.enabled: true
+      provenance.helmReleases.iUnderstandClusterSecretsRead: true
+    asserts:
+      - containsDocument:
+          kind: ClusterRoleBinding
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: security-posture-security-posture-helm-releases
+          any: true
+      - equal:
+          path: subjects[0].name
+          value: security-posture-controls
+        documentSelector:
+          path: roleRef.name
+          value: security-posture-security-posture-helm-releases
+      - lengthEqual:
+          path: subjects
+          count: 1
+        documentSelector:
+          path: roleRef.name
+          value: security-posture-security-posture-helm-releases
+
+  - it: the compat internal listener needs a NetworkPolicy (or an explicit anonymous opt-in)
+    set:
+      provenance.compat.internalService.enabled: true
+      networkPolicy.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: provenance.compat.internalService needs networkPolicy.enabled
+
+  - it: auth.mode=disabled never renders
+    set:
+      auth.mode: disabled
+    asserts:
+      - failedTemplate:
+          errorPattern: auth.mode=disabled is for local development only

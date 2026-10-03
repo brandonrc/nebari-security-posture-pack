@@ -1,0 +1,76 @@
+suite: NebariApp (reconcilers.nebari.dev/v1)
+templates:
+  - templates/nebariapp.yaml
+release:
+  name: security-posture
+  namespace: security-posture
+tests:
+  - it: is not rendered by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: fails with a clear message when enabled without a hostname
+    set:
+      nebariapp.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: nebariapp.hostname is required when nebariapp.enabled is true
+
+  - it: renders the gateway-enforced auth with the admin groups (auth.groups)
+    set:
+      nebariapp.enabled: true
+      nebariapp.hostname: security.example.org
+    asserts:
+      - isKind:
+          of: NebariApp
+      - equal:
+          path: metadata.name
+          value: security-posture
+      - equal:
+          path: spec.hostname
+          value: security.example.org
+      - equal:
+          path: spec.auth.groups
+          value: [admin]
+      - equal:
+          path: spec.auth.enforceAtGateway
+          value: true
+      - equal:
+          path: spec.auth.forwardAccessToken
+          value: true
+      - equal:
+          path: spec.auth.redirectURI
+          value: /oauth2/callback
+      - equal:
+          path: spec.service.name
+          value: security-posture-ui
+      - contains:
+          path: spec.routing.publicRoutes
+          content:
+            pathPrefix: /healthz
+            pathType: Exact
+
+  - it: carries custom admin groups into auth.groups
+    set:
+      nebariapp.enabled: true
+      nebariapp.hostname: security.example.org
+      adminGroups: [platform-admins, /security]
+    asserts:
+      - equal:
+          path: spec.auth.groups
+          value: [platform-admins, /security]
+
+  - it: hands enforcement to the chart's SecurityPolicy when the admin gate is enabled
+    set:
+      nebariapp.enabled: true
+      nebariapp.hostname: security.example.org
+      adminGate.securityPolicy.enabled: true
+      adminGate.securityPolicy.externalIssuer: https://keycloak.example.org/auth/realms/nebari
+    asserts:
+      - equal:
+          path: spec.auth.enforceAtGateway
+          value: false
+      - equal:
+          path: spec.auth.forwardAccessToken
+          value: false

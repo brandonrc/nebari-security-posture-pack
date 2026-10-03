@@ -70,5 +70,9 @@ jobs:
             | sudo tar -xz -C /usr/local/bin kubeconform
       - name: Build chart dependencies
         run: helm dependency build chart/
+      - name: helm unittest (chart/tests)
+        run: |
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version "${HELM_UNITTEST_VERSION}"
+          helm unittest chart/
       - name: Render matrix (lint, 18 value sets x kubeconform with CRD schemas, 4 expected failures)
         run: .github/scripts/chart-matrix.sh

@@ -1,0 +1,76 @@
+suite: admin-gate SecurityPolicy (gateway.envoyproxy.io/v1alpha1)
+templates:
+  - templates/securitypolicy.yaml
+release:
+  name: security-posture
+  namespace: security-posture
+tests:
+  - it: is not rendered by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: requires the NebariApp (it targets the operator-created HTTPRoute)
+    set:
+      adminGate.securityPolicy.enabled: true
+      adminGate.securityPolicy.externalIssuer: https://keycloak.example.org/auth/realms/nebari
+    asserts:
+      - failedTemplate:
+          errorPattern: adminGate.securityPolicy.enabled requires nebariapp.enabled
+
+  - it: requires the external issuer
+    set:
+      nebariapp.enabled: true
+      nebariapp.hostname: security.example.org
+      adminGate.securityPolicy.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: adminGate.securityPolicy.externalIssuer is required
+
+  - it: denies by default and allows only the admin groups claim
+    set:
+      nebariapp.enabled: true
+      nebariapp.hostname: security.example.org
+      adminGate.securityPolicy.enabled: true
+      adminGate.securityPolicy.externalIssuer: https://keycloak.example.org/auth/realms/nebari/
+      adminGroups: [admin, security-team]
+    asserts:
+      - isKind:
+          of: SecurityPolicy
+      - equal:
+          path: metadata.name
+          value: security-posture-admin-gate
+      - equal:
+          path: spec.targetRefs[0]
+          value:
+            group: gateway.networking.k8s.io
+            kind: HTTPRoute
+            name: security-posture-route
+      - equal:
+          path: spec.authorization.defaultAction
+          value: Deny
+      - equal:
+          path: spec.authorization.rules[0].action
+          value: Allow
+      - equal:
+          path: spec.authorization.rules[0].principal.jwt.claims[0].name
+          value: groups
+      - contains:
+          path: spec.authorization.rules[0].principal.jwt.claims[0].values
+          content: security-team
+      # issuer trailing slash trimmed; back-channel endpoints use the in-cluster issuer
+      - equal:
+          path: spec.oidc.provider.issuer
+          value: https://keycloak.example.org/auth/realms/nebari
+      - matchRegex:
+          path: spec.oidc.provider.tokenEndpoint
+          pattern: ^http://keycloak-keycloakx-http\.keycloak\.svc\.cluster\.local:80/auth/realms/nebari/protocol/openid-connect/token$
+      - equal:
+          path: spec.oidc.redirectURL
+          value: https://security.example.org/oauth2/callback
+      - equal:
+          path: spec.oidc.clientID
+          value: security-posture-security-posture
+      - equal:
+          path: spec.jwt.providers[0].extractFrom.cookies[0]
+          value: NebariIdToken
