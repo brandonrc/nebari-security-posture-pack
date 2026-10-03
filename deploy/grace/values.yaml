@@ -205,10 +205,16 @@ controlsEngine:
   keycloak:
     url: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth
     realm: nebari
-    # Master-realm super-admin credentials; adminRealm "" tries nebari, then master.
+    # Master-realm super-admin credentials: adminRealm "" tries nebari, then
+    # master, and the master retry needs allowMasterFallback since the security
+    # review M4 fix (without it every kc-* assertion was `unknown`, "admin login
+    # failed (nebari: HTTP 400)"). Least privilege would be viewClient (a nebari
+    # realm client with view-realm/view-users/view-events only); not set up on
+    # grace yet.
     adminSecret:
       name: nebari-realm-admin-credentials
       namespace: keycloak
+    allowMasterFallback: true
   # observability holds the kube-prometheus-stack Alertmanager and the Loki
   # promtail ships to; monitoring's lgtm-pack has no Alertmanager.
   lokiUrl: http://loki.observability.svc.cluster.local:3100
