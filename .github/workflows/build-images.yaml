@@ -28,8 +28,18 @@ on:
       - ".github/workflows/build-images.yaml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   images:
+    # The reusable workflow's job asks for packages: write (GHCR push); without granting it here
+    # every run was a startup_failure. On pull requests nothing is pushed. This workflow publishes
+    # only from nebari-dev's `main`; image-scan.yaml builds and scans the same images on every
+    # branch and PR.
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:

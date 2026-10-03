@@ -17,6 +17,9 @@ updates:
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 10
     groups:
+      # vitest and its coverage provider must move in lockstep (same version)
+      vitest:
+        patterns: ["vitest", "@vitest/*"]
       npm-minor:
         update-types: [minor, patch]
     ignore:
