@@ -47,6 +47,13 @@ worker:
     requests: { cpu: "1", memory: 1Gi }
     limits: { cpu: "8", memory: 16Gi }
 
+# Report generation runs in the api process (BackgroundTask). With scan #5's
+# ~25k consensus findings, nine concurrent reports OOMKilled the api at 1Gi.
+api:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "2", memory: 4Gi }
+
 # Clair OOMKilled at 4Gi while its updaters ingested RHEL/Debian data and the
 # indexer unpacked large images concurrently.
 clair:
