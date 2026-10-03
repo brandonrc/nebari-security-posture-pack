@@ -115,10 +115,20 @@ describe('Compliance & reports', () => {
     };
     server.use(http.get('*/api/v1/compliance/families', () => HttpResponse.json({ baseline: 'moderate', items: [], totals })));
     renderApp('/');
-    expect(await screen.findByRole('link', { name: 'Controls implemented 20 of 287 (moderate baseline)' })).toBeInTheDocument();
-    const line = screen.getByText(/62 not implemented/);
-    expect(line).toHaveTextContent('6 partial · 62 not implemented · 199 inherited · 0 unknown (moderate baseline)');
-    expect(line).toHaveAttribute('title', expect.stringContaining('Full catalog (292 controls)'));
+    // The tile first renders from /summary and switches to the /compliance/families
+    // totals once that query settles; the Overview is heavy enough under a loaded
+    // runner that the default 1 s findBy timeout races it. Wait for the settled text.
+    expect(
+      await screen.findByRole('link', { name: 'Controls implemented 20 of 287 (moderate baseline)' }, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    await waitFor(
+      () => {
+        const line = screen.getByText(/62 not implemented/);
+        expect(line).toHaveTextContent('6 partial · 62 not implemented · 199 inherited · 0 unknown (moderate baseline)');
+        expect(line).toHaveAttribute('title', expect.stringContaining('Full catalog (292 controls)'));
+      },
+      { timeout: 5000 },
+    );
   });
 
   it('filters the catalog by family from the URL', async () => {
