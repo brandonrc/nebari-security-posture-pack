@@ -1,12 +1,12 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from './client';
-import type { ImageQuery, VulnQuery } from './types';
+import type { ImageFindingsQuery, ImageQuery, VulnQuery } from './types';
 
 export const qk = {
   me: ['me'] as const,
   summary: ['summary'] as const,
   images: (q: ImageQuery) => ['images', q] as const,
-  image: (id: string) => ['image', id] as const,
+  image: (id: string, q: ImageFindingsQuery = {}) => ['image', id, q] as const,
   vulns: (q: VulnQuery) => ['vulnerabilities', q] as const,
   vuln: (id: string) => ['vulnerability', id] as const,
   workloads: (ns?: string) => ['workloads', ns ?? ''] as const,
@@ -31,7 +31,14 @@ export const useMe = () => useQuery({ queryKey: qk.me, queryFn: api.me, staleTim
 export const useSummary = () => useQuery({ queryKey: qk.summary, queryFn: api.summary, refetchInterval: 60_000 });
 export const useImages = (q: ImageQuery) =>
   useQuery({ queryKey: qk.images(q), queryFn: () => api.images(q), placeholderData: keepPreviousData });
-export const useImage = (id: string) => useQuery({ queryKey: qk.image(id), queryFn: () => api.image(id) });
+/** Image detail; `q` pages/filters the findings server-side. Keeps the previous page while the next loads. */
+export const useImage = (id: string, q: ImageFindingsQuery = {}) =>
+  useQuery({
+    queryKey: qk.image(id, q),
+    queryFn: () => api.image(id, q),
+    // keep the header/tabs while another findings page loads, but never show another image's data
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === id ? prev : undefined),
+  });
 export const useVulns = (q: VulnQuery) =>
   useQuery({ queryKey: qk.vulns(q), queryFn: () => api.vulnerabilities(q), placeholderData: keepPreviousData });
 export const useVuln = (id: string) => useQuery({ queryKey: qk.vuln(id), queryFn: () => api.vulnerability(id) });

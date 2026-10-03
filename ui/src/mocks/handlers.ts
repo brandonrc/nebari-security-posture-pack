@@ -1,5 +1,5 @@
 import { delay, http, HttpResponse } from 'msw';
-import type { Grade, ImageSummary, Report, ReportCreate, Scan, Settings, Severity, VulnSummary } from '@/api/types';
+import type { Finding, Grade, ImageDetail, ImageSummary, Report, ReportCreate, Scan, Settings, Severity, VulnSummary } from '@/api/types';
 import { SCANNERS } from '@/api/types';
 import { complianceTotals, inBaseline, rollupFamilies } from '@/lib/controls';
 import { gradeRank, severityRank } from '@/lib/scoring';
@@ -149,6 +149,73 @@ function summaryOf({ findings: _f, usedBy: _u, scans: _s, postureFindings: _p, .
   return rest;
 }
 
+const UNPAGED_FINDINGS_LIMIT = 500;
+
+/**
+ * `GET /images/{id}` findings paging, mirroring api/src/posture/routers/images.py
+ * `findings_page`: filter (severity, q, fixable, disagree), sort with the same
+ * tie-breaks, slice `page`/`pageSize` (max 500), and summarise the filtered set.
+ * Without `page` the first 500 come back with `truncated` when there are more.
+ */
+export function imageWithFindingsPage(image: ImageDetail, params: URLSearchParams): ImageDetail {
+  const all = image.findings;
+  const okScanners = SCANNERS.filter((s) => image.scanners[s]?.status === 'ok').length;
+  const sevs = params.get('severity')?.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const q = params.get('q')?.toLowerCase();
+  const fixable = params.get('fixable');
+  const disagree = params.get('disagree') === 'true';
+  const filtered = all.filter(
+    (f) =>
+      (!sevs?.length || sevs.includes(f.severity)) &&
+      (!q || f.vulnId.toLowerCase().includes(q) || f.package.toLowerCase().includes(q) || (f.title ?? '').toLowerCase().includes(q)) &&
+      (fixable === null || f.fixable === (fixable === 'true')) &&
+      (!disagree || f.scanners.length < okScanners),
+  );
+  const sort = params.get('sort') ?? 'severity';
+  const dir = (params.get('order') ?? 'desc').toLowerCase() === 'asc' ? 1 : -1;
+  const keys: Record<string, (f: Finding) => Array<number | string>> = {
+    severity: (f) => [severityRank(f.severity), f.cvss ?? 0],
+    cvss: (f) => [f.cvss ?? 0, severityRank(f.severity)],
+    vulnId: (f) => [f.vulnId],
+    package: (f) => [f.package],
+    agreement: (f) => [f.scanners.length, severityRank(f.severity)],
+    firstSeenAt: (f) => [f.firstSeenAt ?? ''],
+  };
+  const key = keys[sort] ?? keys.severity;
+  const cmp = (a: number | string, b: number | string) => (typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b)));
+  const sorted = [...filtered].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    for (let i = 0; i < ka.length; i++) {
+      const c = cmp(ka[i], kb[i]);
+      if (c) return c * dir;
+    }
+    return a.vulnId.localeCompare(b.vulnId) || a.package.localeCompare(b.package);
+  });
+  const pageParam = params.get('page');
+  const page = pageParam === null ? null : Math.max(1, Number(pageParam) || 1);
+  const pageSize = Math.min(500, Math.max(1, Number(params.get('pageSize') ?? 50) || 50));
+  const size = page === null ? UNPAGED_FINDINGS_LIMIT : pageSize;
+  const start = page === null ? 0 : (page - 1) * pageSize;
+  const bySeverity = Object.fromEntries((['critical', 'high', 'medium', 'low', 'negligible', 'unknown'] as Severity[]).map((s) => [s, filtered.filter((f) => f.severity === s).length])) as Record<Severity, number>;
+  return {
+    ...image,
+    findings: sorted.slice(start, start + size),
+    findingsTotal: filtered.length,
+    findingsPage: page ?? 1,
+    findingsPageSize: size,
+    truncated: page === null && filtered.length > UNPAGED_FINDINGS_LIMIT,
+    findingsSummary: {
+      total: all.length,
+      filtered: filtered.length,
+      bySeverity,
+      fixable: filtered.filter((f) => f.fixable).length,
+      flaggedByAll: okScanners > 1 ? filtered.filter((f) => f.scanners.length >= okScanners).length : 0,
+      scannersOk: okScanners,
+    },
+  };
+}
+
 export const handlers = [
   http.all(`${API}/*`, async () => {
     await latency();
@@ -197,9 +264,9 @@ export const handlers = [
     return HttpResponse.json({ items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, pageSize });
   }),
 
-  http.get(`${API}/images/:id`, ({ params }) => {
+  http.get(`${API}/images/:id`, ({ params, request }) => {
     const image = images.find((i) => i.id === params.id);
-    return image ? HttpResponse.json(image) : HttpResponse.json({ detail: 'image not found' }, { status: 404 });
+    return image ? HttpResponse.json(imageWithFindingsPage(image, new URL(request.url).searchParams)) : HttpResponse.json({ detail: 'image not found' }, { status: 404 });
   }),
 
   http.get(`${API}/vulnerabilities`, ({ request }) => {

@@ -1,4 +1,5 @@
 import type * as React from 'react';
+import { useCallback, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Download, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router';
@@ -6,7 +7,7 @@ import { api } from '@/api/client';
 import { useImage } from '@/api/queries';
 import type { ImageDetail } from '@/api/types';
 import { SCANNERS } from '@/api/types';
-import { FindingsTable } from '@/components/findings-table';
+import { DEFAULT_FINDINGS_QUERY, FindingsTable, type FindingsQuery } from '@/components/findings-table';
 import { Pager, useClientPagination } from '@/components/table-kit';
 import { CardsSkeleton, CopyButton, EmptyState, ErrorAlert, Meta, PageHeader, errorMessage } from '@/components/page';
 import { AgreementDots, ControlChips, GradeRing, SCANNER_LABEL, ScannerStatusIcon, SeverityBadge, SeverityChips, StatusBadge } from '@/components/posture';
@@ -375,7 +376,18 @@ export function ImageDetailPage() {
   const tabParam = params.get('tab') ?? 'findings';
   const tab = (TABS as readonly string[]).includes(tabParam) ? tabParam : 'findings';
   const { id = '' } = useParams();
-  const { data: image, error, isLoading, refetch } = useImage(id);
+  // findings tab state = the server-side findings query; back to defaults on another image
+  const [findingsQuery, setFindingsQuery] = useState<{ id: string; q: FindingsQuery }>({ id, q: DEFAULT_FINDINGS_QUERY });
+  const fq = findingsQuery.id === id ? findingsQuery.q : DEFAULT_FINDINGS_QUERY;
+  const onFindingsQuery = useCallback(
+    (patch: Partial<FindingsQuery>) =>
+      setFindingsQuery((prev) => {
+        const base = prev.id === id ? prev.q : DEFAULT_FINDINGS_QUERY;
+        return { id, q: { ...base, ...patch, page: patch.page ?? 1 } };
+      }),
+    [id],
+  );
+  const { data: image, error, isLoading, isPlaceholderData, refetch } = useImage(id, fq);
   const failedScanners = image ? SCANNERS.filter((s) => image.scanners[s] && image.scanners[s]?.status !== 'ok') : [];
 
   return (
@@ -425,7 +437,7 @@ export function ImageDetailPage() {
               >
                 <TabsList variant="underline" aria-label="Image detail sections">
                   <TabsTab value="findings">
-                    Findings <Badge variant="secondary">{image.findings.length}</Badge>
+                    Findings <Badge variant="secondary">{(image.findingsSummary?.total ?? image.findingsTotal ?? image.findings.length).toLocaleString()}</Badge>
                   </TabsTab>
                   <TabsTab value="used-by">
                     Used by <Badge variant="secondary">{image.usedBy.length}</Badge>
@@ -441,7 +453,7 @@ export function ImageDetailPage() {
                   <TabsIndicator />
                 </TabsList>
                 <TabsPanel value="findings">
-                  <FindingsTable findings={image.findings} scanners={image.scanners} />
+                  <FindingsTable image={image} query={fq} onQueryChange={onFindingsQuery} loading={isPlaceholderData} />
                 </TabsPanel>
                 <TabsPanel value="used-by">
                   <UsedBy image={image} />

@@ -294,11 +294,49 @@ export interface PostureFinding extends CheckResult {
   controls?: string[];
 }
 
+/** Summary over the filtered findings set of `GET /images/{id}` (not just the returned page). */
+export interface FindingsSummary {
+  /** all findings of the image, ignoring filters */
+  total: number;
+  /** findings matching the filters (= `findingsTotal`) */
+  filtered: number;
+  bySeverity: Record<Severity, number>;
+  fixable: number;
+  /** filtered findings reported by every scanner that succeeded (0 when fewer than 2 succeeded) */
+  flaggedByAll: number;
+  scannersOk: number;
+}
+
 export interface ImageDetail extends ImageSummary {
+  /** One page of findings when `page` is sent; otherwise the first 500 (see `truncated`). */
   findings: Finding[];
+  findingsTotal?: number;
+  findingsPage?: number;
+  findingsPageSize?: number;
+  /** true when `page` was not sent and more than 500 findings matched (the list is cut). */
+  truncated?: boolean;
+  findingsSummary?: FindingsSummary;
   usedBy: ContainerRef[];
   scans: ScannerRun[];
   postureFindings: PostureFinding[];
+}
+
+export type FindingSort = 'severity' | 'cvss' | 'vulnId' | 'package' | 'agreement' | 'firstSeenAt';
+
+/** Server-side paging/filtering of the findings on `GET /images/{id}` (DECISIONS 2026-10-03). */
+export interface ImageFindingsQuery {
+  page?: number;
+  /** default 50, max 500 */
+  pageSize?: number;
+  /** comma-separated severities */
+  severity?: string;
+  /** substring of vulnId, package or title (case-insensitive) */
+  q?: string;
+  fixable?: boolean;
+  /** only findings not reported by every scanner that succeeded */
+  disagree?: boolean;
+  sort?: FindingSort;
+  order?: 'asc' | 'desc';
 }
 
 export interface ImageQuery {

@@ -10,6 +10,7 @@ import type {
   Check,
   ControlCoverage,
   ImageDetail,
+  ImageFindingsQuery,
   ImageQuery,
   ImageSummary,
   Me,
@@ -100,7 +101,7 @@ export const api = {
   summary: () => request<Summary>('GET', '/summary'),
 
   images: (query: ImageQuery) => request<Page<ImageSummary>>('GET', '/images', { params: { ...query } }),
-  image: (id: string) => request<ImageDetail>('GET', `/images/${encodeURIComponent(id)}`),
+  image: (id: string, query: ImageFindingsQuery = {}) => request<ImageDetail>('GET', `/images/${encodeURIComponent(id)}`, { params: { ...query } }),
 
   vulnerabilities: (query: VulnQuery) => request<VulnList>('GET', '/vulnerabilities', { params: { ...query } }),
   vulnerability: (vulnId: string) => request<VulnDetail>('GET', `/vulnerabilities/${encodeURIComponent(vulnId)}`),
