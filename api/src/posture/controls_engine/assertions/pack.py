@@ -96,9 +96,12 @@ async def poam_current(ctx: EngineContext) -> Result:
     if not poam:
         return failed(f"{open_items} open item(s) but no POA&M has been generated "
                       "(add 'poam' to settings reports.autoGenerate)", **ev)
-    if poam.get("scanId") != last.get("id"):
-        return failed(f"latest POA&M is from scan {poam.get('scanId')}, latest scan is {last.get('id')}", **ev)
-    return passed(f"POA&M {poam.get('id')} generated from scan {last.get('id')}", **ev)
+    # A POA&M generated after the full scan (e.g. on demand while a later event scan was the
+    # newest) covers the same or newer findings; scan ids increase monotonically.
+    if not isinstance(poam.get("scanId"), int) or poam["scanId"] < int(last.get("id") or 0):
+        return failed(f"latest POA&M is from scan {poam.get('scanId')}, latest full scan is {last.get('id')}", **ev)
+    return passed(f"POA&M {poam.get('id')} generated from scan {poam.get('scanId')} "
+                  f"(latest full scan {last.get('id')})", **ev)
 
 
 @assertion(id="pack-sla-overdue", title="No findings past their remediation SLA", controls=["SI-2"], objectives=["si-2_obj.a-3", "si-2_obj.c-1"], component=C,

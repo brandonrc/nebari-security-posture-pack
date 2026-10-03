@@ -327,6 +327,10 @@ async def test_event_scans_do_not_count_as_full_scans():
     w["snapshot"]["lastFullScan"] = full
     w["snapshot"]["latestPoam"].update(scanId=full["id"])
     assert (await run_one(get_assertion("pack-poam-current"), make_ctx(w), 5)).status == "pass"
+    w["snapshot"]["latestPoam"].update(scanId=full["id"] + 2)  # generated on demand after the event scan
+    assert (await run_one(get_assertion("pack-poam-current"), make_ctx(w), 5)).status == "pass"
+    w["snapshot"]["latestPoam"].update(scanId=full["id"] - 1)
+    assert (await run_one(get_assertion("pack-poam-current"), make_ctx(w), 5)).status == "fail"
     w["snapshot"]["lastFullScan"] = dict(full, finishedAt=NOW - timedelta(hours=20))
     out = await run_one(get_assertion("pack-scan-recent"), make_ctx(w), 5)
     assert out.status == "fail" and out.evidence["scanId"] == full["id"]
