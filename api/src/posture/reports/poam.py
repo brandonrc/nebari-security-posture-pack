@@ -13,10 +13,9 @@ CSV emits one variant (``options.poamVariant``: ``emass`` (default) | ``generic`
 
 from __future__ import annotations
 
-from copy import copy
-
 import csv
 import io
+from copy import copy
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -327,12 +326,14 @@ def _xlsx(v: View, items: list) -> bytes:
         ws.append(cols)
         for c in ws[1]:
             c.font, c.fill, c.alignment = bold, head_fill, Alignment(wrap_text=True, vertical="center")
-        # Performance (25k findings x 3 sheets): ws.max_row is O(cells), and assigning style
-        # objects per cell hashes them against the workbook registry. Track the row number and
-        # copy pre-registered StyleArrays instead.
+        # Performance (25k findings x 3 sheets): ws.max_row / ws[r] (via max_column) are O(cells),
+        # and assigning style objects per cell hashes them against the workbook registry. Track
+        # the row number, fetch cells with ws.cell (a dict lookup) and copy pre-registered
+        # StyleArrays instead.
         for r, i in enumerate(items, start=2):
             ws.append(rowf(i, v, True))
-            for idx, (col, cell) in enumerate(zip(cols, ws[r]), start=1):
+            for idx, col in enumerate(cols, start=1):
+                cell = ws.cell(row=r, column=idx)
                 cell._style = copy(styles[(col in date_cols and bool(cell.value), bool(i.overdue))])
         for idx, col in enumerate(cols, start=1):
             ws.column_dimensions[get_column_letter(idx)].width = 60 if col in wide else max(14, min(30, len(col) + 2))
