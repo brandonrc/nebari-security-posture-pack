@@ -239,7 +239,7 @@ every in-baseline control.
 | Benchmark | Release | Rules in checklist | Source |
 |---|---|---|---|
 | Kubernetes STIG (`Kubernetes_STIG`) | **V2R6**, 01 Apr 2026 | all 92 | `U_Kubernetes_V2R6_STIG.zip` from DISA (dl.dod.cyber.mil) |
-| Container Platform SRG (`Container_Platform_SRG`) | **V2R4**, 28 Oct 2025 | 13 that the tool can evidence | `U_Container_Platform_V2R4_SRG.zip` from DISA |
+| Container Platform SRG (`Container_Platform_SRG`) | **V2R4**, 28 Oct 2025 | all 188, only with `includeSrg` (13 evaluated, the rest Not_Reviewed) | `U_Container_Platform_V2R4_SRG.zip` from DISA |
 
 Rule text, severities, Rule IDs (`SV-...r..._rule`), Rule versions (`CNTR-K8-...`), CCIs
 and discussion, check and fix text are copied verbatim from the official XCCDF into
@@ -258,27 +258,29 @@ evaluated rules:
 
 | Vuln ID | Benchmark | CAT | Rule version | Rule | Evidence | If evidence found | If clean |
 |---|---|---|---|---|---|---|---|
-| V-242383 | K8s STIG | I | CNTR-K8-000290 | User-managed resources must be created in dedicated namespaces. | workloads in default, kube-public, kube-node-lease | Open | NotAFinding |
+| V-242383 | K8s STIG | I | CNTR-K8-000290 | User-managed resources must be created in dedicated namespaces. | workloads in default, kube-public, kube-node-lease (pods only; Services / ConfigMaps are not inventoried) | Open | Not_Reviewed |
 | V-242414 | K8s STIG | II | CNTR-K8-000960 | The Kubernetes cluster must use non-privileged host ports for user pods. | host-namespaces check (hostNetwork pods listed) | Not_Reviewed | Not_Reviewed |
 | V-242417 | K8s STIG | II | CNTR-K8-001360 | Kubernetes must separate user functionality. | workloads in kube-system, kube-public, kube-node-lease (listed for review) | Not_Reviewed | NotAFinding |
-| V-242437 | K8s STIG | I | CNTR-K8-002010 | Kubernetes must have a pod security policy set. | privileged, run-as-root, privilege-escalation | Open | Not_Reviewed |
+| V-242437 | K8s STIG | I | CNTR-K8-002010 | Kubernetes must have a pod security policy set. | privileged, run-as-root, privilege-escalation outside PSA-exempt (system) namespaces; those are listed under "Verify exemption" | Open | Not_Reviewed |
 | V-242443 | K8s STIG | II | CNTR-K8-002720 | Kubernetes must contain the latest updates as authorized by IAVMs, CTOs, DTMs, and STIGs. | fixable critical/high image CVEs (supporting evidence) | Not_Reviewed | Not_Reviewed |
-| V-254800 | K8s STIG | I | CNTR-K8-002011 | Kubernetes must have a Pod Security Admission control file configured. | privileged, host-namespaces, host-path, run-as-root, privilege-escalation, added-capabilities, seccomp-unconfined | Open | Not_Reviewed |
+| V-254800 | K8s STIG | I | CNTR-K8-002011 | Kubernetes must have a Pod Security Admission control file configured. | privileged, host-namespaces, host-path, run-as-root, privilege-escalation, added-capabilities, seccomp-unconfined outside PSA-exempt namespaces ("Verify exemption" for those) | Open | Not_Reviewed |
 | V-233029 | CP SRG | II | SRG-APP-000038-CTR-000105 | ...enforce approved authorizations for controlling the flow of information within the container platform... | no-netpol | Open | Not_Reviewed |
 | V-233030 | CP SRG | II | SRG-APP-000039-CTR-000110 | ...flow of information between interconnected systems... | no-netpol | Open | Not_Reviewed |
 | V-233065 | CP SRG | II | SRG-APP-000131-CTR-000285 | The container platform must verify container images. | mutable-tag | Open | Not_Reviewed |
 | V-233074 | CP SRG | II | SRG-APP-000142-CTR-000330 | The container platform runtime must enforce the use of ports that are non-privileged... | host-namespaces (listed for review) | Not_Reviewed | Not_Reviewed |
-| V-233127 | CP SRG | II | SRG-APP-000243-CTR-000595 | The container platform must prohibit containers from accessing privileged resources. | privileged, host-namespaces, host-path, added-capabilities | Open | NotAFinding |
-| V-233163 | CP SRG | II | SRG-APP-000342-CTR-000775 | Container images instantiated by the container platform must execute using least privileges. | run-as-root, privilege-escalation, capabilities-not-dropped, seccomp-unconfined, automount-sa-token | Open | NotAFinding |
+| V-233127 | CP SRG | II | SRG-APP-000243-CTR-000595 | The container platform must prohibit containers from accessing privileged resources. | privileged, host-namespaces, host-path, added-capabilities; clean only counts with PSA `restricted` enforced on every in-scope namespace (control evidence run) | Open | NotAFinding (else Not_Reviewed) |
+| V-233163 | CP SRG | II | SRG-APP-000342-CTR-000775 | Container images instantiated by the container platform must execute using least privileges. | run-as-root, privilege-escalation, capabilities-not-dropped, seccomp-unconfined, automount-sa-token; clean only counts with PSA `restricted` enforced everywhere in scope | Open | NotAFinding (else Not_Reviewed) |
 | V-233222 | CP SRG | II | SRG-APP-000435-CTR-001070 | ...protect against or limit the effects of all types of denial-of-service (DoS) attacks... | no-resource-limits | Open | Not_Reviewed |
 | V-233233 | CP SRG | II | SRG-APP-000456-CTR-001125 | The container platform registry must contain the latest images with most recent security-relevant updates... | any fixable vulnerability | Open | NotAFinding |
-| V-233234 | CP SRG | II | SRG-APP-000456-CTR-001130 | ...runtime must have security-relevant software updates installed within 30 days... | fixable vulnerability first seen > 30 days ago | Open | NotAFinding |
+| V-233234 | CP SRG | II | SRG-APP-000456-CTR-001130 | ...runtime must have security-relevant software updates installed within 30 days... | fixable vulnerability whose **fix was released** > 30 days ago (the scanners rarely know the date: then Not_Reviewed) | Open | NotAFinding (Not_Reviewed when release dates are unknown) |
 | V-233273 | CP SRG | II | SRG-APP-000516-CTR-001325 | Container platform components must be configured in accordance with the security configuration settings... | any of the 16 posture checks (catch-all) | Open | Not_Reviewed |
 | V-233275 | CP SRG | II | SRG-APP-000516-CTR-001335 | The container platform must continuously scan components, containers, and images for vulnerabilities. | scan finished within 7 days with at least one healthy scanner | Open | NotAFinding |
 | V-270875 | CP SRG | II | SRG-APP-000247-CTR-000330 | The container must have resource request limits set. | no-resource-limits, no-resource-requests | Open | NotAFinding |
 | V-270876 | CP SRG | II | SRG-APP-000380-CTR-000340 | The container root filesystem must be mounted as read-only. | writable-rootfs | Open | NotAFinding |
 
-"If clean" is `Not_Reviewed` wherever a passing result does not prove compliance.
+"If clean" is `Not_Reviewed` wherever a passing result does not prove compliance: a CAT I is
+never closed on partial evidence, an observed absence of violations is not enforcement, and the
+30-day update window runs from the update's release, not from first detection by this tool.
 V-242437 and V-254800 are examples: the actual check reads the API server's admission
 configuration, which the tool never sees. A **running** privileged pod is still
 conclusive evidence that the control is not enforced, so the failing case is `Open`.
@@ -286,9 +288,10 @@ conclusive evidence that the control is not enforced, so the failing case is `Op
 The `FINDING_DETAILS` / `finding_details` field lists the offending
 `namespace/Kind/name [container]: check (detail)` entries. Findings from system
 namespaces are tagged `[system namespace]`. `COMMENTS` records the scan ID and time and
-the evaluation caveat. Asset fields: host name = the pack's hostname (or the cluster
-name), IP = settings value, role `None`, type `Computing`, marking = settings
-`marking` (default `CUI`).
+the evaluation caveat. Asset fields come from settings `controlsEngine.stigAsset`
+(`hostName`, `hostIp`, `hostFqdn`, `hostMac`); when they are blank the TARGET_COMMENT carries a
+WARNING (eMASS asset import and HW/SW reconciliation need real identifiers). Role `None`, type
+`Computing`, marking = settings `marking` (default `CUI`).
 
 ### Formats and import
 
@@ -304,18 +307,22 @@ name), IP = settings value, role `None`, type `Computing`, marking = settings
   (`@nuwcdivnpt/stig-manager-client-modules` `reviewsFromCkl` / `reviewsFromCklb`), which
   recognize the benchmarks as `Kubernetes_STIG V2R6` and `Container_Platform_SRG V2R4`.
   This makes STIG Manager a convenient way to roll checklists into eMASS.
-- The SRG checklist contains only the 13 evidenced SRG rules. Use `includeSrg: false` if
-  your process expects only complete benchmarks.
+- The SRG is not in the checklist by default: when a product STIG exists (the Kubernetes STIG
+  derives from the Container Platform SRG) you assess the STIG. With `includeSrg: true` the SRG
+  checklist is complete (all 188 rules), so eMASS / STIG Manager compliance percentages are not
+  inflated by a subset.
 
 UUIDs are deterministic (UUIDv5 of system, scope, scan and benchmark), so regenerating a
 report for the same scan produces an identical file.
 
-## Security Assessment Report (`sar`)
+## Automated Assessment Summary, input to the SAR (`sar`)
 
-This is a printable narrative (US Letter, page numbers, classification banner from
+The Security Assessment Report is the SCA's deliverable (NIST SP 800-37 Rev. 2, task A-4). This
+report is tool output that feeds it: it makes no control determination and calls the A–F grade a
+**hygiene index**. It is a printable narrative (US Letter, page numbers, classification banner from
 settings `classification`, Nebari branding) with these sections:
 
-1. Executive summary: grade and score (vulnerability and posture components), open,
+1. Executive summary: hygiene index (grade and score, vulnerability and posture components), open,
    critical/high and past-SLA counts, data-quality warnings (scanner DBs older than
    72 h, unhealthy scanners, unscannable images), score trend over the last 30 scans.
 2. System and assessment scope.
@@ -326,8 +333,9 @@ settings `classification`, Nebari branding) with these sections:
    images.
 5. Configuration (posture) results: every check with severity, controls, STIG/SRG IDs,
    pass/fail, plus failing workloads and remediation.
-6. Control and STIG coverage: NIST controls with open items, and STIG status by CAT with
-   the Open rules.
+6. Control and STIG coverage: control evidence status counts from the same control evidence
+   run as the SSP / POA&M, NIST controls with open items, and STIG status by CAT with the Open
+   rules.
 7. Scanner versions and database freshness.
 8. Limitations.
 - Appendix A: inventory of namespaces and images with digests.
@@ -339,8 +347,8 @@ requires `libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fon
 image. If those libraries are missing, PDF generation fails with a clear error
 (`ReportDependencyMissing`) and HTML still works.
 
-Upload the PDF to eMASS as an artifact (type *Security Assessment Report* or
-*Continuous Monitoring*). An SCA should treat it as tool output that feeds their own SAR.
+Give it to the SCA as input to their SAR, or upload it to eMASS as a supporting
+*Continuous Monitoring* artifact.
 
 ## OSCAL Assessment Results (`oscal-ar`)
 
