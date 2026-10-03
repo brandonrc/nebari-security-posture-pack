@@ -125,7 +125,9 @@ class FakeMirror:
     async def prepare(self, ref, timeout=900):
         from posture.mirror import ScanTarget
 
-        return ScanTarget(f"mirror:5000/posture-mirror/{ref.repository}", True, True, ref.pullable)
+        pin = f"@{ref.digest}" if ref.digest else ":latest"
+        return ScanTarget(f"mirror:5000/posture-mirror/{ref.repository}{pin}", True, True, ref.pullable,
+                          digest_verified=bool(ref.digest))
 
 
 def make_worker(env, fail_on=()):
@@ -200,6 +202,7 @@ async def test_02_scan_pipeline(env):
     assert imgs["total"] == 3
     alpine = next(i for i in imgs["items"] if "alpine" in i["ref"])
     assert alpine["digest"] == D_ALPINE and alpine["mirrored"] is True and alpine["running"]
+    assert alpine["mirrorDigestVerified"] is True and alpine["mirrorRef"].endswith("@" + D_ALPINE)
     assert sorted(alpine["namespaces"]) == ["app", "kube-system"]
     assert alpine["scanners"]["trivy"]["status"] == "ok" and alpine["scanners"]["clair"]["findings"] == 3
     busybox = next(i for i in imgs["items"] if "busybox" in i["ref"])
