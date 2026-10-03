@@ -30,4 +30,10 @@ export default tseslint.config(
     files: ['src/App.tsx', 'src/components/*.tsx', 'src/test/**'],
     rules: { 'react-refresh/only-export-components': 'off' },
   },
+  {
+    // Playwright e2e (Node): fixtures call `use()`, which is not a React hook.
+    files: ['playwright/**'],
+    languageOptions: { globals: globals.node },
+    rules: { 'react-hooks/rules-of-hooks': 'off' },
+  },
 );

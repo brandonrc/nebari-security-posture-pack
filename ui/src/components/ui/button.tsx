@@ -73,9 +73,14 @@ function Button({
   disabled,
   children,
   ref,
-  render = <button type="button" />,
+  type = 'button',
+  render,
   ...props
 }: ButtonProps) {
+  // `type` must go on the default element: useRender lets the render element's own props win,
+  // so a `<button type="button" />` default silently turned `<Button type="submit">` into a
+  // plain button (the Generate report and Save settings forms never submitted on click).
+  render ??= <button type={type} />;
   const isDisabled = disabled || loading;
   const isIconSize = size?.startsWith('icon') ?? false;
 
