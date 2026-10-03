@@ -302,3 +302,60 @@ async def test_compat_report_materialized_once_per_scan(env):
     CACHE.latest_key = None
     assert (await env["client"].get(f"http://t/api/reports/{latest.filename}")).content.startswith(b"{") and \
         b'"metadata" ' in (await env["client"].get(f"http://t/api/reports/{latest.filename}")).content
+
+
+async def test_pod_watcher_queues_one_targeted_scan(env):
+    import threading
+
+    from sqlalchemy import select
+
+    from posture.db.models import Scan
+    from posture.event_scans import PodWatcher, enqueue_event_scan
+
+    d_new = "sha256:" + "7" * 64
+    d_new2 = "sha256:" + "8" * 64
+    known = "ghcr.io/org/web@sha256:" + "2" * 64  # scanned by the earlier tests
+
+    def ev(ns, ref, digest):
+        return {"type": "ADDED", "object": {"metadata": {"namespace": ns}, "status": {"containerStatuses": [
+            {"image": f"{ref}:1", "imageID": f"{ref}@{digest}"}]}}}
+
+    events = [ev("app", "ghcr.io/org/web", "sha256:" + "2" * 64),
+              ev("team-a", "ghcr.io/org/new", d_new), ev("team-b", "ghcr.io/org/new2", d_new2),
+              ev("team-a", "ghcr.io/org/new", d_new)]
+
+    def stream(stop: threading.Event):
+        yield from events
+        stop.wait(5)
+
+    w = PodWatcher(env["sm"], stream_factory=stream, debounce=1.0, quiet=0.3)
+    task = asyncio.create_task(w.run())
+    for _ in range(50):
+        await asyncio.sleep(0.1)
+        if w.queued:
+            break
+    w.stop()
+    task.cancel()
+    assert len(w.queued) == 1
+    async with env["sm"]() as s:
+        scan = await s.get(Scan, w.queued[0])
+    assert scan.trigger == "event" and scan.status == "queued" and scan.target_namespaces == ["team-a", "team-b"]
+    assert known in w.known
+    # a second burst merges into the queued event scan; a queued full scan absorbs it
+    assert await enqueue_event_scan(env["sm"], ["team-c"]) == scan.id
+    async with env["sm"]() as s:
+        assert (await s.get(Scan, scan.id)).target_namespaces == ["team-a", "team-b", "team-c"]
+    # the event scan runs like a namespace-targeted scan and does not reset the schedule
+    worker = make_worker(env)
+    before_due = await worker.next_scan_due()
+    assert await worker.poll_once() is True
+    async with env["sm"]() as s:
+        done = await s.get(Scan, scan.id)
+        assert done.status == "done"
+    assert await worker.next_scan_due() == before_due
+    async with env["sm"]() as s, s.begin():
+        s.add(Scan(trigger="manual", status="queued", per_scanner={}, log=[]))
+    assert await enqueue_event_scan(env["sm"], ["team-d"]) is None
+    async with env["sm"]() as s, s.begin():
+        for sc in (await s.execute(select(Scan).where(Scan.status == "queued"))).scalars():
+            sc.status = "cancelled"

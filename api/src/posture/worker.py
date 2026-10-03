@@ -227,6 +227,8 @@ class Worker:
         self._grype_update_pending = False
         self._parallelism = settings.scan_parallelism
         self.report_worker = None
+        self.pod_watcher = None
+        self._excluded_ns: list[str] = []
         self.provenance_stage: provenance_stage.ProvenanceStage | None = (
             provenance_stage.ProvenanceStage(settings, sessionmaker) if "provenance" in self.stages else None)
 
@@ -520,7 +522,10 @@ class Worker:
                                                getattr(self.provenance_stage, "collector_version", None))
         except Exception:  # noqa: BLE001  (the compat API falls back to rendering on request)
             log.exception("compat.materialize_failed", scan_id=scan_id)
-        if "reports" in self.stages and settings.reports.auto_generate:
+        async with self.sm() as s:
+            trigger = await s.scalar(select(Scan.trigger).where(Scan.id == scan_id))
+        # event scans (pod watcher) are small and frequent: no auto-generated reports for them
+        if "reports" in self.stages and settings.reports.auto_generate and trigger != "event":
             await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
         if "controls" in self.stages:  # DESIGN §13: control evidence stage after every completed scan
             await self.run_controls(trigger="scan", scan_id=scan_id)
@@ -1098,7 +1103,9 @@ class Worker:
             return None
         async with self.sm() as s:
             st = await app_settings.load(s, self.s)
-            full = Scan.target_image_ids.is_(None)
+            # targeted scans (image ids, namespaces: e.g. pod-watcher event scans) do not reset the schedule
+            full = Scan.target_image_ids.is_(None) & Scan.target_namespaces.is_(None)
+            self._excluded_ns = list(st.excluded_namespaces)
             last_done = await s.scalar(select(func.max(Scan.started_at)).where(Scan.status == "done", full))
             last_attempt = await s.scalar(select(func.max(Scan.created_at)).where(
                 Scan.status.in_(("failed", "cancelled")), full))
@@ -1148,6 +1155,16 @@ class Worker:
         self.report_worker = ReportWorker(self.s, self.sm)
         return asyncio.create_task(self.report_worker.run_forever(refresh_metrics=False))
 
+    def start_pod_watcher(self) -> asyncio.Task | None:
+        """EVENT_SCANS_ENABLED (m11): targeted scans for new digests within a minute."""
+        if not self.scan_side or not self.s.event_scans_enabled:
+            return None
+        from .event_scans import PodWatcher
+
+        self.pod_watcher = PodWatcher(self.sm, lambda: self._excluded_ns or self.s.excluded_namespaces,
+                                      debounce=self.s.event_scan_debounce_seconds)
+        return asyncio.create_task(self.pod_watcher.run())
+
     async def _refresh_metrics(self) -> None:
         if time.monotonic() - self._metrics_at < 30:
             return
@@ -1170,12 +1187,16 @@ class Worker:
             log.exception("scheduler.startup_check_failed")
         log.info("worker.ready", hostname=self.hostname, stages=",".join(s for s in ALL_STAGES if s in self.stages))
         reports_task = self.start_report_worker()
+        watch_task = self.start_pod_watcher()
         try:
             await self._loop()
         finally:
             if reports_task is not None:
                 self.report_worker.stop()
                 reports_task.cancel()
+            if watch_task is not None:
+                self.pod_watcher.stop()
+                watch_task.cancel()
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
