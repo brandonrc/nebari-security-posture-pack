@@ -98,7 +98,16 @@ helm upgrade --install security-posture ./chart -n security-posture \
 ```
 
 Without Nebari (`nebariapp.enabled=false`, the default), port-forward the
-`<fullname>-ui` Service. Use `auth.mode=disabled` for local development only.
+`<fullname>-ui` Service. `auth.mode=disabled` is for running the API outside
+the cluster only (`AUTH_MODE=disabled POSTURE_DEV=1`); the chart refuses it.
+
+On install and upgrade two hook Jobs run first (Argo CD: PreSync): one creates
+the `<fullname>-db` (and, with the Grafana listener, `<fullname>-compat-token`)
+Secret if it does not exist, the other migrates the database before new pods
+start. Upgrading from 0.1.x: keep `persistence.worker`/`persistence.trivy` at
+their installed sizes (PVCs cannot shrink), and if you set
+`provenance.helmReleases.enabled`, also set
+`provenance.helmReleases.iUnderstandClusterSecretsRead=true`.
 
 ### ArgoCD
 
@@ -124,9 +133,10 @@ spec:
             - https://keycloak.example.com/auth/realms/nebari
             - http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari
         postgresql:
-          # ArgoCD renders with `helm template`, where `lookup` returns nothing,
-          # so a generated password would change on every sync. Pre-create a
-          # Secret with keys `password` and `postgres-password` and name it here.
+          # Recommended under GitOps: own the credentials (sealed-secrets,
+          # external-secrets, SOPS) - keys `password` and `postgres-password`.
+          # Without it the PreSync hook creates <fullname>-db once (never on
+          # later syncs) and annotates it Prune=false.
           existingSecret: security-posture-db
   destination:
     server: https://kubernetes.default.svc
@@ -148,41 +158,67 @@ The table lists the main settings. For everything else, see the comments in
 | Key | Default | Description |
 |---|---|---|
 | `images.{api,worker,ui}.repository/tag` | `quay.io/nebari/nebari-security-posture-pack-*` / `0.1.0` | First-party images. A `digest` overrides the tag. |
-| `images.{trivy,clair,postgres}` | `0.75.0` / `4.9.0` / `16-alpine` | Pinned third-party images. |
+| `images.{trivy,clair,postgres}` | `0.75.0` / `4.9.0` / `16.15-alpine`, each with `digest` | Third-party images pinned by tag and digest (resolve with `skopeo inspect`, `crane digest` or `docker buildx imagetools inspect`). |
 | `adminGroups` | `["admin"]` | Groups allowed in. Feeds all three gating layers. |
 | `adminGate.securityPolicy.enabled` | `false` | Render the chart's own Envoy SecurityPolicy (layer 2). |
 | `adminGate.securityPolicy.externalIssuer` / `internalIssuer` | grace URLs | Public issuer (the `iss` claim) and in-cluster realm URL. |
-| `auth.mode` | `oidc` | `disabled` turns API auth off (development only). |
+| `auth.mode` | `oidc` | `disabled` is refused by the chart (development outside the cluster only). |
 | `auth.jwksUrl` | in-cluster Keycloak JWKS | Used to verify token signatures. |
-| `auth.issuers` | `[]` | Accepted `iss` values. **Required** for `oidc`. |
+| `auth.issuers` | in-cluster realm URL | Accepted `iss` values. Add the external issuer your browser tokens carry; empty = the API refuses to start. |
+| `auth.clientIds` / `audiences` | `[]` (= `<namespace>-<fullname>` with `nebariapp`) | `OIDC_CLIENT_IDS` / `OIDC_AUDIENCES`: `aud` must contain, or `azp` equal, one of them. |
 | `scanner.parallelism` / `timeoutSeconds` | `3` / `600` | Images scanned at once, and the timeout per scanner. |
-| `scanner.intervalHours` / `rescanAfterHours` | `6` / `24` | Schedule, and the age after which a digest is rescanned. |
+| `scanner.grype.maxConcurrent` / `scanner.maxImageGB` | `2` / `20` | Grype processes at once; larger images are scanned last, one at a time. |
+| `scanner.intervalHours` / `rescanAfterHours` | `6` / `24` | Scheduled scans are due this long after the newest finished scan started (from the DB, survives restarts); digest rescan age. |
 | `scanner.excludedNamespaces` | `[]` | Namespaces skipped by inventory. |
-| `scanner.{trivy,grype,clair}.enabled` | `true` | Enable each scanner. Trivy and Clair also deploy their servers. |
+| `scanner.{trivy,grype}.enabled` | `true` | Enable each scanner. Trivy also deploys its server. |
+| `scanner.clair.enabled` | `false` | Clair (opt-in): ~8 GB database, 7.5 GiB spikes, updater egress, 0.2 % unique findings on grace. Raises confidence, not coverage. |
+| `clair.postgres.dedicated` / `size` | `true` / `15Gi` | Clair's own Postgres StatefulSet; `false` keeps its database on the main Postgres. |
 | `scanner.mirror.enabled/registry/insecure/rewrite` | on, in-cluster registry | Mirror-then-scan. |
-| `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the worker for private registries. |
-| `postgresql.enabled` / `existingSecret` | `true` / `""` | Bundled Postgres. The Secret `<fullname>-db` is generated once and kept. |
+| `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the workers for private registries. |
+| `provenance.helmReleases.enabled` / `iUnderstandClusterSecretsRead` | `false` / `false` | Helm release discovery needs get/list on every Secret (bound to `<fullname>-controls` only); both must be true. |
+| `provenance.cosign.lockTrustSettings` | `true` | Cosign trust anchors only from values; the UI cannot change them. |
+| `provenance.compat.internalService.*` | off | Grafana compat listener: bearer token from `<fullname>-compat-token`, NetworkPolicy for `grafanaPodSelector` pods in `allowedNamespaces`; needs `networkPolicy.enabled` unless `allowAnonymousNetwork`. |
+| `controlsEngine.keycloak.viewClient.{clientId,existingSecret}` | `""` | Dedicated view-only Keycloak client; when set the admin Secret is neither granted nor read. |
+| `worker.splitPrivileged` | `true` | Scan worker (`<fullname>-scanner`, no Secrets) and privileged worker (`<fullname>-controls`) as separate Deployments. |
+| `worker.resources` / `worker.privileged.resources` | 500m/4Gi-3/7Gi, 100m/384Mi-1/1.5Gi | Scan worker sized for two concurrent grype processes. |
+| `reportWorker.enabled` / `timeoutSeconds` | `true` / `1200` | Report generation off the api, one report at a time, child process per report. |
+| `reports.retention.perType` / `maxTotalBytes` | `20` / `2Gi` | Report retention. |
+| `history.retainScans` | `30` | Scans whose per-scan history rows are kept. |
+| `api.resources` / `trivy.resources` / `postgresql.resources` / `clair.resources` | 100m/384Mi-1/1Gi, 100m/256Mi-1/1.5Gi, 250m/512Mi-1/1.5Gi, 250m/1.5Gi-2/8Gi | Measured on grace (architecture review §2). |
+| `postgresql.enabled` / `existingSecret` | `true` / `""` | Bundled Postgres. `<fullname>-db` is created once by a hook Job; prefer `existingSecret` under GitOps. |
+| `postgresql.config` | `shared_buffers` 384MB, `work_mem` 8MB, ... | postgresql.conf settings (ConfigMap, applied as `-c`). |
+| `postgresql.backup.enabled/schedule/retention/size` | `true` / `17 3 * * *` / `7` / `5Gi` | Nightly `pg_dump -Fc` of the posture database to PVC `<fullname>-backup`. |
+| `hooks.migrate.enabled` | `true` | pre-upgrade migration Job (advisory lock). |
 | `externalDatabase.*` | | `host`, `port`, `user`, `database`, `clairDatabase`, `sslmode`, `existingSecret`, `passwordKey`. |
 | `database.driver` | `postgresql+asyncpg` | Scheme for `DATABASE_URL`. |
-| `persistence.enabled/storageClass` | `true` / `""` | PVC sizes: `worker` 20Gi, `trivy` 10Gi, `postgres` 10Gi. |
+| `persistence.enabled/storageClass` | `true` / `""` | PVC sizes: `worker` 15Gi, `trivy` 3Gi, `postgres` 10Gi, `reports` 2Gi. |
 | `networkPolicy.enabled` | `true` | Ingress allow-lists (see below). |
 | `networkPolicy.gatewayNamespaces` | `[envoy-gateway-system]` | Namespaces allowed to reach the ui. |
 | `networkPolicy.uiAllowedNamespaces` | `[]` | Extra namespaces allowed to reach the ui, for example landing-page probers. |
+| `networkPolicy.workerEgress.*` | on; `ports` `[443, 80, 6443]`, `exceptCidrs` `[169.254.0.0/16]` | Worker egress allow-list: DNS, release pods, `allowedNamespaces`, `ports` to the internet. Add the API server port if it is not 443/6443 (MicroK8s: 16443). |
 | `ui.containerPort` | `8080` | nginx listen port inside the pod. The Service listens on 80. |
 | `nebariapp.enabled` | `false` | Render the NebariApp. |
 | `nebariapp.hostname` | (required) | Public hostname. |
-| `rbac.create` / `serviceAccount.create` | `true` | Read-only ClusterRole for api and worker. |
+| `rbac.create` / `serviceAccount.create` / `serviceAccount.names.*` | `true` / `true` / `""` | One ServiceAccount per privilege level (below). |
 
-Network policies: the api accepts traffic only from the ui and the worker.
-Postgres accepts traffic only from the api, worker and clair. Trivy and Clair
-accept traffic only from the worker. The ui accepts traffic only from the
-gateway namespaces. Egress is unrestricted, because the pack needs to reach
-registries, Keycloak JWKS and vulnerability feeds.
+`chart/values.schema.json` validates types and enums.
 
-RBAC: `get/list/watch` on pods, namespaces, nodes, serviceaccounts,
-ReplicaSets, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs,
-NetworkPolicies and `nebariapps.reconcilers.nebari.dev`. There is **no**
-access to Secrets.
+Network policies: the api accepts traffic only from the ui and the workers.
+Postgres accepts traffic only from the api, the workers, the report-worker,
+the migrate and backup Jobs (and Clair when it shares the server). Trivy and
+Clair accept traffic only from the scan worker. The ui accepts traffic only
+from the gateway namespaces. Worker egress is limited to DNS, the release's
+pods, `networkPolicy.workerEgress.allowedNamespaces` and TCP
+`workerEgress.ports`; the api, ui and report-worker have no egress policy.
+
+ServiceAccounts and RBAC:
+
+| ServiceAccount | Pods | Access |
+|---|---|---|
+| `<fullname>-api` | api, ui, report-worker | none; token not mounted |
+| `<fullname>-scanner` | worker (inventory, scan) | `get/list/watch` pods, namespaces, nodes, serviceaccounts, ReplicaSets, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs, NetworkPolicies, NebariApps. **No Secrets.** |
+| `<fullname>-controls` | worker-privileged (provenance, controls, reports) | controls engine ClusterRole (RBAC bindings, gateway, Envoy and cert-manager CRs); `get` on the one Keycloak admin Secret (unless `viewClient`); with `helmReleases` + acknowledgement, `get/list` on all Secrets |
+| `<fullname>-hooks` | hook Jobs | `create` Secrets in the release namespace; `get/patch` on `<fullname>-db` and `<fullname>-compat-token` |
 
 ## Grace quickstart
 
@@ -201,13 +237,13 @@ Then check the following:
 
 ## Limitations (v0.1)
 
-* **No imagePullSecrets discovery.** The pack has no cluster-wide Secret
-  access. Provide credentials for private registries with
+* **No imagePullSecrets discovery.** The scan worker has no Secret access.
+  Provide credentials for private registries with
   `registryAuth.existingSecret`. Otherwise those images show as failed scans.
-* Under `helm template` or ArgoCD, `lookup` returns nothing. Set
-  `postgresql.existingSecret` there so the database password stays stable.
-* The worker is a single replica, and Postgres is a single instance with no
-  backups.
+* Each worker is a single replica, and Postgres is a single instance; backups
+  are nightly logical dumps (no WAL archiving / point-in-time recovery).
+* The api mounts the ReadWriteOnce reports PVC (downloads), so it uses the
+  `Recreate` strategy and the report-worker is pinned to its node.
 * There is no SBOM storage, no policy enforcement or admission control, no
   multi-cluster support, and no notifications.
 * The mirror registry is assumed to be plain HTTP (`scanner.mirror.insecure`).

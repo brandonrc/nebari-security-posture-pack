@@ -217,3 +217,94 @@
     `PROVENANCE_TRUST_SETTINGS_LOCKED=true` (api + worker); worker optional
     `KEYCLOAK_CLIENT_ID`/`KEYCLOAK_CLIENT_SECRET` (secretKeyRef), `KEYCLOAK_ALLOW_MASTER_FALLBACK`,
     `PROVENANCE_REGISTRY_AUTH_REALMS`, `PROVENANCE_HELM_MAX_RELEASE_BYTES`. Never set `POSTURE_DEV`.
+
+## 2026-10-03: chart, RBAC and operations (architecture B1, B2, B4, M1, M2, M5, M6, M9, m2-m5; security C1/H2 chart side)
+
+- **ServiceAccounts per privilege level.** `<fullname>-api` (api, ui, report-worker; no RBAC, no
+  token), `<fullname>-scanner` (scan worker; reader ClusterRole, no Secrets), `<fullname>-controls`
+  (privileged worker; controls ClusterRole, the Keycloak admin Secret Role unless
+  `controlsEngine.keycloak.viewClient.clientId` is set, and the all-Secrets ClusterRole only with
+  `provenance.helmReleases.enabled` **and** `iUnderstandClusterSecretsRead: true`, else the render
+  fails). `serviceAccount.name` is replaced by `serviceAccount.names.{api,scanner,controls}` (the
+  render fails with a pointer when the old key is set).
+- **Worker stages.** `python -m posture.worker --stages ...` (`WORKER_STAGES`; default all).
+  `worker.splitPrivileged: true` renders `<fullname>-worker` (`inventory,scan`) and
+  `<fullname>-worker-privileged` (`provenance,controls,reports`). Hand-off through the scan row:
+  the scan worker stores the inventory as a `scan_snapshots` row `level=inventory` and sets
+  `status=scanned` (finished_at stays empty); the privileged worker claims `scanned` with SKIP
+  LOCKED (`finalizing`), runs provenance (after scanning now, no longer concurrently), writes the
+  posture snapshot, deletes the hand-off row, sets `done`, then runs controls and queues reports.
+  Restart recovery is per role: `running` -> failed (scan side); `finalizing` -> `scanned` again,
+  or `done` if the cluster snapshot was already written. The API treats `scanned`/`finalizing` as
+  in flight (409 on a second full scan, cancellable) and shows them as `status: running` with
+  `phase: <raw status>` (the UI is unchanged). Heartbeat rows: id 1 scan side, id 2 privileged.
+- **Scheduler from the DB (B2).** No APScheduler interval job for scans. Every loop computes
+  `next_scheduled_scan()`: `scan_interval_hours` after `max(started_at)` of `done` full scans;
+  immediately when none ever finished (`SCAN_ON_START=false`: one interval after worker start); a
+  newer failed/cancelled full scan pushes the next attempt to `min(interval, 1h)` after it, so a
+  failing scan retries hourly instead of every poll. APScheduler still drives the grype DB update
+  and scanner status refresh on the scan side only.
+- **Secrets without `lookup` (B1).** Hook Job `<fullname>-ensure-secrets` (pre-install,pre-upgrade,
+  weight -5; Argo CD PreSync) runs `python -m posture.bootstrap ensure-secret` from the **api
+  image**: create `<fullname>-db` / `<fullname>-compat-token` with random alphanumerics only when
+  missing, add missing keys, never rewrite values, and annotate `helm.sh/resource-policy: keep` +
+  `argocd.argoproj.io/sync-options: Prune=false` (also patched onto the Secret older charts created,
+  which Argo CD would otherwise prune once the chart stops rendering it). Deviation from "kubectl
+  image pinned by digest": `registry.k8s.io/kubectl` has no shell, so "create if missing" cannot
+  be scripted with it; the api image already carries the kubernetes client and is the image the
+  release runs anyway. The hook SA/Role/RoleBinding (weight -10) use `before-hook-creation` only, so
+  they exist for the whole hook phase under both Helm and Argo CD; the Role allows `create` on
+  Secrets (cannot be name-scoped) and `get/patch` on the two names. `postgresql.existingSecret`
+  remains the GitOps recommendation.
+- **Migrations (m2).** `alembic/env.py` holds `pg_advisory_lock(724100)` for the upgrade. Hook Job
+  `<fullname>-migrate` (pre-upgrade, weight 0) runs `posture.migrate --if-reachable 120`, which
+  exits 0 without migrating when the DB is unreachable: Argo CD maps pre-upgrade to PreSync, which
+  also runs on the first sync before the bundled Postgres exists. The api `migrate` init container
+  stays as the first-install path (a no-op afterwards). `tests/test_migrations.py`: `alembic check`
+  against the test DB, three racing `posture.migrate` processes, and a static check that every
+  `models.py` with tables is imported by env.py (the provenance models were missing).
+- **report-worker.** With `reportWorker.enabled` (default) the chart deploys
+  `<fullname>-report-worker` (api image, no token, reports PVC, required podAffinity to the api
+  because the PVC is RWO) and sets `REPORT_WORKER_EMBEDDED=false` on the workers; the privileged
+  worker then mounts no reports volume and has no affinity. The api still serves downloads from
+  the reports PVC, so it keeps `strategy: Recreate` (RollingUpdate needs reports in the DB or object
+  storage).
+- **Sizing (M1) and Clair (M5).** Defaults from the architecture review §2 table; privileged worker
+  100m/384Mi -> 1/1.5Gi; report-worker 100m/512Mi -> 1/3Gi. Clair is off by default; when on it gets
+  its own `<fullname>-clair-postgres` StatefulSet (15Gi, `clair.postgres.dedicated`; `false` keeps
+  the old shared layout). PVC defaults shrink (worker 15Gi, trivy 3Gi): PVCs cannot shrink, so
+  existing installs must pin their installed sizes (grace does).
+- **Postgres (M6).** `postgresql.config` -> ConfigMap `<name>-config` -> `-c key=value` via a small
+  sh wrapper around `docker-entrypoint.sh` (checksum rolls the pod), `/dev/shm` 256Mi emptyDir.
+  Backup CronJob `<fullname>-backup` (default on, 03:17 daily, `pg_dump -Fc --no-owner` of the
+  posture DB to PVC `<fullname>-backup` 5Gi with resource-policy keep, newest 7 kept; Clair's DB
+  is not backed up).
+- **Images (m5).** postgres `16.15-alpine`, trivy `0.75.0`, clair `4.9.0` pinned by index digest
+  (resolved with `docker buildx imagetools inspect`; `skopeo inspect` / `crane digest` give the
+  same). `nebari-app` dependency pinned to `0.1.1`. `values.schema.json` (types, enums, digest
+  pattern, `additionalProperties: false` on chart-owned objects, so typos fail the render).
+- **extraCACerts in the api (m4)**: same ca-bundle init container as the workers.
+- **Compat listener (H2 chart side).** Token Secret mounted at `PROVENANCE_COMPAT_TOKEN_FILE`
+  (`/etc/posture/compat/token`); `tokenSecret` names an existing one. NetworkPolicy peer is
+  `allowedNamespaces` AND `grafanaPodSelector` (default `app.kubernetes.io/name: grafana`, which
+  matches both Grafanas on grace). Render fails with `networkPolicy.enabled=false` unless
+  `allowAnonymousNetwork: true`.
+- **Worker egress (M8/H3 chart side).** `networkPolicy.workerEgress` (default on) selects both
+  workers: DNS (53 any), release pods, `allowedNamespaces` (keycloak, monitoring, observability,
+  container-registry), TCP `ports` [443, 80, 6443] to 0.0.0.0/0 except 169.254.0.0/16, an external
+  DB port when `postgresql.enabled=false`, plus `extraRules`. The API server port must be listed
+  when it is not 443/6443 (MicroK8s 16443: grace adds it, and 8443 for the tailscale endpoint).
+- **Env wired by the chart:** `WORKER_STAGES` (as `--stages`), `OIDC_CLIENT_IDS`
+  (`auth.clientIds`, else `<namespace>-<fullname>` with nebariapp), `OIDC_AUDIENCES`,
+  `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET_FILE`, `KEYCLOAK_ALLOW_MASTER_FALLBACK`,
+  `PROVENANCE_COMPAT_TOKEN_FILE`, `PROVENANCE_TRUST_SETTINGS_LOCKED` (default true),
+  `GRYPE_MAX_CONCURRENT`, `SCAN_MAX_IMAGE_GB`, `REPORT_WORKER_EMBEDDED`, `REPORT_TIMEOUT_SECONDS`,
+  `REPORT_WORKER_ISOLATION`, `REPORTS_RETENTION_PER_TYPE` (20), `REPORTS_RETENTION_MAX_TOTAL_BYTES`
+  (`2Gi`; config accepts quantities), `HISTORY_RETAIN_SCANS` (30). `auth.issuers` defaults to the
+  in-cluster issuer (the API refuses an empty list); `auth.mode=disabled` fails the render because
+  the chart never sets `POSTURE_DEV`.
+- **grace values:** split workers, report-worker 4Gi, Clair on (8Gi) with
+  `clair.postgres.dedicated: false` (no re-ingest of its 8 GB DB), main Postgres 2 CPU / 2Gi with
+  512MB shared_buffers, PVC sizes kept, `iUnderstandClusterSecretsRead: true`, requests kept small
+  (node ~99% allocated). Not deployed yet. After the deploy, Grafana's Infinity datasource needs the
+  bearer token header (`deploy.sh` prints the command).

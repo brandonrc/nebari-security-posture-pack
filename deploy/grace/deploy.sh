@@ -32,6 +32,11 @@ kubectl create secret generic nebari-ca -n "${NAMESPACE}" \
 
 "${HELM}" dependency build chart
 
+# Hooks (chart/templates/hooks.yaml) run before the upgrade: ensure-secrets
+# keeps the existing ${RELEASE}-db Secret (only annotates it) and creates
+# ${RELEASE}-compat-token once; migrate applies alembic head before the new
+# api/worker pods start.
+
 "${HELM}" upgrade --install "${RELEASE}" ./chart \
   -n "${NAMESPACE}" \
   -f deploy/grace/values.yaml \
@@ -43,5 +48,8 @@ kubectl create secret generic nebari-ca -n "${NAMESPACE}" \
 
 kubectl get nebariapp -n "${NAMESPACE}" -o wide || true
 kubectl get pods -n "${NAMESPACE}"
+echo
+echo "Grafana compat listener token (Infinity datasource header 'Authorization: Bearer <token>'):"
+echo "  kubectl get secret ${RELEASE}-compat-token -n ${NAMESPACE} -o jsonpath='{.data.token}' | base64 -d"
 echo
 echo "UI: https://security.100-89-230-107.sslip.io"

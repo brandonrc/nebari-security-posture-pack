@@ -45,10 +45,13 @@ Reference material (read-only clones) at
 |---|---|---|
 | `ui` | `security-posture-ui` (nginx:alpine, static SPA) | Only ingress target. Proxies `/api/` → `api:8000`. `/healthz` static 200. |
 | `api` | `security-posture-api` (python:3.12-slim) | FastAPI on :8000. Reads Postgres. Validates JWT + admin group. |
-| `worker` | `security-posture-worker` (api image + trivy, grype, clairctl, skopeo) | 1 replica. Runs inventory + scan jobs + scheduler. PVC `/cache`. |
-| `trivy` | `aquasec/trivy:0.75.0` | `trivy server --listen 0.0.0.0:4954 --cache-dir /cache`, PVC. |
-| `clair` | `quay.io/projectquay/clair:4.9.0` | combo mode, config from Secret, Postgres DB `clair`. :6060 (api) :8089 (introspection). |
-| `postgres` | `postgres:16-alpine` | StatefulSet, PVC, databases `posture` and `clair`. Secret `<fullname>-db` keys `password`, `postgres-password`. Support `externalDatabase`. |
+| `worker` | `security-posture-worker` (api image + trivy, grype, clairctl, skopeo) | 1 replica, `--stages inventory,scan`, SA `<fullname>-scanner`. Inventory + CVE scans + scan scheduler (due from the DB). PVC `/cache`. Probes `:9000/healthz`. |
+| `worker-privileged` | `security-posture-worker` | 1 replica, `--stages provenance,controls,reports`, SA `<fullname>-controls`. Claims `scanned` scans: provenance, posture snapshot, `done`, controls engine, queues auto reports. `worker.splitPrivileged=false` folds it into `worker`. |
+| `report-worker` | `security-posture-api` | 1 replica, `python -m posture.report_worker`, no SA token. Generates queued reports (lease, child process per report); reports PVC shared with the api (podAffinity). |
+| `trivy` | `aquasec/trivy:0.75.0` (digest-pinned) | `trivy server --listen 0.0.0.0:4954 --cache-dir /cache`, PVC 3Gi. |
+| `clair` | `quay.io/projectquay/clair:4.9.0` (digest-pinned) | **opt-in** (`scanner.clair.enabled`). combo mode, config from Secret, database `clair` on its own `clair-postgres` StatefulSet (`clair.postgres.dedicated`). :6060 (api) :8089 (introspection). |
+| `postgres` | `postgres:16.15-alpine` (digest-pinned) | StatefulSet, PVC, database `posture` (+ `clair` when not dedicated). Tuning from `postgresql.config` (ConfigMap, `-c`). Secret `<fullname>-db` keys `password`, `postgres-password`, created once by a hook Job or `postgresql.existingSecret`. Nightly `pg_dump -Fc` CronJob `<fullname>-backup`. Support `externalDatabase`. |
+| hooks | `security-posture-api` | pre-install/pre-upgrade (Argo CD PreSync): `ensure-secrets` (weight -5) creates missing Secrets, `migrate` (pre-upgrade, weight 0) runs alembic under `pg_advisory_lock`. The api `migrate` init container covers first installs. |
 
 Grype runs inside the worker (no server); its DB lives on the worker PVC and is
 refreshed by `grype db update` on the worker's schedule (default every 12h).
@@ -130,9 +133,14 @@ content under a mirror tag cannot change scan results. Anyone who can write to t
 still deny service (delete copies); restrict writes to the worker (auth or NetworkPolicy).
 
 ### NetworkPolicy
-`api` accepts ingress only from `ui` and `worker` pods; `postgres` only from
-`api`, `worker`, `clair`; `clair`/`trivy` only from `worker`. `ui` accepts from
-`envoy-gateway-system`. Egress unrestricted (registries, Keycloak JWKS, vuln DBs).
+`api` accepts ingress only from `ui` and the workers; `postgres` only from
+`api`, the workers, `report-worker`, the `migrate`/`backup` Jobs (and `clair` when it shares the
+server); `clair-postgres` only from `clair`; `clair`/`trivy` only from `worker`. `ui` accepts from
+`envoy-gateway-system`. The compat listener accepts only `grafanaPodSelector` pods in
+`allowedNamespaces`. Both workers have an egress policy (`networkPolicy.workerEgress`): DNS, the
+release's pods, `allowedNamespaces` (Keycloak, Loki, Prometheus, registry), TCP `ports`
+(443/80/6443) to any address outside `exceptCidrs` (169.254.0.0/16). api/ui/report-worker egress
+is unrestricted.
 
 ## 4. Worker pipeline
 
@@ -283,13 +291,19 @@ images: { api: {repository, tag}, worker: {...}, ui: {...}, trivy, clair, postgr
 adminGroups: ["admin"]
 adminGate: { securityPolicy: { enabled: false } }
 auth: { mode: oidc, jwksUrl: "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth/realms/nebari/protocol/openid-connect/certs", issuers: [] }
-scanner: { parallelism: 3, timeoutSeconds: 600, intervalHours: 6, rescanAfterHours: 24,
-           excludedNamespaces: [], trivy: {enabled: true}, grype: {enabled: true}, clair: {enabled: true},
+scanner: { parallelism: 3, timeoutSeconds: 600, intervalHours: 6, rescanAfterHours: 24, maxImageGB: 20,
+           excludedNamespaces: [], trivy: {enabled: true}, grype: {enabled: true, maxConcurrent: 2}, clair: {enabled: false},
            mirror: { enabled: true, registry: registry.container-registry.svc.cluster.local:5000, insecure: true, rewrite: {"localhost:32000": "registry.container-registry.svc.cluster.local:5000"} } }
-persistence: { storageClass: "", worker: 20Gi, trivy: 10Gi, postgres: 10Gi }
-postgresql: { enabled: true, existingSecret: "" }   # externalDatabase.url alt.
-networkPolicy: { enabled: true }
-resources: {...}
+worker: { splitPrivileged: true, resources: {500m/4Gi -> 3/7Gi}, privileged: { resources: {...} } }
+reportWorker: { enabled: true, timeoutSeconds: 1200 }
+reports: { retention: { perType: 20, maxTotalBytes: 2Gi } }
+history: { retainScans: 30 }
+persistence: { storageClass: "", worker: 15Gi, trivy: 3Gi, postgres: 10Gi, reports: 2Gi }
+postgresql: { enabled: true, existingSecret: "", config: {...}, backup: { enabled: true, retention: 7 } }   # externalDatabase.* alt.
+serviceAccount: { create: true, names: { api: "", scanner: "", controls: "" } }
+hooks: { migrate: { enabled: true } }
+networkPolicy: { enabled: true, workerEgress: { enabled: true, ports: [443, 80, 6443] } }
+resources: {...}   # per component; chart/values.schema.json validates the file
 nebariapp: {...as §3}
 ```
 
