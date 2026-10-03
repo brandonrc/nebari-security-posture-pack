@@ -29,6 +29,7 @@ scan appears (each scan's summary is built at most once; the list is capped at 5
 from __future__ import annotations
 
 import asyncio
+import json
 import hmac
 import os
 from collections import OrderedDict
@@ -46,7 +47,7 @@ from ..db.session import get_session
 from ..logs import get_logger
 from sqlalchemy import select
 
-from ..db.models import Scan
+from ..db.models import CompatReportRow, Scan
 from ..provenance.models import ImageProvenance
 from ..provenance.report import (
     LATEST_FILENAME,
@@ -117,12 +118,31 @@ async def _get_scan(session: AsyncSession, scan_id: int) -> Scan | None:
     return await session.get(Scan, scan_id)
 
 
+async def _stored(session: AsyncSession, scan_id: int, name: str) -> CompatReportRow | None:
+    """The report the worker materialized for this scan (architecture review §1), if it was
+    rendered for the current cluster name."""
+    if session is None:  # unit tests drive the handlers without a database
+        return None
+    row = await session.get(CompatReportRow, scan_id)
+    if row is None or (row.cluster_name or "") != (name or ""):
+        return None
+    return row
+
+
 async def _entry(session: AsyncSession, scan: Scan, name: str) -> dict[str, Any]:
     key = (scan.id, name)
     hit = CACHE.entries.get(key)
     if hit is not None:
         CACHE.entries.move_to_end(key)
         return hit
+    stored = await _stored(session, scan.id, name)
+    if stored is not None:
+        entry = {"filename": stored.filename, "generatedAt": stored.generated_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "summary": stored.summary}
+        if stored.cluster_name:
+            entry["clusterName"] = stored.cluster_name
+        CACHE.entries[key] = entry
+        return entry
     doc = await load_report(session, scan, name)
     entry: dict[str, Any] = {"filename": report_filename(scan_time(scan)),
                              "generatedAt": scan_time(scan).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -161,16 +181,21 @@ async def get_report(filename: str, session: AsyncSession) -> Response:
         key = (ids[0], name)
         async with CACHE.lock:
             if CACHE.latest_key != key or CACHE.latest_bytes is None:
+                stored = await _stored(session, ids[0], name)
                 scan = await _get_scan(session, ids[0])
                 if scan is None:
                     return _text_error("report not found", 404)
-                CACHE.latest_bytes = go_json(await load_report(session, scan, name), indent=True)
+                CACHE.latest_bytes = stored.body if stored is not None else go_json(
+                    await load_report(session, scan, name), indent=True)
                 CACHE.latest_key = key
             body = CACHE.latest_bytes
         return Response(body, media_type="application/json")
     scan = await find_scan(session, filename)
     if scan is None:
         return _text_error("report not found", 404)
+    stored = await _stored(session, scan.id, name)
+    if stored is not None:
+        return Response(stored.body, media_type="application/json")
     return _json(await load_report(session, scan, name), indent=True)
 
 
@@ -182,7 +207,9 @@ async def export(format: str | None, filename: str | None, session: AsyncSession
     scan = await find_scan(session, name)
     if scan is None:
         return _text_error("report not found", 404)
-    doc = await load_report(session, scan, await _cluster_name(session))
+    cluster = await _cluster_name(session)
+    stored = await _stored(session, scan.id, cluster)
+    doc = json.loads(stored.body) if stored is not None else await load_report(session, scan, cluster)
     if fmt == "csv":
         return Response(export_csv(doc), headers={"Content-Type": "text/csv",  # no charset, like theirs
                                                   "Content-Disposition": "attachment; filename=provenance-report.csv"})

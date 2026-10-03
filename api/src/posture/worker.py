@@ -37,7 +37,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from . import app_settings, metrics, report_jobs
+from . import app_settings, compat_store, metrics, report_jobs
 from .aggregate import ImageInfo, aggregate
 from .analysis import analyze
 from .config import Settings, get_settings
@@ -514,6 +514,12 @@ class Worker:
             await self._after_done(scan_id, settings)
 
     async def _after_done(self, scan_id: int, settings: app_settings.AppSettings) -> None:
+        try:  # §1: render the provenance-collector-pack report once; the compat API serves the bytes
+            async with self.sm() as s, s.begin():
+                await compat_store.materialize(s, scan_id, settings.system_name,
+                                               getattr(self.provenance_stage, "collector_version", None))
+        except Exception:  # noqa: BLE001  (the compat API falls back to rendering on request)
+            log.exception("compat.materialize_failed", scan_id=scan_id)
         if "reports" in self.stages and settings.reports.auto_generate:
             await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
         if "controls" in self.stages:  # DESIGN §13: control evidence stage after every completed scan

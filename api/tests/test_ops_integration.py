@@ -273,3 +273,32 @@ async def test_grype_db_update_never_overlaps_a_scan(env):
         order.append("scan")
     await upd
     assert order == ["update-start", "update-end", "scan"]
+
+
+async def test_compat_report_materialized_once_per_scan(env):
+    from sqlalchemy import select
+
+    from posture import app_settings
+    from posture.db.models import CompatReportRow, Scan
+    from posture.provenance.report import go_json, load_report
+
+    async with env["sm"]() as s:
+        rows = (await s.execute(select(CompatReportRow).order_by(CompatReportRow.scan_id.desc()))).scalars().all()
+        assert rows, "the worker stores one compat report per completed scan with provenance results"
+        latest = rows[0]
+        scan = await s.get(Scan, latest.scan_id)
+        name = (await app_settings.load(s)).system_name
+        fresh = go_json(await load_report(s, scan, name), indent=True)
+    assert latest.body == fresh  # stored bytes == what the router used to render per request
+    r = await env["client"].get("http://t/api/reports/latest")
+    assert r.status_code == 200 and r.content == latest.body
+    lst = (await env["client"].get("http://t/api/reports")).json()
+    assert lst[0]["filename"] == latest.filename and lst[0]["summary"] == latest.summary
+    async with env["sm"]() as s, s.begin():  # served from the table: tamper with it and see it
+        row = await s.get(CompatReportRow, latest.scan_id)
+        row.body = latest.body.replace(b'"metadata"', b'"metadata" ', 1)
+    from posture.routers.provenance_compat import CACHE
+
+    CACHE.latest_key = None
+    assert (await env["client"].get(f"http://t/api/reports/{latest.filename}")).content.startswith(b"{") and \
+        b'"metadata" ' in (await env["client"].get(f"http://t/api/reports/{latest.filename}")).content
