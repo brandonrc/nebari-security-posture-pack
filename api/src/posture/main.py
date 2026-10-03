@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -52,6 +53,29 @@ async def lifespan(app: FastAPI):
     await dispose_engine()
 
 
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def csrf_blocked(request: Request) -> bool:
+    """Security review M6. A state-changing `/api/v1` request that carries cookies (ambient
+    browser credentials: the gateway turns its session cookie into the bearer) must come from
+    our own origin: `Sec-Fetch-Site` same-origin/none, or an `Origin` equal to the request host.
+    Requests without cookies (bearer-only API clients) cannot be forged cross-site."""
+    if request.method in SAFE_METHODS or not request.url.path.startswith(PREFIX + "/"):
+        return False
+    if not request.headers.get("cookie"):
+        return False
+    site = (request.headers.get("sec-fetch-site") or "").lower()
+    if site in ("same-origin", "none"):
+        return False
+    origin = request.headers.get("origin")
+    if origin and origin != "null":
+        host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+        if host and urlsplit(origin).netloc.lower() == host.lower():
+            return False
+    return True
+
+
 def create_app() -> FastAPI:
     setup_logging(get_settings().log_level)
     app = FastAPI(
@@ -87,6 +111,14 @@ def create_app() -> FastAPI:
             await metrics.refresh_db_gauges(session, min_interval=10)
         body, ctype = metrics.exposition()
         return Response(body, media_type=ctype)
+
+    @app.middleware("http")
+    async def csrf_guard(request: Request, call_next):
+        if csrf_blocked(request):
+            log.warning("http.csrf_blocked", method=request.method, path=request.url.path,
+                        sec_fetch_site=request.headers.get("sec-fetch-site"), origin=request.headers.get("origin"))
+            return JSONResponse({"detail": "cross-site request blocked"}, status_code=403)
+        return await call_next(request)
 
     public = APIRouter(prefix=PREFIX)
     public.include_router(health.router)
