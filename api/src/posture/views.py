@@ -59,11 +59,18 @@ def scanner_succeeded(img: Image) -> bool:
     return any((r or {}).get("status") == "ok" for r in (img.scanners or {}).values())
 
 
+# Scan rows in flight. `scanned` / `finalizing` are the hand-off between the scan worker and
+# the privileged worker (posture.worker stages); clients see them as `running` plus `phase`.
+ACTIVE_SCAN_STATUSES = ("queued", "running", "scanned", "finalizing")
+INTERNAL_RUNNING = ("scanned", "finalizing")
+
+
 def scan_dict(s: Scan) -> dict[str, Any]:
     return {
         "id": s.id,
         "trigger": s.trigger,
-        "status": s.status,
+        "status": "running" if s.status in INTERNAL_RUNNING else s.status,
+        "phase": s.status,
         "createdAt": iso(s.created_at),
         "startedAt": iso(s.started_at),
         "finishedAt": iso(s.finished_at),
@@ -114,6 +121,9 @@ def image_summary(img: Image) -> dict[str, Any]:
         "lastSeenAt": iso(img.last_seen_at),
         "mirrored": img.mirrored,
         "mirrorRef": img.mirror_ref,
+        # security review C2: the scanned mirror copy is digest-pinned (`…@sha256:`) and, when the
+        # source digest is known, was checked against it (posture.mirror.Mirror.prepare)
+        "mirrorDigestVerified": bool(img.mirrored and "@" in (img.mirror_ref or "") and img.digest),
         "warnings": img.warnings or [],
         "baseOs": f"{img.os_family} {img.os_name}".strip() if img.os_family else None,
         "provenance": getattr(img, "provenance", None),  # DESIGN §12, None until checked

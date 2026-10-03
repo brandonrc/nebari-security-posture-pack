@@ -12,7 +12,7 @@ from ..auth import User, require_admin
 from ..db.models import ImageScan, Scan
 from ..db.session import get_session
 from ..logs import get_logger
-from ..views import page_params, scan_dict
+from ..views import ACTIVE_SCAN_STATUSES, INTERNAL_RUNNING, page_params, scan_dict
 
 log = get_logger(__name__)
 router = APIRouter(tags=["scans"])
@@ -31,7 +31,10 @@ async def list_scans(page: int = 1, pageSize: int = Query(50), status: str | Non
     page, page_size = page_params(page, pageSize)
     stmt = select(Scan)
     if status:
-        stmt = stmt.where(Scan.status.in_(status.split(",")))
+        wanted = status.split(",")
+        if "running" in wanted:
+            wanted += list(INTERNAL_RUNNING)
+        stmt = stmt.where(Scan.status.in_(wanted))
     rows = (await session.execute(stmt.order_by(Scan.id.desc()).offset((page - 1) * page_size).limit(page_size))).scalars()
     return [scan_dict(s) for s in rows]
 
@@ -45,7 +48,7 @@ async def create_scan(body: ScanRequest | None = None, user: User = Depends(requ
         await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": ENQUEUE_LOCK})
         if not targeted:
             active = (await session.execute(
-                select(Scan).where(Scan.status.in_(("queued", "running")), Scan.target_image_ids.is_(None))
+                select(Scan).where(Scan.status.in_(ACTIVE_SCAN_STATUSES), Scan.target_image_ids.is_(None))
                 .order_by(Scan.id.desc()).limit(1)
             )).scalar_one_or_none()
             if active is not None:
@@ -93,7 +96,7 @@ async def cancel_scan(scan_id: int, user: User = Depends(require_admin),
         scan = await session.get(Scan, scan_id, with_for_update=True)
         if scan is None:
             raise HTTPException(404, detail="scan not found")
-        if scan.status not in ("queued", "running"):
+        if scan.status not in ACTIVE_SCAN_STATUSES:
             return JSONResponse({"detail": f"scan is already {scan.status}"}, status_code=409)
         if scan.status == "queued":
             from datetime import UTC, datetime

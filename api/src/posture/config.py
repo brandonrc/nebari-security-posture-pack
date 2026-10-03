@@ -73,7 +73,14 @@ class Settings(BaseSettings):
     # scan after an install does not record "database does not exist" / empty Clair results.
     scanner_ready_timeout_seconds: float = 1800
     clair_ready_updaters: CsvList = ["alpine", "debian", "ubuntu"]
-    scan_on_start: bool = True
+    scan_on_start: bool = True  # no scan ever finished: run the first one at startup (else after one interval)
+    # worker stages run by this process (posture.worker --stages overrides); "" = all.
+    # The chart splits inventory,scan / provenance,controls,reports (worker.splitPrivileged).
+    worker_stages: str = ""
+
+    # retention (pruning implemented in the worker / report code)
+    history_retain_scans: int = 30  # newest done scans whose history rows are kept
+    reports_retention_max_total_bytes: int = 2 * 1024**3  # cap on the reports directory ("2Gi" accepted)
 
     # reports (DESIGN §11): bytes on disk, metadata in the `reports` table
     reports_dir: str = "/data/reports"
@@ -138,6 +145,20 @@ class Settings(BaseSettings):
     @classmethod
     def _csv(cls, v: object) -> list[str]:
         return _split(v)
+
+    @field_validator("reports_retention_max_total_bytes", mode="before")
+    @classmethod
+    def _quantity(cls, v: object) -> object:
+        """Kubernetes-style quantities from the chart: 2Gi, 500Mi, 1G, or plain bytes."""
+        if isinstance(v, str):
+            t = v.strip()
+            units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4,
+                     "K": 1000, "k": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4}
+            for suffix in sorted(units, key=len, reverse=True):
+                if t.endswith(suffix):
+                    return int(float(t[: -len(suffix)]) * units[suffix])
+            return int(float(t)) if t else 0
+        return v
 
     @field_validator("provenance_compat_internal_port", mode="before")
     @classmethod

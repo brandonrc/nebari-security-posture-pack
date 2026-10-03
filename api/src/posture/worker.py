@@ -2,7 +2,17 @@
 
 * Postgres-as-queue: `scans` rows with status `queued`, claimed with
   `SELECT ... FOR UPDATE SKIP LOCKED`.
-* APScheduler: periodic scheduled scans, grype DB updates, scanner status refresh.
+* Stages (`--stages` / WORKER_STAGES): inventory, scan, provenance, controls, reports.
+  One process runs all of them by default. The chart splits them across two
+  Deployments with different ServiceAccounts (worker.splitPrivileged): the scan
+  worker (`--stages inventory,scan`, no Secrets access) runs inventory + CVE scans,
+  stores the inventory on the scan and marks it `scanned`; the privileged worker
+  (`--stages provenance,controls,reports`) claims `scanned` scans (status
+  `finalizing`), runs provenance, writes the posture snapshot, marks the scan
+  `done`, then runs the controls engine and auto-reports.
+* Scheduled scans are due `scan_interval_hours` after the newest `done` full scan
+  started (computed from the DB on every loop, so worker restarts never reset it).
+  APScheduler only drives grype DB updates and the scanner status refresh.
 * Pipeline: inventory -> unique images -> mirror -> 3 scanners concurrently per image
   (N images in parallel) -> correlate -> score -> persist -> posture -> aggregates.
 * A scanner failure never fails the scan; only an inventory failure does.
@@ -18,7 +28,8 @@ import socket
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -44,18 +55,93 @@ from .db.models import (
 )
 from .images import identify_image, parse_image_ref
 from .inventory import collect
-from .inventory_model import InventorySnapshot
+from .inventory_model import (
+    ContainerRecord,
+    InventorySnapshot,
+    NamespaceInfo,
+    NebariAppInfo,
+    NetworkPolicyInfo,
+)
 from .logs import get_logger, setup_logging
 from .mirror import Mirror, ScanTarget
 from .posture_checks import evaluate_inventory
 from .provenance import stage as provenance_stage
 from .scanners import ClairScanner, GrypeScanner, Scanner, ScanResult, TrivyScanner
 from .scanners.base import RAW_MAX_BYTES
+from .views import ACTIVE_SCAN_STATUSES  # queued, running, scanned, finalizing
 
 log = get_logger("posture.worker")
 
 LOG_LINES_KEPT = 200
 KEEP_INVENTORY_SCANS = 10
+
+ALL_STAGES = ("inventory", "scan", "provenance", "controls", "reports")
+SCAN_STAGES = frozenset({"inventory", "scan"})
+FINAL_STAGES = frozenset({"provenance", "controls", "reports"})
+# scan status flow: queued -> running -> [scanned -> finalizing ->] done | failed | cancelled
+STATUS_SCANNED = "scanned"  # scan stage done, waiting for the privileged worker
+STATUS_FINALIZING = "finalizing"  # claimed by the privileged worker
+INVENTORY_HANDOFF_LEVEL = "inventory"  # scan_snapshots row carrying the inventory between workers
+SCHEDULE_RETRY_HOURS = 1.0  # after a failed/cancelled full scan, wait at most this long before retrying
+
+
+def parse_stages(value: str | Iterable[str] | None) -> frozenset[str]:
+    """`--stages inventory,scan` -> frozenset. Empty / None / "all" selects every stage."""
+    if value is None:
+        items: list[str] = []
+    elif isinstance(value, str):
+        items = [v.strip().lower() for v in value.split(",") if v.strip()]
+    else:
+        items = [str(v).strip().lower() for v in value if str(v).strip()]
+    if not items or "all" in items:
+        return frozenset(ALL_STAGES)
+    unknown = sorted(set(items) - set(ALL_STAGES))
+    if unknown:
+        raise ValueError(f"unknown worker stage(s): {', '.join(unknown)} (valid: {', '.join(ALL_STAGES)})")
+    return frozenset(items)
+
+
+def next_scheduled_scan(last_done_started: datetime | None, last_attempt: datetime | None, interval_hours: float,
+                        current: datetime, first_run: datetime | None = None) -> datetime:
+    """When the next scheduled full scan is due (DB-derived, survives restarts; review B2).
+
+    * No full scan ever finished: due at `first_run` (default: now, i.e. immediately).
+    * Otherwise `interval_hours` after the newest done full scan *started*.
+    * A newer failed/cancelled full scan pushes the next attempt to at least
+      min(interval, SCHEDULE_RETRY_HOURS) after that attempt, so a scan that keeps
+      failing is retried hourly instead of on every poll.
+    """
+    if last_done_started is None:
+        due = first_run or current
+    else:
+        due = last_done_started + timedelta(hours=interval_hours)
+    if last_attempt is not None and (last_done_started is None or last_attempt > last_done_started):
+        due = max(due, last_attempt + timedelta(hours=min(interval_hours, SCHEDULE_RETRY_HOURS)))
+    return due
+
+
+def inventory_to_json(inv: InventorySnapshot) -> dict[str, Any]:
+    return {
+        "containers": [asdict(c) for c in inv.containers],
+        "namespaces": {k: asdict(v) for k, v in inv.namespaces.items()},
+        "network_policies": None if inv.network_policies is None else [asdict(n) for n in inv.network_policies],
+        "nebari_apps": [asdict(a) for a in inv.nebari_apps],
+        "collected_at": inv.collected_at.isoformat() if inv.collected_at else None,
+        "errors": list(inv.errors),
+    }
+
+
+def inventory_from_json(data: dict[str, Any]) -> InventorySnapshot:
+    nps = data.get("network_policies")
+    collected = data.get("collected_at")
+    return InventorySnapshot(
+        containers=[ContainerRecord(**c) for c in data.get("containers") or []],
+        namespaces={k: NamespaceInfo(**v) for k, v in (data.get("namespaces") or {}).items()},
+        network_policies=None if nps is None else [NetworkPolicyInfo(**n) for n in nps],
+        nebari_apps=[NebariAppInfo(**a) for a in data.get("nebari_apps") or []],
+        collected_at=datetime.fromisoformat(collected) if collected else None,
+        errors=list(data.get("errors") or []),
+    )
 
 
 def now() -> datetime:
@@ -108,8 +194,14 @@ class Worker:
         scanners: dict[str, Scanner] | None = None,
         inventory_fn: Callable[[list[str]], Awaitable[InventorySnapshot]] | None = None,
         mirror: Mirror | Any | None = None,
+        stages: str | Iterable[str] | None = None,
     ):
         self.s = settings
+        self.stages = parse_stages(stages if stages is not None else getattr(settings, "worker_stages", None))
+        self.scan_side = bool(self.stages & SCAN_STAGES)
+        self.final_side = bool(self.stages & FINAL_STAGES)
+        # heartbeat row per role so a split deployment does not clobber one row
+        self.heartbeat_id = 1 if self.scan_side else 2
         self.sm = sessionmaker
         self.scanners = scanners if scanners is not None else build_scanners(settings)
         self.inventory_fn = inventory_fn or collect
@@ -118,14 +210,16 @@ class Worker:
         self.hostname = socket.gethostname()
         self._stop = asyncio.Event()
         self.scheduler = None
-        self._interval_hours: float | None = None
+        self.started = now()
+        self._next_due: datetime | None = None
         self._versions: dict[str, str] = {}
-        self.provenance_stage: provenance_stage.ProvenanceStage | None = provenance_stage.ProvenanceStage(settings, sessionmaker)
+        self.provenance_stage: provenance_stage.ProvenanceStage | None = (
+            provenance_stage.ProvenanceStage(settings, sessionmaker) if "provenance" in self.stages else None)
 
     # ------------------------------------------------------------------ queue
     async def enqueue(self, trigger: str = "scheduled", requested_by: str | None = None, force: bool = False) -> int | None:
         async with self.sm() as s, s.begin():
-            active = await s.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(("queued", "running")),
+            active = await s.scalar(select(func.count()).select_from(Scan).where(Scan.status.in_(ACTIVE_SCAN_STATUSES),
                                                                                   Scan.target_image_ids.is_(None)))
             if active:
                 return None
@@ -148,15 +242,40 @@ class Worker:
             scan.heartbeat_at = now()
             return scan.id
 
-    async def recover_stale(self) -> None:
-        """Single-replica worker: anything `running` at startup was orphaned by a restart."""
+    async def claim_scanned(self) -> int | None:
+        """Privileged worker: claim a scan whose scan stage finished (`scanned` -> `finalizing`)."""
         async with self.sm() as s, s.begin():
-            res = await s.execute(
-                update(Scan).where(Scan.status == "running")
-                .values(status="failed", finished_at=now(), error="worker restarted during scan")
-            )
-            if res.rowcount:
-                log.warning("scan.recovered_stale", count=res.rowcount)
+            scan = (await s.execute(
+                select(Scan).where(Scan.status == STATUS_SCANNED).order_by(Scan.id).limit(1)
+                .with_for_update(skip_locked=True)
+            )).scalar_one_or_none()
+            if scan is None:
+                return None
+            scan.status = STATUS_FINALIZING
+            scan.heartbeat_at = now()
+            return scan.id
+
+    async def recover_stale(self) -> None:
+        """One replica per role: rows this role left mid-flight were orphaned by a restart.
+
+        Scan side: `running` -> failed. Final side: `finalizing` -> `scanned` again (retried),
+        or `done` when its posture snapshot was already written (only controls/reports lost)."""
+        async with self.sm() as s, s.begin():
+            if self.scan_side:
+                res = await s.execute(
+                    update(Scan).where(Scan.status == "running")
+                    .values(status="failed", finished_at=now(), error="worker restarted during scan")
+                )
+                if res.rowcount:
+                    log.warning("scan.recovered_stale", count=res.rowcount)
+            if self.final_side:
+                for scan in (await s.execute(select(Scan).where(Scan.status == STATUS_FINALIZING))).scalars():
+                    snap = await s.scalar(select(func.count()).select_from(ScanSnapshot).where(
+                        ScanSnapshot.scan_id == scan.id, ScanSnapshot.level == "cluster"))
+                    scan.status = "done" if snap else STATUS_SCANNED
+                    if snap:
+                        scan.finished_at = scan.finished_at or now()
+                    log.warning("scan.recovered_finalizing", scan_id=scan.id, status=scan.status)
 
     # ------------------------------------------------------------ scanners
     async def refresh_scanner_status(self, enabled: list[str] | None = None) -> None:
@@ -312,6 +431,9 @@ class Worker:
                 ctx.add_log("scan cancelled")
                 await self._finish(ctx, "cancelled")
                 return
+            if not self.final_side:
+                await self._handoff(ctx, inv)
+                return
             ctx.supply_chain = await provenance_stage.finish(prov_task, ctx.add_log)
             await self._persist_snapshot(ctx, inv, key_to_id)
             await self._finish(ctx, "done")
@@ -326,10 +448,76 @@ class Worker:
             progress.cancel()
             if prov_task is not None and not prov_task.done():
                 prov_task.cancel()
-        if completed and settings.reports.auto_generate:
+        if completed:
+            await self._after_done(scan_id, settings)
+
+    async def _after_done(self, scan_id: int, settings: app_settings.AppSettings) -> None:
+        if "reports" in self.stages and settings.reports.auto_generate:
             await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
-        if completed:  # DESIGN §13: control evidence stage after every completed scan
+        if "controls" in self.stages:  # DESIGN §13: control evidence stage after every completed scan
             await self.run_controls(trigger="scan", scan_id=scan_id)
+
+    async def _handoff(self, ctx: ScanContext, inv: InventorySnapshot) -> None:
+        """Scan worker (no provenance/controls stages): park the inventory on the scan for the
+        privileged worker and mark the scan `scanned`."""
+        async with self.sm() as s, s.begin():
+            await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == ctx.scan_id,
+                                                       ScanSnapshot.level == INVENTORY_HANDOFF_LEVEL))
+            s.add(ScanSnapshot(scan_id=ctx.scan_id, level=INVENTORY_HANDOFF_LEVEL, key="",
+                               data=inventory_to_json(inv)))
+        ctx.add_log("scan stage done; waiting for the privileged worker (provenance, posture, controls, reports)")
+        await self._finish(ctx, STATUS_SCANNED)
+
+    async def finalize_scan(self, scan_id: int) -> None:
+        """Privileged worker: provenance + posture snapshot for a `finalizing` scan, then `done`."""
+        async with self.sm() as s:
+            scan = await s.get(Scan, scan_id)
+            settings = await app_settings.load(s, self.s)
+            row = (await s.execute(select(ScanSnapshot).where(
+                ScanSnapshot.scan_id == scan_id, ScanSnapshot.level == INVENTORY_HANDOFF_LEVEL).limit(1)
+            )).scalar_one_or_none()
+            force = scan.force
+            ctx = ScanContext(scan_id, settings, [])
+            ctx.log_lines.extend(scan.log or [])
+            ctx.done, ctx.failed = scan.images_done, scan.images_failed
+            ctx.per_scanner = {k: dict(v) for k, v in (scan.per_scanner or {}).items()}
+            inv_data = row.data if row is not None else None
+        if inv_data is None:
+            await self._finish(ctx, "failed", error="inventory hand-off missing (scan stage did not store it)")
+            return
+        inv = inventory_from_json(inv_data)
+        keys = sorted({c.image_key for c in inv.containers if c.image_key})
+        async with self.sm() as s:
+            key_to_id = {k: i for k, i in (await s.execute(select(Image.key, Image.id).where(
+                Image.key.in_(keys or [""])))).all()}
+        ctx.add_log(f"finalize: {', '.join(sorted(self.stages & FINAL_STAGES))}")
+        log.info("scan.finalize", scan_id=scan_id)
+        progress = asyncio.create_task(self._progress_loop(ctx))
+        completed = False
+        try:
+            prov_task = provenance_stage.start(self.provenance_stage, scan_id, settings, inv, key_to_id,
+                                               ctx.add_log, force)
+            ctx.supply_chain = await provenance_stage.finish(prov_task, ctx.add_log)
+            await self._flush_progress(ctx)
+            if ctx.cancelled:
+                await self._finish(ctx, "cancelled")
+                return
+            await self._persist_snapshot(ctx, inv, key_to_id)
+            async with self.sm() as s, s.begin():
+                await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == scan_id,
+                                                           ScanSnapshot.level == INVENTORY_HANDOFF_LEVEL))
+            await self._finish(ctx, "done")
+            completed = True
+        except asyncio.CancelledError:
+            await self._finish(ctx, "failed", error="worker shutting down")
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.exception("scan.finalize_failed", scan_id=scan_id)
+            await self._finish(ctx, "failed", error=str(e)[:2000])
+        finally:
+            progress.cancel()
+        if completed:
+            await self._after_done(scan_id, settings)
 
     async def scanners_not_ready(self, enabled: list[str]) -> list[str]:
         """Reasons why an enabled scanner would fail or return empty results right now."""
@@ -399,14 +587,15 @@ class Worker:
             if scan.status == "cancelled" and status != "cancelled":
                 status = "cancelled"
             scan.status = status
-            scan.finished_at = now()
+            if status != STATUS_SCANNED:
+                scan.finished_at = now()
             scan.images_done = ctx.done
             scan.images_failed = ctx.failed
             scan.per_scanner = {k: dict(v) for k, v in ctx.per_scanner.items()}
             if error:
                 scan.error = error
                 ctx.add_log(f"error: {error}")
-            ctx.add_log(f"scan {status}")
+            ctx.add_log(f"scan {status}" if status != STATUS_SCANNED else "scan stage finished")
             scan.log = list(ctx.log_lines)
         log.info("scan.finished", scan_id=ctx.scan_id, status=status, images_done=ctx.done, images_failed=ctx.failed)
 
@@ -695,7 +884,7 @@ class Worker:
 
     async def poll_controls(self) -> bool:
         """On-demand runs: `control_assertion_runs` rows queued by POST /compliance/assertions/run."""
-        if not self.s.controls_engine_enabled:
+        if "controls" not in self.stages or not self.s.controls_engine_enabled:
             return False
         from .controls_engine import engine as controls_engine
 
@@ -717,33 +906,49 @@ class Worker:
     async def heartbeat(self) -> None:
         self.last_loop_beat = time.monotonic()
         async with self.sm() as s, s.begin():
-            row = await s.get(WorkerHeartbeat, 1)
+            row = await s.get(WorkerHeartbeat, self.heartbeat_id)
             if row is None:
-                row = WorkerHeartbeat(id=1, hostname=self.hostname, started_at=now())
+                row = WorkerHeartbeat(id=self.heartbeat_id, hostname=self.hostname, started_at=now())
                 s.add(row)
             row.beat_at = now()
             row.hostname = self.hostname
 
     async def poll_once(self) -> bool:
-        scan_id = await self.claim_next()
-        if scan_id is None:
-            return await self.poll_controls()
-        await self.run_scan(scan_id)
-        return True
+        if self.scan_side:
+            scan_id = await self.claim_next()
+            if scan_id is not None:
+                await self.run_scan(scan_id)
+                return True
+        if self.final_side:
+            scan_id = await self.claim_scanned()
+            if scan_id is not None:
+                await self.finalize_scan(scan_id)
+                return True
+        return await self.poll_controls()
 
-    async def _sync_schedule(self) -> None:
-        if self.scheduler is None:
-            return
-        try:
-            async with self.sm() as s:
-                st = await app_settings.load(s, self.s)
-        except Exception:  # noqa: BLE001
-            return
-        if st.scan_interval_hours != self._interval_hours:
-            self._interval_hours = st.scan_interval_hours
-            self.scheduler.add_job(self.enqueue, "interval", hours=st.scan_interval_hours, id="scheduled-scan",
-                                   replace_existing=True, max_instances=1, coalesce=True)
-            log.info("scheduler.interval", hours=st.scan_interval_hours)
+    async def next_scan_due(self) -> datetime | None:
+        """Next scheduled full scan from the DB (None when this worker does not run scans)."""
+        if not self.scan_side:
+            return None
+        async with self.sm() as s:
+            st = await app_settings.load(s, self.s)
+            full = Scan.target_image_ids.is_(None)
+            last_done = await s.scalar(select(func.max(Scan.started_at)).where(Scan.status == "done", full))
+            last_attempt = await s.scalar(select(func.max(Scan.created_at)).where(
+                Scan.status.in_(("failed", "cancelled")), full))
+        first = now() if self.s.scan_on_start else self.started + timedelta(hours=st.scan_interval_hours)
+        return next_scheduled_scan(last_done, last_attempt, st.scan_interval_hours, now(), first)
+
+    async def maybe_enqueue_scheduled(self) -> int | None:
+        due = await self.next_scan_due()
+        if due is None:
+            return None
+        if due != self._next_due:
+            self._next_due = due
+            log.info("scheduler.next_scan", due=due.isoformat())
+        if now() < due:
+            return None
+        return await self.enqueue("scheduled")
 
     def start_scheduler(self) -> None:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -770,19 +975,21 @@ class Worker:
     async def run_forever(self) -> None:
         await self.wait_for_db()
         await self.recover_stale()
-        await self.recover_controls()
-        self.start_scheduler()
-        await self._sync_schedule()
-        if self.s.scan_on_start:
-            async with self.sm() as s:
-                done = await s.scalar(select(func.count()).select_from(Scan).where(Scan.status == "done"))
-            if not done:  # run_scan waits for the grype DB / Clair updaters itself
-                await self.enqueue("scheduled", "worker-startup")
-        log.info("worker.ready", hostname=self.hostname)
+        if "controls" in self.stages:
+            await self.recover_controls()
+        if self.scan_side:
+            self.start_scheduler()
+        # first scan immediately when none ever finished (run_scan waits for the grype DB /
+        # Clair updaters itself); afterwards interval after the newest done scan (B2)
+        try:
+            await self.maybe_enqueue_scheduled()
+        except Exception:  # noqa: BLE001  (schema still migrating)
+            log.exception("scheduler.startup_check_failed")
+        log.info("worker.ready", hostname=self.hostname, stages=",".join(s for s in ALL_STAGES if s in self.stages))
         while not self._stop.is_set():
             try:
                 await self.heartbeat()
-                await self._sync_schedule()
+                await self.maybe_enqueue_scheduled()
                 ran = await self.poll_once()
             except Exception:  # noqa: BLE001
                 log.exception("worker.loop_error")
@@ -817,13 +1024,13 @@ def health_app(worker: Worker):
     return app
 
 
-async def _main() -> None:
+async def _main(stages: str | None = None) -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
     os.makedirs(settings.cache_dir, exist_ok=True)
     from .db.session import get_sessionmaker
 
-    worker = Worker(settings, get_sessionmaker())
+    worker = Worker(settings, get_sessionmaker(), stages=stages)
     orig_flush = worker._flush_progress
 
     async def flush_and_beat(ctx: ScanContext) -> None:
@@ -859,8 +1066,16 @@ async def _main() -> None:
         log.info("worker.stopped")
 
 
-def main() -> None:
-    asyncio.run(_main())
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m posture.worker")
+    parser.add_argument("--stages", default=None,
+                        help=f"comma list of {','.join(ALL_STAGES)} (default: WORKER_STAGES or all)")
+    args = parser.parse_args(argv)
+    stages = args.stages if args.stages is not None else get_settings().worker_stages
+    parse_stages(stages)  # fail fast on a typo
+    asyncio.run(_main(stages))
 
 
 if __name__ == "__main__":
