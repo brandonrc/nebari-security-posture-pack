@@ -1,11 +1,13 @@
 """Per-scan CVE rollup (architecture review M4): `vuln_rollup`, one row per vulnerability over
 the consensus findings of the running images, written once at the end of every scan with a
 single INSERT ... SELECT, so `/vulnerabilities` filters, sorts and paginates in SQL instead of
-grouping every consensus row in Python on each request.
+grouping every consensus row in Python on each request. `kev` marks CVEs in the CISA KEV
+catalog (reports/kev.py, the same source as `/summary` `exposure`).
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy import text, update
@@ -60,5 +62,15 @@ async def write_vuln_rollup(session: AsyncSession, scan_id: int) -> int:
     Reads the scan's `containers` rows, so call it after they are inserted."""
     await session.execute(text("DELETE FROM vuln_rollup WHERE scan_id = :scan_id"), {"scan_id": scan_id})
     res = await session.execute(text(ROLLUP_SQL), {"scan_id": scan_id})
+    kev_ids = await asyncio.to_thread(_kev_ids)  # may refresh the feed once a day (bounded timeout)
+    if kev_ids:
+        await session.execute(text("UPDATE vuln_rollup SET kev = true WHERE scan_id = :scan_id "
+                                   "AND vuln_id = ANY(:ids)"), {"scan_id": scan_id, "ids": kev_ids})
     await session.execute(update(Scan).where(Scan.id == scan_id).values(vuln_rollup_at=datetime.now(UTC)))
     return res.rowcount or 0
+
+
+def _kev_ids() -> list[str]:
+    from .reports.kev import catalog
+
+    return sorted((catalog().get("entries") or {}).keys())

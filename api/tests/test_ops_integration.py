@@ -383,3 +383,30 @@ async def test_metrics_ignore_targeted_scans(env):
         await metrics._refresh(s)
     assert metrics.SCAN_IMAGES.labels("total")._value.get() == full_total
     assert metrics.LAST_SUCCESS._value.get() == full_finished
+
+
+async def test_vuln_rollup_marks_kev(env):
+    """vuln_rollup.kev comes from the KEV catalog, so /vulnerabilities?kev=true agrees with
+    /summary exposure (it was always false)."""
+    from sqlalchemy import select
+
+    from posture.db.models import Scan
+    from posture.reports import kev
+    from posture.rollup import write_vuln_rollup
+
+    c = env["client"]
+    target = (await c.get("/vulnerabilities", params={"pageSize": 1, "sort": "vulnId"})).json()["items"][0]["vulnId"]
+    kev.set_catalog({"version": "fixture", "source": "test", "entries": {target: ("2024-01-01", "2024-01-22", 0)}})
+    try:
+        async with env["sm"]() as s:
+            sid = (await s.execute(select(Scan.id).where(Scan.status == "done", Scan.vuln_rollup_at.isnot(None))
+                                   .order_by(Scan.id.desc()).limit(1))).scalar_one()
+            await write_vuln_rollup(s, sid)
+            await s.commit()
+        got = (await c.get("/vulnerabilities", params={"kev": "true", "pageSize": 500})).json()["items"]
+        assert [i["vulnId"] for i in got] == [target] and got[0]["kev"] is True
+    finally:
+        kev.set_catalog(None)
+        async with env["sm"]() as s:
+            await write_vuln_rollup(s, sid)
+            await s.commit()
