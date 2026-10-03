@@ -170,6 +170,11 @@ async def test_05_oscal_reports(env):
     for rtype, validator in (("oscal-ssp", ssp_v), ("oscal-component-definition", comp_v)):
         r = await c.post("/reports", json={"type": rtype, "format": "json"})
         assert r.status_code == 202, r.text
+        from posture.report_worker import ReportWorker  # POST only queues (architecture review M3)
+
+        from posture.config import get_settings
+
+        await ReportWorker(get_settings(), env["sm"], isolation="inline").drain()
         rep = (await c.get(f"/reports/{r.json()['id']}")).json()
         assert rep["status"] == "done", rep
         doc = json.loads((await c.get(f"/reports/{r.json()['id']}/download")).content)

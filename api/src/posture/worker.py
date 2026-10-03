@@ -36,7 +36,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from . import app_settings, report_jobs
+from . import app_settings, metrics, report_jobs
 from .aggregate import ImageInfo, aggregate
 from .analysis import analyze
 from .config import Settings, get_settings
@@ -213,6 +213,8 @@ class Worker:
         self.started = now()
         self._next_due: datetime | None = None
         self._versions: dict[str, str] = {}
+        self._metrics_at = 0.0
+        self.report_worker = None
         self.provenance_stage: provenance_stage.ProvenanceStage | None = (
             provenance_stage.ProvenanceStage(settings, sessionmaker) if "provenance" in self.stages else None)
 
@@ -560,24 +562,10 @@ class Worker:
             await asyncio.sleep(15)
 
     async def auto_generate_reports(self, scan_id: int, types: list[str]) -> list[str]:
-        """Settings `reports.autoGenerate`: one cluster-scope report per type in its default format.
-        Best effort: a failing report is recorded as a failed row and never fails the scan."""
-        statuses: list[str] = []
-        for rtype in types:
-            try:
-                fmt, kind, name = report_jobs.validate_request(rtype, None, None, None)
-                async with self.sm() as s, s.begin():
-                    row = await report_jobs.create_row(s, report_type=rtype, fmt=fmt, scope_kind=kind,
-                                                       scope_name=name, scan_id=scan_id, options={},
-                                                       created_by="auto")
-                    rid = row.id
-                status = await report_jobs.run_report(self.sm, rid)
-            except Exception:  # noqa: BLE001
-                log.exception("report.auto_failed", scan_id=scan_id, type=rtype)
-                status = "failed"
-            statuses.append(status)
-            log.info("report.auto", scan_id=scan_id, type=rtype, status=status)
-        return statuses
+        """Settings `reports.autoGenerate`: queue one cluster-scope report per type in its default
+        format. The report worker generates them (posture.report_worker); the scan loop never
+        blocks on report generation. Returns the queued report ids."""
+        return await report_jobs.enqueue_auto(self.sm, scan_id, types)
 
     async def _finish(self, ctx: ScanContext, status: str, error: str | None = None) -> None:
         async with self.sm() as s, s.begin():
@@ -972,6 +960,23 @@ class Worker:
                 await asyncio.sleep(delay)
                 delay = min(delay * 1.5, 30)
 
+    def start_report_worker(self) -> asyncio.Task | None:
+        """REPORT_WORKER_EMBEDDED: drain the reports queue from this process too (one report at a
+        time, each in a child process) until the chart runs a report-worker Deployment."""
+        if "reports" not in self.stages or not self.s.report_worker_embedded:
+            return None
+        from .report_worker import ReportWorker
+
+        self.report_worker = ReportWorker(self.s, self.sm)
+        return asyncio.create_task(self.report_worker.run_forever(refresh_metrics=False))
+
+    async def _refresh_metrics(self) -> None:
+        if time.monotonic() - self._metrics_at < 30:
+            return
+        self._metrics_at = time.monotonic()
+        async with self.sm() as s:
+            await metrics.refresh_db_gauges(s)
+
     async def run_forever(self) -> None:
         await self.wait_for_db()
         await self.recover_stale()
@@ -986,8 +991,18 @@ class Worker:
         except Exception:  # noqa: BLE001  (schema still migrating)
             log.exception("scheduler.startup_check_failed")
         log.info("worker.ready", hostname=self.hostname, stages=",".join(s for s in ALL_STAGES if s in self.stages))
+        reports_task = self.start_report_worker()
+        try:
+            await self._loop()
+        finally:
+            if reports_task is not None:
+                self.report_worker.stop()
+                reports_task.cancel()
+
+    async def _loop(self) -> None:
         while not self._stop.is_set():
             try:
+                await self._refresh_metrics()
                 await self.heartbeat()
                 await self.maybe_enqueue_scheduled()
                 ran = await self.poll_once()
@@ -1012,6 +1027,13 @@ def health_app(worker: Worker):
     from fastapi.responses import JSONResponse
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.get("/metrics")
+    async def prom():
+        from fastapi.responses import Response
+
+        body, ctype = metrics.exposition()
+        return Response(body, media_type=ctype)
 
     @app.get("/healthz")
     async def healthz():
