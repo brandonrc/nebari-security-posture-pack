@@ -96,6 +96,9 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
     if latest is None:
         warnings.append("no scan has completed yet")
 
+    from .supply_chain import supply_chain_summary
+
+    supply = await supply_chain_summary(session)
     previous = None
     if len(trend) >= 2:
         previous = trend[-2]["score"]
@@ -105,6 +108,7 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
         "grade": latest.grade if latest and latest.grade else "?",
         "vulnScore": latest.vuln_score if latest else None,
         "postureScore": latest.posture_score if latest else None,
+        "supplyChainScore": supply["score"],  # DESIGN §12 (cluster weight 0.15 when present)
         "previousScore": previous,
         "delta": round(score - previous, 1) if score is not None and previous is not None else None,
         "generatedAt": iso(utcnow()),
@@ -124,6 +128,7 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
         "checks": checks,
         "slaOverdue": await compute_sla_overdue(session, settings.remediation_sla_days.model_dump()),
         "warnings": warnings,
+        "supplyChain": supply,
     }
 
 

@@ -48,6 +48,7 @@ from .inventory_model import InventorySnapshot
 from .logs import get_logger, setup_logging
 from .mirror import Mirror, ScanTarget
 from .posture_checks import evaluate_inventory
+from .provenance import stage as provenance_stage
 from .scanners import ClairScanner, GrypeScanner, Scanner, ScanResult, TrivyScanner
 from .scanners.base import RAW_MAX_BYTES
 
@@ -92,6 +93,7 @@ class ScanContext:
     done: int = 0
     failed: int = 0
     dirty: bool = True
+    supply_chain: dict[int, Any] = field(default_factory=dict)  # image id -> SupplyChainInputs (DESIGN §12)
 
     def add_log(self, msg: str) -> None:
         self.log_lines.append(f"{now().strftime('%Y-%m-%dT%H:%M:%SZ')} {msg}")
@@ -118,6 +120,7 @@ class Worker:
         self.scheduler = None
         self._interval_hours: float | None = None
         self._versions: dict[str, str] = {}
+        self.provenance_stage: provenance_stage.ProvenanceStage | None = provenance_stage.ProvenanceStage(settings, sessionmaker)
 
     # ------------------------------------------------------------------ queue
     async def enqueue(self, trigger: str = "scheduled", requested_by: str | None = None, force: bool = False) -> int | None:
@@ -264,6 +267,7 @@ class Worker:
         ctx.add_log(f"scan started (scanners: {', '.join(enabled) or 'none'})")
         log.info("scan.started", scan_id=scan_id, scanners=",".join(enabled), force=force)
         progress = asyncio.create_task(self._progress_loop(ctx))
+        prov_task: asyncio.Task | None = None
         completed = False
         try:
             try:
@@ -277,6 +281,8 @@ class Worker:
                 ctx.add_log(f"inventory warning: {err}")
             ctx.add_log(f"inventory: {len(inv.containers)} containers in {len(inv.namespaces)} namespaces")
             key_to_id = await self._upsert_images(inv)
+            # supply-chain checks run concurrently with CVE scanning (DESIGN §12)
+            prov_task = provenance_stage.start(self.provenance_stage, scan_id, settings, inv, key_to_id, ctx.add_log, force)
             to_scan = await self._select_images(key_to_id, inv, target_ids, target_ns, force, settings)
             async with self.sm() as s, s.begin():
                 await s.execute(update(Scan).where(Scan.id == scan_id).values(images_total=len(to_scan)))
@@ -302,9 +308,11 @@ class Worker:
             await asyncio.gather(*(guarded(i) for i in to_scan))
             await self._flush_progress(ctx)
             if ctx.cancelled:
+                await provenance_stage.finish(prov_task, ctx.add_log, cancel=True)
                 ctx.add_log("scan cancelled")
                 await self._finish(ctx, "cancelled")
                 return
+            ctx.supply_chain = await provenance_stage.finish(prov_task, ctx.add_log)
             await self._persist_snapshot(ctx, inv, key_to_id)
             await self._finish(ctx, "done")
             completed = True
@@ -316,6 +324,8 @@ class Worker:
             await self._finish(ctx, "failed", error=str(e)[:2000])
         finally:
             progress.cancel()
+            if prov_task is not None and not prov_task.done():
+                prov_task.cancel()
         if completed and settings.reports.auto_generate:
             await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
 
@@ -604,7 +614,7 @@ class Worker:
         by_id = {i.id: i for i in imgs}
         images_by_key = {k: ImageInfo(i, by_id[i].ref, by_id[i].score, by_id[i].counts or {})
                          for k, i in key_to_id.items() if i in by_id}
-        workloads, namespaces, cluster = aggregate(inv, images_by_key, posture)
+        workloads, namespaces, cluster = aggregate(inv, images_by_key, posture, ctx.supply_chain)
         sid = ctx.scan_id
         async with self.sm() as s, s.begin():
             if inv.containers:
@@ -642,6 +652,7 @@ class Worker:
                     counts[sev] = counts.get(sev, 0) + int(n)
             snaps.append({"scan_id": sid, "level": "cluster", "key": "", "score": cluster.score, "grade": cluster.grade,
                           "data": {"vulnScore": cluster.vuln_score, "postureScore": cluster.posture_score,
+                                   "supplyChainScore": cluster.supply_chain_score,
                                    "workloads": cluster.workloads, "namespaces": cluster.namespaces,
                                    "containers": cluster.containers, "runningContainers": cluster.running_containers,
                                    "counts": counts, "inventoryErrors": inv.errors}})

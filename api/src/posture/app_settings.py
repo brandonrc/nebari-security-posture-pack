@@ -48,6 +48,31 @@ class ReportsSettings(CamelModel):
         return out
 
 
+class ProvenanceSettings(CamelModel):
+    """Supply-chain checks (DESIGN §12); keys mirror provenance-collector-pack's config."""
+
+    enabled: bool = True
+    verify_signatures: bool = True
+    cosign_public_key: str = ""  # PEM text, file path or KMS URI; "" = existence check only
+    cosign_certificate_identity_regexp: str = ""
+    cosign_certificate_oidc_issuer_regexp: str = ""
+    check_sbom: bool = True
+    check_provenance: bool = True
+    check_updates: bool = True
+    skip_prerelease: bool = True
+    update_level: str = "patch"
+    helm_releases: bool = True
+    recheck_hours: float = Field(24, ge=0, le=24 * 30)
+
+    @field_validator("update_level")
+    @classmethod
+    def _level(cls, v: str) -> str:
+        v = (v or "patch").strip().lower()
+        if v not in ("patch", "minor", "major"):
+            raise ValueError("updateLevel must be patch, minor or major")
+        return v
+
+
 class AppSettings(CamelModel):
     scan_interval_hours: float = Field(6, gt=0, le=24 * 30)
     rescan_after_hours: float = Field(24, ge=0, le=24 * 365)
@@ -58,6 +83,7 @@ class AppSettings(CamelModel):
     organization: str = ""
     remediation_sla_days: SlaDays = Field(default_factory=SlaDays)
     reports: ReportsSettings = Field(default_factory=ReportsSettings)
+    provenance: ProvenanceSettings = Field(default_factory=ProvenanceSettings)
     admin_groups: list[str] = Field(default_factory=list)  # read-only (from env)
 
     @field_validator("excluded_namespaces")
@@ -67,7 +93,7 @@ class AppSettings(CamelModel):
 
 
 EDITABLE = {"scan_interval_hours", "rescan_after_hours", "excluded_namespaces", "scanners", "parallelism",
-            "system_name", "organization", "remediation_sla_days", "reports"}
+            "system_name", "organization", "remediation_sla_days", "reports", "provenance"}
 
 
 def defaults(env: Settings | None = None) -> AppSettings:
@@ -80,6 +106,15 @@ def defaults(env: Settings | None = None) -> AppSettings:
         parallelism=env.scan_parallelism,
         system_name=env.cluster_name,
         reports=ReportsSettings(auto_generate=env.reports_auto_generate),
+        provenance=ProvenanceSettings(
+            enabled=env.provenance_enabled, verify_signatures=env.provenance_verify_signatures,
+            cosign_public_key=env.provenance_cosign_public_key,
+            cosign_certificate_identity_regexp=env.provenance_cosign_certificate_identity_regexp,
+            cosign_certificate_oidc_issuer_regexp=env.provenance_cosign_certificate_oidc_issuer_regexp,
+            check_sbom=env.provenance_check_sbom, check_provenance=env.provenance_check_provenance,
+            check_updates=env.provenance_check_updates, skip_prerelease=env.provenance_skip_prerelease,
+            update_level=env.provenance_update_level, helm_releases=env.provenance_helm_enabled,
+            recheck_hours=env.provenance_recheck_hours),
         admin_groups=sorted(env.admin_group_set),
     )
 

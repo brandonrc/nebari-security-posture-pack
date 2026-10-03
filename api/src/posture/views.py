@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .controls import vuln_controls
 from .db.models import ConsensusFindingRow, ContainerRow, Image, ImageScan, Scan, ScannerStatus
+from .provenance import models as _provenance_models  # noqa: F401  (maps images.provenance, DESIGN §12)
 from .severity import SEVERITIES, zero_counts
 
 SCANNERS = ("trivy", "grype", "clair")
@@ -98,6 +99,7 @@ def image_summary(img: Image) -> dict[str, Any]:
         "mirrorRef": img.mirror_ref,
         "warnings": img.warnings or [],
         "baseOs": f"{img.os_family} {img.os_name}".strip() if img.os_family else None,
+        "provenance": getattr(img, "provenance", None),  # DESIGN §12, None until checked
     }
 
 

@@ -16,6 +16,13 @@ titles:
   CM-6: Configuration Settings
   SI-16: Memory Protection
   AC-4: Information Flow Enforcement
+  SR-3: Supply Chain Controls and Processes
+  SR-4: Provenance
+  SA-10: Developer Configuration Management
+  SA-8(3): Security and Privacy Engineering Principles | Modular Design
+  CM-3: Configuration Change Control
+  CM-8: System Component Inventory
+  SR-11: Component Authenticity
 vulnerabilities:
   default: [RA-5, SI-2]
   fixable: [RA-5, SI-2, SI-2(2)]
@@ -36,3 +43,13 @@ checks:
   automount-sa-token: [AC-6(10), IA-5]
   seccomp-unconfined: [CM-6, SI-16]
   no-netpol: [SC-7, AC-4]
+# Supply-chain provenance findings (DESIGN §12), keyed by provenance.scoring finding ids.
+provenance:
+  unsigned: [CM-14, SR-4, SR-11]
+  unverified: [CM-14, SR-11]
+  no-sbom: [SR-4, SA-8(3), CM-8]
+  no-provenance: [SR-3, SR-4, SA-10]
+  update-available: [SI-2]
+  major-update-available: [SI-2]
+  mutable-tag: [CM-2, CM-14]
+  helm-release-behind: [SI-2, CM-3]

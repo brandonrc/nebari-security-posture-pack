@@ -16,6 +16,10 @@ SYSTEM_NAMESPACE_FACTOR = 0.5
 SYSTEM_NAMESPACES = frozenset({"kube-system"})
 VULN_SHARE = 0.7
 POSTURE_SHARE = 0.3
+# cluster score once supply-chain data exists (SCORING.md, DESIGN §12)
+CLUSTER_VULN_SHARE = 0.6
+CLUSTER_POSTURE_SHARE = 0.25
+CLUSTER_SUPPLY_CHAIN_SHARE = 0.15
 
 
 def grade(score: float | None) -> str:
@@ -89,6 +93,19 @@ def combine(vuln: float | None, posture: float | None) -> float | None:
     if posture is None:
         return round(vuln, 1)
     return round(VULN_SHARE * vuln + POSTURE_SHARE * posture, 1)
+
+
+def combine_cluster(vuln: float | None, posture: float | None, supply_chain: float | None) -> float | None:
+    """Cluster: 0.6 x vuln + 0.25 x posture + 0.15 x supplyChain; without supply-chain data
+    the workload formula (0.7 / 0.3) applies. Missing posture renormalizes the rest."""
+    if supply_chain is None:
+        return combine(vuln, posture)
+    if vuln is None:
+        return None
+    parts = [(vuln, CLUSTER_VULN_SHARE), (supply_chain, CLUSTER_SUPPLY_CHAIN_SHARE)]
+    if posture is not None:
+        parts.append((posture, CLUSTER_POSTURE_SHARE))
+    return round(sum(v * w for v, w in parts) / sum(w for _, w in parts), 1)
 
 
 def mean(values: Sequence[float]) -> float | None:

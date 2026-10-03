@@ -8,7 +8,7 @@ from typing import Any
 
 from .inventory_model import ContainerRecord, InventorySnapshot
 from .posture_checks import WorkloadPosture
-from .scoring import SYSTEM_NAMESPACES, combine, grade, mean, weighted_mean
+from .scoring import SYSTEM_NAMESPACES, combine, combine_cluster, grade, mean, weighted_mean
 from .severity import SEVERITIES, zero_counts
 
 
@@ -64,6 +64,7 @@ class ClusterAgg:
     namespaces: int
     containers: int
     running_containers: int
+    supply_chain_score: float | None = None
 
 
 def _sum_counts(images: list[ImageInfo]) -> dict[str, int]:
@@ -75,7 +76,9 @@ def _sum_counts(images: list[ImageInfo]) -> dict[str, int]:
 
 
 def aggregate(inv: InventorySnapshot, images_by_key: dict[str, ImageInfo],
-              posture: dict[tuple[str, str, str], WorkloadPosture]) -> tuple[list[WorkloadAgg], list[NamespaceAgg], ClusterAgg]:
+              posture: dict[tuple[str, str, str], WorkloadPosture],
+              supply_chain: dict[int, Any] | None = None) -> tuple[list[WorkloadAgg], list[NamespaceAgg], ClusterAgg]:
+    """`supply_chain`: image id -> provenance.scoring.SupplyChainInputs (DESIGN §12)."""
     groups: dict[tuple[str, str, str], list[ContainerRecord]] = {}
     for c in inv.containers:
         groups.setdefault((c.namespace, c.workload_kind, c.workload_name), []).append(c)
@@ -134,17 +137,24 @@ def aggregate(inv: InventorySnapshot, images_by_key: dict[str, ImageInfo],
         ))
 
     vuln_pairs = []
+    supply_pairs = []
+    if supply_chain:
+        from .provenance.scoring import container_score
     for c in inv.containers:
         if c.container_type == "ephemeral" or (any_running and not c.running):
             continue
         img = images_by_key.get(c.image_key or "")
         if img and img.score is not None:
             vuln_pairs.append((img.score, 1.0))
+        if img and supply_chain and img.id in supply_chain:
+            supply_pairs.append((container_score(supply_chain[img.id], c.image), 1.0))
     vuln = weighted_mean(vuln_pairs)
     post = weighted_mean((w.posture_score, weight(w)) for w in workloads)
-    score = combine(vuln, post)
+    supply = weighted_mean(supply_pairs)
+    score = combine_cluster(vuln, post, supply)
     cluster = ClusterAgg(
-        score=score, grade=grade(score), vuln_score=vuln, posture_score=post, workloads=len(workloads),
+        score=score, grade=grade(score), vuln_score=vuln, posture_score=post, supply_chain_score=supply,
+        workloads=len(workloads),
         namespaces=len([n for n in namespaces if n.workloads]),
         containers=sum(w.containers for w in workloads), running_containers=sum(w.running_containers for w in workloads),
     )

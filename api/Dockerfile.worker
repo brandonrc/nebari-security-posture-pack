@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Nebari Security Posture worker: same Python package as the API plus pinned scanner
-# binaries (trivy client, grype, clairctl) and skopeo. Build context: api/
+# binaries (trivy client, grype, clairctl, cosign) and skopeo. Build context: api/
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 
 FROM ${PYTHON_IMAGE} AS builder
@@ -19,6 +19,9 @@ ARG GRYPE_VERSION=0.120.0
 ARG GRYPE_SHA256=a5a1218dce63acdac152a6b3b5bb366e7267e36f4069848cf455543b3fa5700e
 ARG CLAIRCTL_VERSION=4.9.0
 ARG CLAIRCTL_SHA256=202ba386620bb8720631e34381fa24621536045ff898dd6d08a3b64ee3d52328
+# cosign: signature verification for the supply-chain stage (DESIGN §12)
+ARG COSIGN_VERSION=3.1.3
+ARG COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /dl
 RUN set -eux; \
@@ -30,7 +33,9 @@ RUN set -eux; \
     tar -xzf grype.tgz grype; \
     curl -fsSLo clairctl "https://github.com/quay/clair/releases/download/v${CLAIRCTL_VERSION}/clairctl-linux-amd64"; \
     echo "${CLAIRCTL_SHA256}  clairctl" | sha256sum -c -; \
-    chmod 0755 trivy grype clairctl
+    curl -fsSLo cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"; \
+    echo "${COSIGN_SHA256}  cosign" | sha256sum -c -; \
+    chmod 0755 trivy grype clairctl cosign
 
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="security-posture-worker" \
@@ -43,7 +48,7 @@ RUN apt-get update \
  && groupadd --gid 10001 posture \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture \
  && mkdir -p /cache /data/reports && chown 10001:10001 /cache /data/reports
-COPY --from=tools /dl/trivy /dl/grype /dl/clairctl /usr/local/bin/
+COPY --from=tools /dl/trivy /dl/grype /dl/clairctl /dl/cosign /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
 # Everything the tools write goes under /cache (PVC) or /tmp (emptyDir): the root fs
 # can be read-only.
@@ -62,6 +67,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     GRYPE_CHECK_FOR_APP_UPDATE=false \
     TRIVY_CACHE_DIR=/cache/trivy-client \
     TRIVY_NO_PROGRESS=true \
+    TUF_ROOT=/cache/sigstore \
     WORKER_HEALTH_PORT=9000
 USER 10001:10001
 VOLUME ["/cache"]

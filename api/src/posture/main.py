@@ -22,11 +22,13 @@ from .routers import (
     health,
     images,
     me,
+    provenance_compat,
     reports,
     scanners,
     scans,
     settings,
     summary,
+    supply_chain,
     vulnerabilities,
     workloads,
 )
@@ -45,7 +47,10 @@ async def lifespan(app: FastAPI):
         await report_jobs.fail_interrupted(get_sessionmaker())
     except Exception as e:  # noqa: BLE001  (DB may still be migrating; not fatal)
         log.warning("api.reports_recover_failed", error=str(e))
+    internal = await provenance_compat.start_internal(s)  # DESIGN §12 Grafana listener (opt-in)
     yield
+    if internal is not None:
+        await internal.stop()
     await dispose_engine()
 
 
@@ -86,7 +91,7 @@ def create_app() -> FastAPI:
     admin = APIRouter(prefix=PREFIX, dependencies=[Depends(require_admin)])
     for r in (summary.router, images.router, vulnerabilities.router, workloads.router, workloads.ns_router,
               checks.router, scans.router, scanners.router, settings.router, export.router, compliance.router,
-              reports.router):
+              reports.router, supply_chain.router):
         admin.include_router(r)
 
     @admin.get("/openapi.json", include_in_schema=False)
@@ -98,6 +103,7 @@ def create_app() -> FastAPI:
         return get_swagger_ui_html(openapi_url=f"{PREFIX}/openapi.json", title="Security Posture API")
 
     app.include_router(admin)
+    provenance_compat.include(app)  # provenance-collector-pack API aliases outside /api/v1 (DESIGN §12)
     app.state.admin_router = admin  # reports agent can mount additional routers here
     return app
 
