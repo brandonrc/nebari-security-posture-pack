@@ -1,0 +1,1678 @@
+{
+ "_comment": "Trimmed + redacted `kubectl get pods,replicasets,jobs,nebariapps -A -o json` from a MicroK8s lab cluster (uids, IPs, node names, env, args, annotations removed); the hub, Windows and dns-test pods are crafted. See tests/test_q_inventory.py.",
+ "pods": [
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "calico-node-k8dzl",
+    "namespace": "kube-system",
+    "uid": "00000000-0000-4000-8000-000000000001",
+    "labels": {
+     "k8s-app": "calico-node",
+     "pod-template-generation": "1"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "DaemonSet",
+      "name": "calico-node",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000002"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "DaemonSet, hostNetwork, privileged init + main, hostPath"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "docker.io/calico/node:v3.29.3",
+      "livenessProbe": {
+       "exec": {
+        "command": [
+         "/bin/true"
+        ]
+       },
+       "periodSeconds": 10
+      },
+      "name": "calico-node",
+      "readinessProbe": {
+       "exec": {
+        "command": [
+         "/bin/true"
+        ]
+       },
+       "periodSeconds": 10
+      },
+      "resources": {
+       "requests": {
+        "cpu": "250m"
+       }
+      },
+      "securityContext": {
+       "privileged": true
+      }
+     }
+    ],
+    "hostNetwork": true,
+    "initContainers": [
+     {
+      "image": "docker.io/calico/cni:v3.29.3",
+      "name": "upgrade-ipam",
+      "resources": {},
+      "securityContext": {
+       "privileged": true
+      }
+     },
+     {
+      "image": "docker.io/calico/cni:v3.29.3",
+      "name": "install-cni",
+      "resources": {},
+      "securityContext": {
+       "privileged": true
+      }
+     }
+    ],
+    "nodeSelector": {
+     "kubernetes.io/os": "linux"
+    },
+    "securityContext": {
+     "seccompProfile": {
+      "type": "RuntimeDefault"
+     }
+    },
+    "serviceAccountName": "calico-node",
+    "volumes": [
+     {
+      "name": "lib-modules",
+      "hostPath": {
+       "path": "/lib/modules",
+       "type": ""
+      }
+     },
+     {
+      "name": "var-run-calico",
+      "hostPath": {
+       "path": "/var/snap/microk8s/current/var/run/calico",
+       "type": ""
+      }
+     },
+     {
+      "name": "var-lib-calico",
+      "hostPath": {
+       "path": "/var/snap/microk8s/current/var/lib/calico",
+       "type": ""
+      }
+     },
+     {
+      "name": "xtables-lock",
+      "hostPath": {
+       "path": "/run/xtables.lock",
+       "type": "FileOrCreate"
+      }
+     },
+     {
+      "name": "sys-fs",
+      "hostPath": {
+       "path": "/sys/fs/",
+       "type": "DirectoryOrCreate"
+      }
+     },
+     {
+      "name": "cni-bin-dir",
+      "hostPath": {
+       "path": "/var/snap/microk8s/current/opt/cni/bin",
+       "type": "DirectoryOrCreate"
+      }
+     },
+     {
+      "name": "cni-net-dir",
+      "hostPath": {
+       "path": "/var/snap/microk8s/current/args/cni-network",
+       "type": ""
+      }
+     },
+     {
+      "name": "cni-log-dir",
+      "hostPath": {
+       "path": "/var/snap/microk8s/common/var/log/calico/cni",
+       "type": ""
+      }
+     },
+     {
+      "name": "host-local-net-dir",
+      "hostPath": {
+       "path": "/var/snap/microk8s/current/var/lib/cni/networks",
+       "type": ""
+      }
+     },
+     {
+      "name": "policysync",
+      "hostPath": {
+       "path": "/var/snap/microk8s/current/var/run/nodeagent",
+       "type": "DirectoryOrCreate"
+      }
+     },
+     {
+      "name": "kube-api-access-cdkk9",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "calico-node",
+      "image": "docker.io/calico/node:v3.29.3",
+      "imageID": "docker.io/calico/node@sha256:eed399f2a727cfc1f374ab5c9cda6123c207e794ed8dc66c7eb6d8db412669e1",
+      "ready": true
+     }
+    ],
+    "initContainerStatuses": [
+     {
+      "name": "upgrade-ipam",
+      "image": "docker.io/calico/cni:v3.29.3",
+      "imageID": "docker.io/calico/cni@sha256:53f826d3f565a6635b4d58ea4fcfdc0e7ea418ffd4dbb495b4c801074e6eb99c",
+      "ready": true
+     },
+     {
+      "name": "install-cni",
+      "image": "docker.io/calico/cni:v3.29.3",
+      "imageID": "docker.io/calico/cni@sha256:53f826d3f565a6635b4d58ea4fcfdc0e7ea418ffd4dbb495b4c801074e6eb99c",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "coredns-869c66859c-6crgv",
+    "namespace": "kube-system",
+    "uid": "00000000-0000-4000-8000-000000000003",
+    "labels": {
+     "k8s-app": "kube-dns",
+     "pod-template-hash": "869c66859c"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "name": "coredns-869c66859c",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000004"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "ReplicaSet->Deployment, kube-system"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "coredns/coredns:1.13.1",
+      "livenessProbe": {
+       "httpGet": {
+        "path": "/health",
+        "port": 8080,
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "name": "coredns",
+      "ports": [
+       {
+        "containerPort": 53,
+        "name": "dns",
+        "protocol": "UDP"
+       },
+       {
+        "containerPort": 53,
+        "name": "dns-tcp",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 9153,
+        "name": "metrics",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "httpGet": {
+        "path": "/ready",
+        "port": 8181,
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "resources": {
+       "limits": {
+        "memory": "170Mi"
+       },
+       "requests": {
+        "cpu": "100m",
+        "memory": "70Mi"
+       }
+      },
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "add": [
+         "NET_BIND_SERVICE"
+        ],
+        "drop": [
+         "all"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     }
+    ],
+    "securityContext": {},
+    "serviceAccountName": "coredns",
+    "volumes": [
+     {
+      "name": "config-volume",
+      "configMap": {}
+     },
+     {
+      "name": "kube-api-access-6xzvg",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "coredns",
+      "image": "docker.io/coredns/coredns:1.13.1",
+      "imageID": "docker.io/coredns/coredns@sha256:9b9128672209474da07c91439bf15ed704ae05ad918dd6454e5b6ae14e35fee6",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "security-posture-api-f6cf58b56-f78zl",
+    "namespace": "security-posture",
+    "uid": "00000000-0000-4000-8000-000000000005",
+    "labels": {
+     "app.kubernetes.io/component": "api",
+     "app.kubernetes.io/instance": "security-posture",
+     "app.kubernetes.io/name": "nebari-security-posture-pack",
+     "pod-template-hash": "f6cf58b56"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "name": "security-posture-api-f6cf58b56",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000006"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "hardened Deployment, 2 init containers, NebariApp-mapped"
+    }
+   },
+   "spec": {
+    "automountServiceAccountToken": true,
+    "containers": [
+     {
+      "image": "localhost:32000/security-posture-api:b727589-1791000393",
+      "livenessProbe": {
+       "httpGet": {
+        "path": "/api/v1/health",
+        "port": "http",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 20
+      },
+      "name": "api",
+      "ports": [
+       {
+        "containerPort": 8000,
+        "name": "http",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 8081,
+        "name": "compat",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "httpGet": {
+        "path": "/api/v1/ready",
+        "port": "http",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "resources": {
+       "limits": {
+        "cpu": "2",
+        "memory": "4Gi"
+       },
+       "requests": {
+        "cpu": "100m",
+        "memory": "256Mi"
+       }
+      },
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "image": "postgres:16-alpine",
+      "name": "wait-for-db",
+      "resources": {
+       "limits": {
+        "cpu": "100m",
+        "memory": "64Mi"
+       },
+       "requests": {
+        "cpu": "10m",
+        "memory": "16Mi"
+       }
+      },
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     },
+     {
+      "image": "localhost:32000/security-posture-api:b727589-1791000393",
+      "name": "migrate",
+      "resources": {
+       "limits": {
+        "cpu": "2",
+        "memory": "4Gi"
+       },
+       "requests": {
+        "cpu": "100m",
+        "memory": "256Mi"
+       }
+      },
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     }
+    ],
+    "securityContext": {
+     "fsGroup": 10001,
+     "runAsGroup": 10001,
+     "runAsNonRoot": true,
+     "runAsUser": 10001,
+     "seccompProfile": {
+      "type": "RuntimeDefault"
+     }
+    },
+    "serviceAccountName": "security-posture",
+    "volumes": [
+     {
+      "name": "tmp",
+      "emptyDir": {}
+     },
+     {
+      "name": "reports",
+      "persistentVolumeClaim": {}
+     },
+     {
+      "name": "kube-api-access-nq99k",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "api",
+      "image": "localhost:32000/security-posture-api:b727589-1791000393",
+      "imageID": "localhost:32000/security-posture-api@sha256:87f90d4d69affc21ed4f0db507b6ba18c14156d345e31eead14c96a40af41fe1",
+      "ready": true
+     }
+    ],
+    "initContainerStatuses": [
+     {
+      "name": "wait-for-db",
+      "image": "docker.io/library/postgres:16-alpine",
+      "imageID": "docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685",
+      "ready": true
+     },
+     {
+      "name": "migrate",
+      "image": "localhost:32000/security-posture-api:b727589-1791000393",
+      "imageID": "localhost:32000/security-posture-api@sha256:87f90d4d69affc21ed4f0db507b6ba18c14156d345e31eead14c96a40af41fe1",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "user-a-nb",
+    "namespace": "jupyter",
+    "uid": "00000000-0000-4000-8000-000000000007",
+    "labels": {
+     "app": "spike-notebook",
+     "example.org/owner": "user-a"
+    },
+    "annotations": {
+     "fixture.posture.test/case": "no ownerReferences (bare pod)"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "ghcr.io/dask/dask:2024.5.0-py3.12",
+      "name": "nb",
+      "resources": {},
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       }
+      }
+     }
+    ],
+    "securityContext": {
+     "runAsNonRoot": true,
+     "runAsUser": 1000,
+     "seccompProfile": {
+      "type": "RuntimeDefault"
+     }
+    },
+    "serviceAccountName": "default",
+    "volumes": [
+     {
+      "name": "kube-api-access-4sxsh",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "nb",
+      "image": "ghcr.io/dask/dask:2024.5.0-py3.12",
+      "imageID": "ghcr.io/dask/dask@sha256:b5376e0d9dec20e481d0e39c18127ce67e82dd5306aa9709fbb7b8df6b7d5174",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "keycloak-realm-backup-29849870-vzdm4",
+    "namespace": "keycloak",
+    "uid": "00000000-0000-4000-8000-000000000008",
+    "labels": {
+     "app.kubernetes.io/part-of": "lab-backups",
+     "batch.kubernetes.io/job-name": "keycloak-realm-backup-29849870",
+     "job-name": "keycloak-realm-backup-29849870"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "name": "keycloak-realm-backup-29849870",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000009"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "Job->CronJob"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "quay.io/keycloak/keycloak:26.6.4",
+      "name": "backup",
+      "resources": {},
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       }
+      }
+     }
+    ],
+    "securityContext": {
+     "seccompProfile": {
+      "type": "RuntimeDefault"
+     }
+    },
+    "serviceAccountName": "default",
+    "volumes": [
+     {
+      "name": "backups",
+      "persistentVolumeClaim": {}
+     },
+     {
+      "name": "kube-api-access-7v9sj",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Succeeded",
+    "containerStatuses": [
+     {
+      "name": "backup",
+      "image": "quay.io/keycloak/keycloak:26.6.4",
+      "imageID": "quay.io/keycloak/keycloak@sha256:0aae0de7fca85525f727d3354df17896092de8bb26ae4c12d89c77e5df8cbce4",
+      "ready": false
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "lgtm-pack-loki-0",
+    "namespace": "monitoring",
+    "uid": "00000000-0000-4000-8000-000000000010",
+    "labels": {
+     "app.kubernetes.io/component": "single-binary",
+     "app.kubernetes.io/instance": "lgtm-pack",
+     "app.kubernetes.io/name": "loki",
+     "app.kubernetes.io/part-of": "memberlist",
+     "apps.kubernetes.io/pod-index": "0"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "name": "lgtm-pack-loki",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000011"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "StatefulSet"
+    }
+   },
+   "spec": {
+    "automountServiceAccountToken": true,
+    "containers": [
+     {
+      "image": "docker.io/grafana/loki:3.6.5",
+      "name": "loki",
+      "ports": [
+       {
+        "containerPort": 3100,
+        "name": "http-metrics",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 9095,
+        "name": "grpc",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 7946,
+        "name": "http-memberlist",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "httpGet": {
+        "path": "/ready",
+        "port": "http-metrics",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "resources": {},
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     },
+     {
+      "image": "docker.io/kiwigrid/k8s-sidecar:1.30.9",
+      "name": "loki-sc-rules",
+      "resources": {},
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     }
+    ],
+    "securityContext": {
+     "fsGroup": 10001,
+     "fsGroupChangePolicy": "OnRootMismatch",
+     "runAsGroup": 10001,
+     "runAsNonRoot": true,
+     "runAsUser": 10001
+    },
+    "serviceAccountName": "lgtm-pack-loki",
+    "volumes": [
+     {
+      "name": "storage",
+      "persistentVolumeClaim": {}
+     },
+     {
+      "name": "tmp",
+      "emptyDir": {}
+     },
+     {
+      "name": "config",
+      "configMap": {}
+     },
+     {
+      "name": "runtime-config",
+      "configMap": {}
+     },
+     {
+      "name": "sc-rules-volume",
+      "emptyDir": {}
+     },
+     {
+      "name": "kube-api-access-f5lll",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "loki",
+      "image": "docker.io/grafana/loki:3.6.5",
+      "imageID": "docker.io/grafana/loki@sha256:847c287ada0e12603910589f42038c5cdaaad04e248bd1dc6c6e0920a235f427",
+      "ready": true
+     },
+     {
+      "name": "loki-sc-rules",
+      "image": "docker.io/kiwigrid/k8s-sidecar:1.30.9",
+      "imageID": "docker.io/kiwigrid/k8s-sidecar@sha256:8c06e1ba643a4625de14b2db65c356f5db6b1482a25fce4754380a2936207338",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "artifact-keeper-scanner-adapter-65c6456d5f-4ccmw",
+    "namespace": "artifact-keeper",
+    "uid": "00000000-0000-4000-8000-000000000012",
+    "labels": {
+     "app.kubernetes.io/component": "scanner-adapter",
+     "app.kubernetes.io/instance": "artifact-keeper",
+     "app.kubernetes.io/name": "artifact-keeper",
+     "pod-template-hash": "65c6456d5f"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "name": "artifact-keeper-scanner-adapter-65c6456d5f",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000013"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "Failed phase (not running)"
+    }
+   },
+   "spec": {
+    "automountServiceAccountToken": false,
+    "containers": [
+     {
+      "image": "ghcr.io/artifact-keeper/artifact-keeper-scanner-adapter:1",
+      "livenessProbe": {
+       "periodSeconds": 30,
+       "tcpSocket": {
+        "port": 8090
+       }
+      },
+      "name": "scanner-adapter",
+      "ports": [
+       {
+        "containerPort": 8090,
+        "name": "http",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "periodSeconds": 10,
+       "tcpSocket": {
+        "port": 8090
+       }
+      },
+      "resources": {
+       "limits": {
+        "cpu": "1",
+        "ephemeral-storage": "2Gi",
+        "memory": "1Gi"
+       },
+       "requests": {
+        "cpu": "100m",
+        "ephemeral-storage": "128Mi",
+        "memory": "128Mi"
+       }
+      },
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     }
+    ],
+    "securityContext": {
+     "fsGroup": 10000,
+     "runAsNonRoot": true,
+     "runAsUser": 10000
+    },
+    "serviceAccountName": "default",
+    "volumes": [
+     {
+      "name": "cache",
+      "emptyDir": {}
+     },
+     {
+      "name": "tmp",
+      "emptyDir": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Failed",
+    "containerStatuses": [
+     {
+      "name": "scanner-adapter",
+      "image": "ghcr.io/artifact-keeper/artifact-keeper-scanner-adapter:1",
+      "imageID": "ghcr.io/artifact-keeper/artifact-keeper-scanner-adapter@sha256:8b9d82d0eb0d5b1387f76b84ed2dcfff37ea9502e4d16dec580224fad5cbb492",
+      "ready": false
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "checkmaite-nebari-checkmaite-pack-ui-5986bc89d-5pbk5",
+    "namespace": "checkmaite",
+    "uid": "00000000-0000-4000-8000-000000000014",
+    "labels": {
+     "app.kubernetes.io/component": "ui",
+     "app.kubernetes.io/instance": "checkmaite",
+     "app.kubernetes.io/name": "nebari-checkmaite-pack",
+     "pod-template-hash": "5986bc89d"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "name": "checkmaite-nebari-checkmaite-pack-ui-5986bc89d",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000015"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "no securityContext at pod or container level"
+    }
+   },
+   "spec": {
+    "automountServiceAccountToken": false,
+    "containers": [
+     {
+      "image": "localhost:32000/checkmaite-ui:latest",
+      "name": "ui",
+      "ports": [
+       {
+        "containerPort": 80,
+        "name": "http",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "httpGet": {
+        "path": "/",
+        "port": "http",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "resources": {
+       "limits": {
+        "cpu": "500m",
+        "memory": "256Mi"
+       },
+       "requests": {
+        "cpu": "50m",
+        "memory": "64Mi"
+       }
+      }
+     }
+    ],
+    "securityContext": {},
+    "serviceAccountName": "checkmaite-nebari-checkmaite-pack",
+    "volumes": [
+     {
+      "name": "ui-config",
+      "configMap": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "ui",
+      "image": "localhost:32000/checkmaite-ui:latest",
+      "imageID": "localhost:32000/checkmaite-ui@sha256:231a89a23d608451d13bbaefe10be027de53192d0fe6e3dd5452e51831760b25",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "speaker-dcvsh",
+    "namespace": "metallb-system",
+    "uid": "00000000-0000-4000-8000-000000000016",
+    "labels": {
+     "app": "metallb",
+     "component": "speaker",
+     "pod-template-generation": "1"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "DaemonSet",
+      "name": "speaker",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000017"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "DaemonSet, hostNetwork, NET_RAW added"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "quay.io/metallb/speaker:v0.15.2",
+      "livenessProbe": {
+       "httpGet": {
+        "path": "/metrics",
+        "port": "monitoring",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "name": "speaker",
+      "ports": [
+       {
+        "containerPort": 7472,
+        "hostPort": 7472,
+        "name": "monitoring",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 7946,
+        "hostPort": 7946,
+        "name": "memberlist-tcp",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 7946,
+        "hostPort": 7946,
+        "name": "memberlist-udp",
+        "protocol": "UDP"
+       }
+      ],
+      "readinessProbe": {
+       "httpGet": {
+        "path": "/metrics",
+        "port": "monitoring",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "resources": {},
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "add": [
+         "NET_RAW"
+        ],
+        "drop": [
+         "ALL"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     }
+    ],
+    "hostNetwork": true,
+    "nodeSelector": {
+     "kubernetes.io/os": "linux"
+    },
+    "securityContext": {},
+    "serviceAccountName": "speaker",
+    "volumes": [
+     {
+      "name": "memberlist",
+      "secret": {}
+     },
+     {
+      "name": "metallb-excludel2",
+      "configMap": {}
+     },
+     {
+      "name": "kube-api-access-7h96n",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "speaker",
+      "image": "quay.io/metallb/speaker:v0.15.2",
+      "imageID": "quay.io/metallb/speaker@sha256:260c9406f957c0830d4e6cd2e9ac8c05e51ac959dd2462c4c2269ac43076665a",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "coredns-77f6b8c9d4-abcde",
+    "namespace": "dns-test",
+    "uid": "00000000-0000-4000-8000-000000000018",
+    "labels": {
+     "k8s-app": "kube-dns",
+     "pod-template-hash": "77f6b8c9d4"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "name": "coredns-77f6b8c9d4",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000019"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "ReplicaSet not visible: pod-template-hash heuristic"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "coredns/coredns:1.13.1",
+      "livenessProbe": {
+       "httpGet": {
+        "path": "/health",
+        "port": 8080,
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "name": "coredns",
+      "ports": [
+       {
+        "containerPort": 53,
+        "name": "dns",
+        "protocol": "UDP"
+       },
+       {
+        "containerPort": 53,
+        "name": "dns-tcp",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 9153,
+        "name": "metrics",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "httpGet": {
+        "path": "/ready",
+        "port": 8181,
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "resources": {
+       "limits": {
+        "memory": "170Mi"
+       },
+       "requests": {
+        "cpu": "100m",
+        "memory": "70Mi"
+       }
+      },
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "add": [
+         "NET_BIND_SERVICE"
+        ],
+        "drop": [
+         "all"
+        ]
+       },
+       "readOnlyRootFilesystem": true
+      }
+     }
+    ],
+    "securityContext": {},
+    "serviceAccountName": "coredns",
+    "volumes": [
+     {
+      "name": "config-volume",
+      "configMap": {}
+     },
+     {
+      "name": "kube-api-access-6xzvg",
+      "projected": {}
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "coredns",
+      "image": "docker.io/coredns/coredns:1.13.1",
+      "imageID": "docker.io/coredns/coredns@sha256:9b9128672209474da07c91439bf15ed704ae05ad918dd6454e5b6ae14e35fee6",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "hub-55b55d46b6-5p64v",
+    "namespace": "jupyter",
+    "uid": "00000000-0000-4000-8000-000000000020",
+    "labels": {
+     "app": "jupyterhub",
+     "app.kubernetes.io/component": "hub",
+     "app.kubernetes.io/instance": "data-science-pack",
+     "app.kubernetes.io/name": "jupyterhub",
+     "component": "hub",
+     "hub.jupyter.org/network-access-proxy-api": "true",
+     "hub.jupyter.org/network-access-proxy-http": "true",
+     "hub.jupyter.org/network-access-singleuser": "true",
+     "pod-template-hash": "55b55d46b6",
+     "release": "data-science-pack"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "name": "hub-55b55d46b6",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000021"
+     }
+    ],
+    "annotations": {
+     "fixture.posture.test/case": "crafted: native sidecar (init restartPolicy Always) + ephemeral debug container"
+    }
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "quay.io/nebari/nebari-data-science-pack-jupyterhub:sha-16c1922",
+      "livenessProbe": {
+       "httpGet": {
+        "path": "/hub/health",
+        "port": "http",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 10
+      },
+      "name": "hub",
+      "ports": [
+       {
+        "containerPort": 8081,
+        "name": "http",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "httpGet": {
+        "path": "/hub/health",
+        "port": "http",
+        "scheme": "HTTP"
+       },
+       "periodSeconds": 2
+      },
+      "resources": {},
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "runAsGroup": 1000,
+       "runAsUser": 1000
+      }
+     }
+    ],
+    "initContainers": [
+     {
+      "image": "quay.io/nebari/nebari-data-science-pack-jupyterhub:sha-16c1922",
+      "name": "merge-ca-bundle",
+      "resources": {},
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "runAsGroup": 1000,
+       "runAsUser": 1000
+      }
+     },
+     {
+      "name": "log-shipper",
+      "image": "docker.io/fluent/fluent-bit:3.2.4",
+      "restartPolicy": "Always",
+      "securityContext": {
+       "runAsNonRoot": true,
+       "allowPrivilegeEscalation": false,
+       "readOnlyRootFilesystem": true,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       }
+      },
+      "resources": {
+       "limits": {
+        "cpu": "100m",
+        "memory": "64Mi"
+       },
+       "requests": {
+        "cpu": "10m",
+        "memory": "32Mi"
+       }
+      }
+     }
+    ],
+    "securityContext": {
+     "fsGroup": 1000,
+     "runAsNonRoot": true,
+     "seccompProfile": {
+      "type": "RuntimeDefault"
+     }
+    },
+    "serviceAccountName": "hub",
+    "volumes": [
+     {
+      "name": "config",
+      "configMap": {}
+     },
+     {
+      "name": "secret",
+      "secret": {}
+     },
+     {
+      "name": "custom-config",
+      "configMap": {}
+     },
+     {
+      "name": "oauth-client",
+      "secret": {}
+     },
+     {
+      "name": "org-ca",
+      "configMap": {}
+     },
+     {
+      "name": "ca-merged",
+      "emptyDir": {}
+     },
+     {
+      "name": "pvc",
+      "persistentVolumeClaim": {}
+     },
+     {
+      "name": "kube-api-access-j87rw",
+      "projected": {}
+     }
+    ],
+    "ephemeralContainers": [
+     {
+      "name": "debugger-x7k2p",
+      "image": "docker.io/library/busybox:1.37",
+      "securityContext": {
+       "privileged": true
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "hub",
+      "image": "quay.io/nebari/nebari-data-science-pack-jupyterhub:sha-16c1922",
+      "imageID": "quay.io/nebari/nebari-data-science-pack-jupyterhub@sha256:1719ae0890bd060ba4c6e345ab9833996144722b7f5d36b0290b4e4790821cbc",
+      "ready": true
+     }
+    ],
+    "initContainerStatuses": [
+     {
+      "name": "merge-ca-bundle",
+      "image": "quay.io/nebari/nebari-data-science-pack-jupyterhub:sha-16c1922",
+      "imageID": "quay.io/nebari/nebari-data-science-pack-jupyterhub@sha256:1719ae0890bd060ba4c6e345ab9833996144722b7f5d36b0290b4e4790821cbc",
+      "ready": true
+     },
+     {
+      "name": "log-shipper",
+      "image": "docker.io/fluent/fluent-bit:3.2.4",
+      "imageID": "docker.io/fluent/fluent-bit@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "ready": true
+     }
+    ],
+    "ephemeralContainerStatuses": [
+     {
+      "name": "debugger-x7k2p",
+      "image": "docker.io/library/busybox:1.37",
+      "imageID": "docker.io/library/busybox@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "ready": false
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "win-host-agent-q8x2z",
+    "namespace": "win-apps",
+    "uid": "00000000-0000-4000-8000-000000000022",
+    "labels": {
+     "app": "win-host"
+    },
+    "annotations": {
+     "fixture.posture.test/case": "crafted: Windows hostProcess DaemonSet pod (privileged equivalent)"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "DaemonSet",
+      "name": "win-host-agent",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000023"
+     }
+    ]
+   },
+   "spec": {
+    "os": {
+     "name": "windows"
+    },
+    "nodeSelector": {
+     "kubernetes.io/os": "windows"
+    },
+    "securityContext": {
+     "windowsOptions": {
+      "runAsUserName": "NT AUTHORITY\\SYSTEM",
+      "hostProcess": true
+     }
+    },
+    "hostNetwork": true,
+    "serviceAccountName": "win-agent",
+    "automountServiceAccountToken": false,
+    "containers": [
+     {
+      "name": "app",
+      "image": "mcr.microsoft.com/windows/nanoserver:ltsc2022",
+      "resources": {
+       "limits": {
+        "cpu": "500m",
+        "memory": "512Mi"
+       },
+       "requests": {
+        "cpu": "100m",
+        "memory": "256Mi"
+       }
+      },
+      "livenessProbe": {
+       "tcpSocket": {
+        "port": 8080
+       }
+      },
+      "readinessProbe": {
+       "tcpSocket": {
+        "port": 8080
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "app",
+      "image": "mcr.microsoft.com/windows/nanoserver:ltsc2022",
+      "imageID": "mcr.microsoft.com/windows/nanoserver@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ready": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "name": "win-web-6d9f7c5b8-k2m4n",
+    "namespace": "win-apps",
+    "uid": "00000000-0000-4000-8000-000000000024",
+    "labels": {
+     "app": "win-web"
+    },
+    "annotations": {
+     "fixture.posture.test/case": "crafted: Windows pod, spec.os.name windows, no Linux securityContext"
+    },
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "ReplicaSet",
+      "name": "win-web-6d9f7c5b8",
+      "controller": true,
+      "uid": "00000000-0000-4000-8000-000000000025"
+     }
+    ]
+   },
+   "spec": {
+    "os": {
+     "name": "windows"
+    },
+    "nodeSelector": {
+     "kubernetes.io/os": "windows"
+    },
+    "securityContext": {
+     "windowsOptions": {
+      "runAsUserName": "ContainerUser"
+     }
+    },
+    "hostNetwork": false,
+    "serviceAccountName": "win-agent",
+    "automountServiceAccountToken": false,
+    "containers": [
+     {
+      "name": "app",
+      "image": "mcr.microsoft.com/windows/nanoserver:ltsc2022",
+      "resources": {
+       "limits": {
+        "cpu": "500m",
+        "memory": "512Mi"
+       },
+       "requests": {
+        "cpu": "100m",
+        "memory": "256Mi"
+       }
+      },
+      "livenessProbe": {
+       "tcpSocket": {
+        "port": 8080
+       }
+      },
+      "readinessProbe": {
+       "tcpSocket": {
+        "port": 8080
+       }
+      }
+     }
+    ]
+   },
+   "status": {
+    "phase": "Running",
+    "containerStatuses": [
+     {
+      "name": "app",
+      "image": "mcr.microsoft.com/windows/nanoserver:ltsc2022",
+      "imageID": "mcr.microsoft.com/windows/nanoserver@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ready": true
+     }
+    ]
+   }
+  }
+ ],
+ "replicasets": [
+  {
+   "apiVersion": "apps/v1",
+   "kind": "ReplicaSet",
+   "metadata": {
+    "name": "artifact-keeper-scanner-adapter-65c6456d5f",
+    "namespace": "artifact-keeper",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "name": "artifact-keeper-scanner-adapter",
+      "controller": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "ReplicaSet",
+   "metadata": {
+    "name": "checkmaite-nebari-checkmaite-pack-ui-5986bc89d",
+    "namespace": "checkmaite",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "name": "checkmaite-nebari-checkmaite-pack-ui",
+      "controller": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "ReplicaSet",
+   "metadata": {
+    "name": "hub-55b55d46b6",
+    "namespace": "jupyter",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "name": "hub",
+      "controller": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "ReplicaSet",
+   "metadata": {
+    "name": "coredns-869c66859c",
+    "namespace": "kube-system",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "name": "coredns",
+      "controller": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "ReplicaSet",
+   "metadata": {
+    "name": "security-posture-api-f6cf58b56",
+    "namespace": "security-posture",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "name": "security-posture-api",
+      "controller": true
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "ReplicaSet",
+   "metadata": {
+    "name": "win-web-6d9f7c5b8",
+    "namespace": "win-apps",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "name": "win-web",
+      "controller": true
+     }
+    ]
+   }
+  }
+ ],
+ "jobs": [
+  {
+   "apiVersion": "batch/v1",
+   "kind": "Job",
+   "metadata": {
+    "name": "keycloak-realm-backup-29849870",
+    "namespace": "keycloak",
+    "ownerReferences": [
+     {
+      "apiVersion": "batch/v1",
+      "kind": "CronJob",
+      "name": "keycloak-realm-backup",
+      "controller": true
+     }
+    ]
+   }
+  }
+ ],
+ "nebariapps": [
+  {
+   "apiVersion": "reconcilers.nebari.dev/v1",
+   "kind": "NebariApp",
+   "metadata": {
+    "name": "data-science-pack-nebari-data-science-pack",
+    "namespace": "jupyter",
+    "labels": {
+     "app.kubernetes.io/instance": "data-science-pack"
+    }
+   },
+   "spec": {
+    "hostname": "hub.example.org",
+    "landingPage": {
+     "displayName": "JupyterHub"
+    }
+   }
+  },
+  {
+   "apiVersion": "reconcilers.nebari.dev/v1",
+   "kind": "NebariApp",
+   "metadata": {
+    "name": "lgtm-pack-nebari-lgtm-pack",
+    "namespace": "monitoring",
+    "labels": {
+     "app.kubernetes.io/instance": "lgtm-pack"
+    }
+   },
+   "spec": {
+    "hostname": "grafana.example.org",
+    "landingPage": {
+     "displayName": "Grafana"
+    }
+   }
+  },
+  {
+   "apiVersion": "reconcilers.nebari.dev/v1",
+   "kind": "NebariApp",
+   "metadata": {
+    "name": "security-posture",
+    "namespace": "security-posture",
+    "labels": {
+     "app.kubernetes.io/instance": "security-posture"
+    }
+   },
+   "spec": {
+    "hostname": "security.example.org",
+    "landingPage": {
+     "displayName": "Security Posture"
+    }
+   }
+  }
+ ]
+}

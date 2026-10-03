@@ -23,9 +23,10 @@ class ContainerRecord:
     pod_uid: str | None = None
     pod_labels: dict[str, str] = field(default_factory=dict)
     # snapshot used by posture checks:
-    #   container: securityContext, resources, livenessProbe, readinessProbe, restartPolicy
-    #   pod: hostPID/hostIPC/hostNetwork, hostPathVolumes, securityContext,
-    #        automountServiceAccountToken, serviceAccountName
+    #   container: securityContext, resources, livenessProbe, readinessProbe, restartPolicy,
+    #              hostProcess (effective Windows windowsOptions.hostProcess)
+    #   pod: os ("windows"/"linux"/None), hostPID/hostIPC/hostNetwork, hostPathVolumes,
+    #        securityContext, automountServiceAccountToken, serviceAccountName
     security: dict[str, Any] = field(default_factory=dict)
     image_key: str | None = None  # filled by the worker (images.identify_image)
 

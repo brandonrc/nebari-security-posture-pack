@@ -134,12 +134,36 @@ def _long_running(c: ContainerRecord) -> bool:
     return c.container_type == "init" and (c.security.get("container") or {}).get("restartPolicy") == "Always"
 
 
+def _windows(c: ContainerRecord) -> bool:
+    return (c.security.get("pod") or {}).get("os") == "windows"
+
+
+def linux_only(fn: Callable[[ContainerRecord], Outcome]) -> Callable[[ContainerRecord], Outcome]:
+    """Fields the kubelet ignores (or the API rejects) on Windows pods: not applicable there."""
+    def wrapped(c: ContainerRecord) -> Outcome:
+        return None if _windows(c) else fn(c)
+    wrapped.__name__ = fn.__name__
+    return wrapped
+
+
 def check_privileged(c: ContainerRecord) -> Outcome:
+    if (c.security.get("container") or {}).get("hostProcess") is True:
+        return True, "windowsOptions.hostProcess: true (runs as a host process on the node)"
     return (_sc(c).get("privileged") is True, "privileged: true" if _sc(c).get("privileged") else "not privileged")
 
 
 def check_run_as_root(c: ContainerRecord) -> Outcome:
     sc, psc = _sc(c), _psc(c)
+    if _windows(c):
+        # runAsUser/runAsGroup do not exist on Windows; only an explicit ContainerAdministrator
+        # (or runAsNonRoot) says anything about the user.
+        if (sc.get("runAsNonRoot") if sc.get("runAsNonRoot") is not None else psc.get("runAsNonRoot")) is True:
+            return False, "runAsNonRoot: true"
+        user = ((sc.get("windowsOptions") or {}).get("runAsUserName")
+                or (psc.get("windowsOptions") or {}).get("runAsUserName"))
+        if user is None:
+            return None
+        return (user.lower() == "containeradministrator", f"windowsOptions.runAsUserName: {user}")
     non_root = sc.get("runAsNonRoot") if sc.get("runAsNonRoot") is not None else psc.get("runAsNonRoot")
     user = sc.get("runAsUser") if sc.get("runAsUser") is not None else psc.get("runAsUser")
     if non_root is True:
@@ -249,16 +273,16 @@ def check_netpol(c: ContainerRecord, inv: InventorySnapshot | None = None) -> Ou
 CONTAINER_CHECKS: dict[str, Callable[[ContainerRecord], Outcome]] = {
     "privileged": check_privileged,
     "run-as-root": check_run_as_root,
-    "privilege-escalation": check_privilege_escalation,
-    "added-capabilities": check_added_capabilities,
-    "capabilities-not-dropped": check_caps_dropped,
-    "writable-rootfs": check_writable_rootfs,
+    "privilege-escalation": linux_only(check_privilege_escalation),
+    "added-capabilities": linux_only(check_added_capabilities),
+    "capabilities-not-dropped": linux_only(check_caps_dropped),
+    "writable-rootfs": linux_only(check_writable_rootfs),
     "no-resource-limits": check_limits,
     "no-resource-requests": check_requests,
     "mutable-tag": check_mutable_tag,
     "no-liveness-probe": check_liveness,
     "no-readiness-probe": check_readiness,
-    "seccomp-unconfined": check_seccomp,
+    "seccomp-unconfined": linux_only(check_seccomp),
 }
 POD_CHECKS: dict[str, Callable[[ContainerRecord, InventorySnapshot | None], Outcome]] = {
     "host-namespaces": check_host_namespaces,

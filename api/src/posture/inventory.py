@@ -88,6 +88,21 @@ def map_pack(ns: str, labels: dict[str, str], apps: list[NebariAppInfo]) -> str 
     return sorted(in_ns, key=lambda a: (a.display_name is None, a.name))[0].pack
 
 
+def pod_os(pod_spec: dict[str, Any]) -> str | None:
+    """`spec.os.name` (K8s 1.25+), else the `kubernetes.io/os` nodeSelector; None = unknown (Linux)."""
+    name = ((pod_spec.get("os") or {}).get("name")) or (pod_spec.get("nodeSelector") or {}).get("kubernetes.io/os")
+    return str(name).lower() if name else None
+
+
+def host_process(pod_spec: dict[str, Any], c: dict[str, Any]) -> bool:
+    """Effective `windowsOptions.hostProcess` (container overrides pod): the Windows equivalent of
+    privileged, the container runs directly on the node as a host process."""
+    cv = ((c.get("securityContext") or {}).get("windowsOptions") or {}).get("hostProcess")
+    if cv is not None:
+        return cv is True
+    return (((pod_spec.get("securityContext") or {}).get("windowsOptions") or {}).get("hostProcess")) is True
+
+
 def _security_snapshot(pod_spec: dict[str, Any], c: dict[str, Any]) -> dict[str, Any]:
     return {
         "container": {
@@ -96,8 +111,10 @@ def _security_snapshot(pod_spec: dict[str, Any], c: dict[str, Any]) -> dict[str,
             "livenessProbe": bool(c.get("livenessProbe")),
             "readinessProbe": bool(c.get("readinessProbe")),
             "restartPolicy": c.get("restartPolicy"),
+            "hostProcess": host_process(pod_spec, c),
         },
         "pod": {
+            "os": pod_os(pod_spec),
             "hostPID": bool(pod_spec.get("hostPID")),
             "hostIPC": bool(pod_spec.get("hostIPC")),
             "hostNetwork": bool(pod_spec.get("hostNetwork")),
