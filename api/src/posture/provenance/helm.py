@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import gzip
 import json
+import os
+import zlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +29,26 @@ log = get_logger(__name__)
 
 GZIP_MAGIC = b"\x1f\x8b\x08"
 HELM_LABEL_SELECTOR = "owner=helm"
+# security review M1: anyone who can create an `owner=helm` Secret could plant a gzip bomb.
+# Decompressed release payloads above this are refused (PROVENANCE_HELM_MAX_RELEASE_BYTES).
+MAX_RELEASE_BYTES = int(os.environ.get("PROVENANCE_HELM_MAX_RELEASE_BYTES") or 16 * 1024 * 1024)
+MAX_SECRET_PAYLOAD_BYTES = 2 * 1024 * 1024  # Kubernetes caps Secrets at 1 MiB; base64 adds a third
+MAX_INDEX_BYTES = 64 * 1024 * 1024  # chart repo index.yaml
+
+
+def gunzip_capped(raw: bytes, limit: int | None = None) -> bytes:
+    """gzip.decompress with an output cap; raises HelmDecodeError past it."""
+    limit = MAX_RELEASE_BYTES if limit is None else limit
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = d.decompress(raw, limit + 1)
+    except zlib.error as e:
+        raise HelmDecodeError(f"invalid gzip: {e}") from e
+    if len(out) > limit or d.unconsumed_tail:
+        raise HelmDecodeError(f"release payload larger than {limit} bytes after decompression")
+    if not d.eof:
+        raise HelmDecodeError("invalid gzip: truncated stream")
+    return out
 
 
 @dataclass
@@ -60,15 +81,16 @@ def decode_release_payload(data: str | bytes) -> dict[str, Any]:
     """Decode the helm payload (the value AFTER Kubernetes' own base64 is removed)."""
     if isinstance(data, str):
         data = data.encode()
+    if len(data) > MAX_SECRET_PAYLOAD_BYTES:
+        raise HelmDecodeError("release payload too large")
     try:
         raw = base64.b64decode(data, validate=False)
     except (ValueError, TypeError) as e:
         raise HelmDecodeError(f"invalid base64: {e}") from e
     if raw[:3] == GZIP_MAGIC:
-        try:
-            raw = gzip.decompress(raw)
-        except (OSError, EOFError) as e:
-            raise HelmDecodeError(f"invalid gzip: {e}") from e
+        raw = gunzip_capped(raw)
+    elif len(raw) > MAX_RELEASE_BYTES:
+        raise HelmDecodeError(f"release payload larger than {MAX_RELEASE_BYTES} bytes")
     try:
         obj = json.loads(raw)
     except ValueError as e:
@@ -83,6 +105,8 @@ def decode_secret(secret: dict[str, Any]) -> dict[str, Any]:
     payload = ((secret.get("data") or {}).get("release")) or ""
     if not payload:
         raise HelmDecodeError("secret has no data.release")
+    if len(payload) > 2 * MAX_SECRET_PAYLOAD_BYTES:
+        raise HelmDecodeError("secret data.release too large")
     try:
         inner = base64.b64decode(payload)
     except (ValueError, TypeError) as e:
@@ -178,9 +202,18 @@ class ChartRepos:
             return self._index[url]
         versions: dict[str, list[str]] = {}
         try:
-            resp = await http.get(url.rstrip("/") + "/index.yaml")
-            if resp.status_code == 200:
-                data = yaml.safe_load(resp.text) or {}
+            body = b""
+            async with http.stream("GET", url.rstrip("/") + "/index.yaml") as resp:
+                status = resp.status_code
+                if status == 200:
+                    buf = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        buf.extend(chunk)
+                        if len(buf) > MAX_INDEX_BYTES:
+                            raise httpx.HTTPError(f"index.yaml larger than {MAX_INDEX_BYTES} bytes")
+                    body = bytes(buf)
+            if status == 200:
+                data = yaml.safe_load(body.decode("utf-8", "replace")) or {}
                 for name, entries in (data.get("entries") or {}).items():
                     versions[name] = [str(e.get("version")) for e in entries or [] if e.get("version")]
         except (httpx.HTTPError, yaml.YAMLError) as e:

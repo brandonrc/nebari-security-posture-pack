@@ -137,3 +137,42 @@ async def test_discover_uses_label_selector(monkeypatch):
     monkeypatch.setattr(helm, "list_helm_secrets_sync", fake_list)
     rels, errors = await helm.discover(["kube-system"])
     assert seen and len(rels) == 1 and helm.HELM_LABEL_SELECTOR == "owner=helm"
+
+
+# ---------------------------------------------------------------- security review M1 (gzip bomb)
+def test_gzip_bomb_release_is_refused():
+    import time
+
+    from posture.provenance.helm import MAX_RELEASE_BYTES, HelmDecodeError, decode_release_payload
+
+    bomb = gzip.compress(b"{" + b" " * (MAX_RELEASE_BYTES + 1024) + b"}", compresslevel=9)
+    assert len(bomb) < 100_000
+    start = time.monotonic()
+    with pytest.raises(HelmDecodeError, match="larger than"):
+        decode_release_payload(base64.b64encode(bomb))
+    assert time.monotonic() - start < 2
+
+
+def test_gzip_cap_is_configurable_and_exact(monkeypatch):
+    from posture.provenance import helm as helm_mod
+
+    monkeypatch.setattr(helm_mod, "MAX_RELEASE_BYTES", 100)
+    ok = json.dumps({"name": "x" * 50}).encode()
+    assert helm_mod.decode_release_payload(base64.b64encode(gzip.compress(ok)))["name"] == "x" * 50
+    with pytest.raises(helm_mod.HelmDecodeError):
+        helm_mod.decode_release_payload(base64.b64encode(gzip.compress(json.dumps({"n": "x" * 200}).encode())))
+    with pytest.raises(helm_mod.HelmDecodeError):  # uncompressed payloads are capped too
+        helm_mod.decode_release_payload(base64.b64encode(json.dumps({"n": "x" * 200}).encode()))
+    with pytest.raises(helm_mod.HelmDecodeError, match="truncated"):
+        helm_mod.decode_release_payload(base64.b64encode(gzip.compress(ok)[:-8]))
+
+
+async def test_chart_index_size_cap(monkeypatch):
+    import httpx
+
+    from posture.provenance import helm as helm_mod
+
+    monkeypatch.setattr(helm_mod, "MAX_INDEX_BYTES", 1000)
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, content=b"entries: {}\n" + b"#" * 5000))
+    repos = helm_mod.ChartRepos(["https://charts.example.com"], transport=transport)
+    assert await repos.versions("x") == (None, None)
