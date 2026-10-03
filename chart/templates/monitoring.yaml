@@ -1,0 +1,149 @@
+{{/*
+  Prometheus Operator scraping (docs/OPERATIONS.md; monitoring.enabled):
+    ServiceMonitor <fullname>-api      api Service port `http` (:8000) /metrics
+    PodMonitor     <fullname>-workers  worker, worker-privileged, report-worker
+                                       container port `metrics` (:9000) /metrics
+    PrometheusRule <fullname>          the alert rules of docs/OPERATIONS.md
+                                       (monitoring.rules.enabled)
+  All three live in the release namespace and carry monitoring.labels, which
+  must match the Prometheus' serviceMonitorSelector / podMonitorSelector /
+  ruleSelector (kube-prometheus-stack: `release: <its release name>`); its
+  *NamespaceSelector must include the release namespace. The
+  NetworkPolicy (networkpolicy.yaml) admits monitoring.namespace to :8000 and
+  :9000. /metrics has no authentication.
+  The DB-backed gauges are reported by every process: the rules aggregate
+  them with max().
+*/}}
+{{- if .Values.monitoring.enabled }}
+{{- $m := .Values.monitoring }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "api") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  endpoints:
+    - port: http
+      path: /metrics
+      scheme: http
+      interval: {{ $m.interval }}
+      scrapeTimeout: {{ $m.scrapeTimeout }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "workers") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [{{ include "security-posture.name" . | quote }}]
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name | quote }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [worker, worker-privileged, report-worker]
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      scheme: http
+      interval: {{ $m.interval }}
+      scrapeTimeout: {{ $m.scrapeTimeout }}
+{{- if $m.rules.enabled }}
+{{- $runbook := $m.rules.runbookBaseUrl | default (printf "%s/blob/master/docs/OPERATIONS.md" (.Chart.Home | trimSuffix "/")) | trimSuffix "/" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "security-posture.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: security-posture
+      rules:
+        - alert: PostureScanStale
+          expr: |
+            time() - max(posture_last_successful_scan_timestamp_seconds) > 2 * max(posture_scan_interval_seconds)
+            or max(posture_last_successful_scan_timestamp_seconds) == 0
+          for: 30m
+          labels:
+            severity: warning
+            {{- with $m.rules.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: No successful security-posture scan for more than twice the scan interval
+            runbook_url: {{ printf "%s#stuck-scans-and-reports" $runbook | quote }}
+        - alert: PostureScannerErrorRate
+          expr: |
+            max by (scanner) (posture_scan_scanner_results{result="error"})
+              / clamp_min(max by (scanner) (posture_scan_scanner_results{result="ok"})
+                          + max by (scanner) (posture_scan_scanner_results{result="error"}), 1) > 0.10
+          for: 15m
+          labels:
+            severity: warning
+            {{- with $m.rules.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: {{ `"{{ $labels.scanner }} failed on more than 10% of the images of the latest scan"` }}
+            runbook_url: {{ printf "%s#clair-500--oom" $runbook | quote }}
+        - alert: PostureScannerDBStale
+          expr: max by (scanner) (posture_scanner_db_age_seconds) > 72 * 3600
+          for: 1h
+          labels:
+            severity: warning
+            {{- with $m.rules.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: {{ `"{{ $labels.scanner }} vulnerability database is older than 72 h"` }}
+            runbook_url: {{ printf "%s#grype-db-invalid--stale" $runbook | quote }}
+        - alert: PostureReportFailed
+          expr: increase(posture_reports_generated_total{status="failed"}[1h]) > 0 or max(posture_reports_failed_last_24h) > 0
+          labels:
+            severity: info
+            {{- with $m.rules.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: A compliance report failed to generate
+            runbook_url: {{ printf "%s#stuck-scans-and-reports" $runbook | quote }}
+        - alert: PostureQueueStuck
+          expr: max by (kind) (posture_queue_oldest_age_seconds) > 6 * 3600
+          for: 15m
+          labels:
+            severity: warning
+            {{- with $m.rules.labels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: {{ `"A {{ $labels.kind }} row has been queued or running for more than 6 h"` }}
+            runbook_url: {{ printf "%s#stuck-scans-and-reports" $runbook | quote }}
+{{- end }}
+{{- end }}

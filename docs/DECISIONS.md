@@ -365,19 +365,27 @@
     `compat_reports`; the compat routes serve the stored bytes.
   - **Metrics (M9):** `/metrics` on api :8000 (no auth; not proxied by the UI, NetworkPolicy only)
     and on the workers / report-worker :9000. Alert examples and the runbook: docs/OPERATIONS.md.
-  - **Needs chart (not yet in the chart as of 136e9a4):**
-    - Prometheus scraping: `ServiceMonitor` for the api Service port 8000 path `/metrics`, and a
-      `PodMonitor` for components `worker`, `worker-privileged`, `report-worker` port 9000 path
-      `/metrics` (values e.g. `metrics.serviceMonitor.enabled`, `metrics.podMonitor.enabled`,
-      `metrics.labels` for the Prometheus selector); optional `PrometheusRule` from
-      docs/OPERATIONS.md (`metrics.prometheusRule.enabled`).
-    - NetworkPolicy: ingress to api :8000 and to worker / worker-privileged / report-worker :9000
-      from the monitoring namespace(s) (`networkPolicy.allowedNamespaces` / a `metrics` peer), only
-      for `/metrics` scraping. Named container ports `metrics` (9000) on the workers.
-    - Worker liveness/readiness on `:9000/healthz` for scan worker, privileged worker and
-      report-worker (report-worker /healthz tolerates a running report up to
-      REPORT_TIMEOUT_SECONDS + lease).
-    - Optional env: `RAW_MAX_GZ_BYTES` (worker), `REPORT_LEASE_SECONDS`, `REPORT_MAX_ATTEMPTS`
-      (report-worker). Already wired: GRYPE_MAX_CONCURRENT, SCAN_MAX_IMAGE_GB, MIRROR_MODE,
-      IMAGE_CACHE_MAX_BYTES (quantities like `8Gi` are accepted), EVENT_SCANS_*,
-      REPORT_WORKER_EMBEDDED / ISOLATION / TIMEOUT, REPORTS_RETENTION_*, HISTORY_RETAIN_SCANS.
+  - **Chart (done after 136e9a4; was "needs chart"):** values `monitoring.*` (the
+    architecture note proposed `metrics.*`; one block for monitors, rule and network peer is
+    simpler):
+    - `monitoring.enabled` (default false, true on grace) renders a `ServiceMonitor` for the api
+      Service port `http` (:8000) `/metrics` and a `PodMonitor` for `worker`,
+      `worker-privileged`, `report-worker` on the named container port `metrics` (9000,
+      `/metrics`; the probes use the same port, renamed from `health`). Both in the release
+      namespace with `monitoring.labels` (grace: `release: kube-prom-stack`, whose Prometheus in
+      `observability` has `release`-label selectors and empty namespace selectors).
+    - `monitoring.rules.enabled`: `PrometheusRule` with the five alerts of docs/OPERATIONS.md,
+      `runbook_url` = `monitoring.rules.runbookBaseUrl` (default: Chart.yaml `home` +
+      `/blob/master/docs/OPERATIONS.md`) + anchor.
+    - NetworkPolicy: the api admits `monitoring.namespace` (optionally narrowed by
+      `monitoring.podSelector`) on :8000; a new `<fullname>-workers-ingress` policy selects
+      worker, worker-privileged and report-worker and admits only that peer on :9000, or nothing
+      when monitoring is off (they served unauthenticated `/metrics` to any pod before).
+    - Probes on `:9000/healthz` were already rendered for all three (shared worker template,
+      report-worker.yaml); unchanged apart from the port name.
+    - Optional env: `scanner.rawMaxGzBytes` -> `RAW_MAX_GZ_BYTES` (scan worker),
+      `reports.leaseSeconds` / `reports.maxAttempts` -> `REPORT_LEASE_SECONDS` /
+      `REPORT_MAX_ATTEMPTS` (report-worker, or the worker with the embedded reports stage); null =
+      application defaults (4Mi, 120, 2). Already wired: GRYPE_MAX_CONCURRENT, SCAN_MAX_IMAGE_GB,
+      MIRROR_MODE, IMAGE_CACHE_MAX_BYTES, EVENT_SCANS_*, REPORT_WORKER_EMBEDDED / ISOLATION /
+      TIMEOUT, REPORTS_RETENTION_*, HISTORY_RETAIN_SCANS.

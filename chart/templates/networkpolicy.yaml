@@ -1,6 +1,9 @@
 {{/*
   Ingress:
     api            <- ui, worker, worker-privileged          :8000
+                   <- monitoring.namespace (monitoring.enabled) :8000
+    worker, worker-privileged, report-worker
+                   <- monitoring.namespace (monitoring.enabled) :9000, else none
     postgres       <- api, workers, report-worker, clair (shared), migrate, backup :5432
     clair-postgres <- clair                                  :5432
     trivy          <- worker                                 :4954
@@ -31,6 +34,44 @@ spec:
       ports:
         - port: 8000
           protocol: TCP
+    {{- if .Values.monitoring.enabled }}
+    # Prometheus: /metrics (no auth; the ui nginx does not proxy it)
+    - from:
+        {{- include "security-posture.np.monitoringPeers" . | nindent 8 }}
+      ports:
+        - port: 8000
+          protocol: TCP
+    {{- end }}
+---
+# Workers and report-worker serve only :9000 (/healthz for the kubelet,
+# /metrics): monitoring.namespace when monitoring is enabled, nobody otherwise.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "workers") }}-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name | quote }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [worker, worker-privileged, report-worker]
+  policyTypes: [Ingress]
+  {{- if .Values.monitoring.enabled }}
+  ingress:
+    - from:
+        {{- include "security-posture.np.monitoringPeers" . | nindent 8 }}
+      ports:
+        - port: 9000
+          protocol: TCP
+  {{- else }}
+  ingress: []
+  {{- end }}
 {{- if .Values.postgresql.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

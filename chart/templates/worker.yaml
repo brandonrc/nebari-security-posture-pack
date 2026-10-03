@@ -19,7 +19,8 @@
   SA <fullname>-controls.
 
   Exactly one replica each, Recreate (RWO volumes; Postgres-as-queue).
-  Probes: the worker's health server on :9000/healthz (503 when the main loop
+  Probes: the worker's health server on :9000/healthz (port `metrics`, which
+  also serves /metrics for the PodMonitor in monitoring.yaml) (503 when the main loop
   has not beaten for max(600 s, 3 x scan timeout)).
 */}}
 {{- define "security-posture.worker.deployment" -}}
@@ -74,6 +75,7 @@ spec:
             {{- if $reportsHere }}
             - name: REPORT_TIMEOUT_SECONDS
               value: {{ .Values.reportWorker.timeoutSeconds | quote }}
+            {{- include "security-posture.reportLeaseEnv" . | nindent 12 }}
             {{- end }}
             {{- if $scan }}
             # grype runs in-process; DB on the PVC, refreshed by the worker's
@@ -96,6 +98,10 @@ spec:
               value: {{ .Values.scanner.mirror.mode | default (ternary "registry" "local" .Values.scanner.clair.enabled) | quote }}
             - name: IMAGE_CACHE_MAX_BYTES
               value: {{ .Values.scanner.mirror.imageCacheMaxBytes | quote }}
+            {{- with .Values.scanner.rawMaxGzBytes }}
+            - name: RAW_MAX_GZ_BYTES
+              value: {{ . | quote }}
+            {{- end }}
             - name: EVENT_SCANS_ENABLED
               value: {{ .Values.scanner.events.enabled | quote }}
             - name: EVENT_SCAN_DEBOUNCE_SECONDS
@@ -117,15 +123,16 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
-            - name: health
+            # /healthz (probes) and /metrics (monitoring.enabled PodMonitor)
+            - name: metrics
               containerPort: 9000
               protocol: TCP
           readinessProbe:
-            httpGet: { path: /healthz, port: health }
+            httpGet: { path: /healthz, port: metrics }
             periodSeconds: 15
             timeoutSeconds: 5
           livenessProbe:
-            httpGet: { path: /healthz, port: health }
+            httpGet: { path: /healthz, port: metrics }
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 10

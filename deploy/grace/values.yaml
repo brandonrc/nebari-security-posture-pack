@@ -106,6 +106,18 @@ persistence:
   worker: 20Gi
   trivy: 10Gi
 
+# kube-prometheus-stack (release kube-prom-stack) in `observability` selects
+# monitors and rules by `release: kube-prom-stack`, in every namespace.
+monitoring:
+  enabled: true
+  namespace: observability
+  podSelector:
+    app.kubernetes.io/name: prometheus
+  labels:
+    release: kube-prom-stack
+  rules:
+    enabled: true
+
 networkPolicy:
   enabled: true
   gatewayNamespaces:

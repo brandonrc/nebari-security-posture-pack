@@ -51,18 +51,20 @@ spec:
               value: {{ .Values.reportWorker.timeoutSeconds | quote }}
             - name: REPORT_WORKER_ISOLATION
               value: {{ .Values.reportWorker.isolation | quote }}
+            {{- include "security-posture.reportLeaseEnv" . | nindent 12 }}
             {{- include "security-posture.provenanceEnv" . | nindent 12 }}
             {{- include "security-posture.controlsEnv" . | nindent 12 }}
           ports:
-            - name: health
+            # /healthz (probes) and /metrics (monitoring.enabled PodMonitor)
+            - name: metrics
               containerPort: 9000
               protocol: TCP
           readinessProbe:
-            httpGet: { path: /healthz, port: health }
+            httpGet: { path: /healthz, port: metrics }
             periodSeconds: 15
             timeoutSeconds: 5
           livenessProbe:
-            httpGet: { path: /healthz, port: health }
+            httpGet: { path: /healthz, port: metrics }
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 10

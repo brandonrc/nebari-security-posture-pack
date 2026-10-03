@@ -493,3 +493,34 @@ the operator-provisioned client "<namespace>-<fullname>" when nebariapp.enabled.
 {{- define "security-posture.compatEnabled" -}}
 {{- if and .Values.provenance.enabled .Values.provenance.compat.internalService.enabled }}true{{ end -}}
 {{- end }}
+
+{{/*
+Optional report queue lease env (reports.leaseSeconds / reports.maxAttempts;
+unset = the application defaults 120 s / 2) for whichever process generates
+reports: the report-worker, or the worker with the embedded reports stage.
+*/}}
+{{- define "security-posture.reportLeaseEnv" -}}
+{{- with .Values.reports.leaseSeconds }}
+- name: REPORT_LEASE_SECONDS
+  value: {{ . | quote }}
+{{- end }}
+{{- with .Values.reports.maxAttempts }}
+- name: REPORT_MAX_ATTEMPTS
+  value: {{ . | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
+NetworkPolicy peers for Prometheus (monitoring.enabled): every pod in
+monitoring.namespace, or only monitoring.podSelector pods there.
+*/}}
+{{- define "security-posture.np.monitoringPeers" -}}
+- namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: {{ required "monitoring.namespace is required when monitoring.enabled" .Values.monitoring.namespace | quote }}
+  {{- with .Values.monitoring.podSelector }}
+  podSelector:
+    matchLabels:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- end }}

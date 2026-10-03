@@ -382,6 +382,16 @@
               "minimum": 0
             }
           }
+        },
+        "rawMaxGzBytes": {
+          "type": [
+            "integer",
+            "string",
+            "null"
+          ],
+          "description": "RAW_MAX_GZ_BYTES: bytes or a Kubernetes quantity; null = application default (4Mi)",
+          "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|[kmgtpe])?$",
+          "minimum": 1
         }
       },
       "additionalProperties": false
@@ -462,6 +472,22 @@
         },
         "keepPerType": {
           "description": "removed: use reports.retention.perType"
+        },
+        "leaseSeconds": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 10,
+          "description": "REPORT_LEASE_SECONDS; null = 120"
+        },
+        "maxAttempts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "REPORT_MAX_ATTEMPTS; null = 2"
         }
       },
       "additionalProperties": false
@@ -1103,6 +1129,57 @@
         }
       },
       "additionalProperties": false
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "podSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "interval": {
+          "type": "string",
+          "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+        },
+        "scrapeTimeout": {
+          "type": "string",
+          "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+        },
+        "rules": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "labels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "runbookBaseUrl": {
+              "type": "string"
+            }
+          }
+        }
+      }
     },
     "networkPolicy": {
       "type": "object",

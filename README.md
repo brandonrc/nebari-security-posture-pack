@@ -176,6 +176,7 @@ The table lists the main settings. For everything else, see the comments in
 | `scanner.mirror.enabled/registry/insecure/rewrite` | on, in-cluster registry | Mirror-then-scan. |
 | `scanner.mirror.mode` / `imageCacheMaxBytes` | `""` (registry with Clair, else local) / `8Gi` | Mirror into the registry, a local OCI layout cache on the worker PVC, or off. |
 | `scanner.events.enabled` / `debounceSeconds` | `true` / `60` | Targeted scans of new digests from a pod watcher. |
+| `scanner.rawMaxGzBytes` | `null` (4Mi) | `RAW_MAX_GZ_BYTES`: raw scanner JSON kept per image scan (gzip, bytes or quantity); larger output keeps a summary only. |
 | `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the workers for private registries. |
 | `provenance.helmReleases.enabled` / `iUnderstandClusterSecretsRead` | `false` / `false` | Helm release discovery needs get/list on every Secret (bound to `<fullname>-controls` only); both must be true. |
 | `provenance.cosign.lockTrustSettings` | `true` | Cosign trust anchors only from values; the UI cannot change them. |
@@ -185,6 +186,7 @@ The table lists the main settings. For everything else, see the comments in
 | `worker.resources` / `worker.privileged.resources` | 500m/4Gi-3/7Gi, 100m/384Mi-1/1.5Gi | Scan worker sized for two concurrent grype processes. |
 | `reportWorker.enabled` / `timeoutSeconds` | `true` / `1200` | Report generation off the api, one report at a time, child process per report. |
 | `reports.retention.perType` / `maxTotalBytes` | `20` / `2Gi` | Report retention. |
+| `reports.leaseSeconds` / `maxAttempts` | `null` (120) / `null` (2) | `REPORT_LEASE_SECONDS` / `REPORT_MAX_ATTEMPTS`: a report whose worker died is requeued after the lease, failed after `maxAttempts` expired leases. |
 | `history.retainScans` | `30` | Scans whose per-scan history rows are kept. |
 | `api.resources` / `trivy.resources` / `postgresql.resources` / `clair.resources` | 100m/384Mi-1/1Gi, 100m/256Mi-1/1.5Gi, 250m/512Mi-1/1.5Gi, 250m/1.5Gi-2/8Gi | Measured on grace (architecture review §2). |
 | `postgresql.enabled` / `existingSecret` | `true` / `""` | Bundled Postgres. `<fullname>-db` is created once by a hook Job; prefer `existingSecret` under GitOps. |
@@ -194,6 +196,11 @@ The table lists the main settings. For everything else, see the comments in
 | `externalDatabase.*` | | `host`, `port`, `user`, `database`, `clairDatabase`, `sslmode`, `existingSecret`, `passwordKey`. |
 | `database.driver` | `postgresql+asyncpg` | Scheme for `DATABASE_URL`. |
 | `persistence.enabled/storageClass` | `true` / `""` | PVC sizes: `worker` 15Gi, `trivy` 3Gi, `postgres` 10Gi, `reports` 2Gi. |
+| `monitoring.enabled` | `false` | ServiceMonitor (api `:8000/metrics`) and PodMonitor (worker, worker-privileged, report-worker, port `metrics` `:9000/metrics`); needs the Prometheus Operator CRDs. Metrics and alerts: [docs/OPERATIONS.md](docs/OPERATIONS.md). |
+| `monitoring.namespace` / `podSelector` | `monitoring` / `{}` | Prometheus namespace (and optional pod labels) admitted by the NetworkPolicy to `:8000` and `:9000`. |
+| `monitoring.labels` | `{}` | Labels on the monitors and rule, matched by the Prometheus selectors (kube-prometheus-stack: `release: <release>`). |
+| `monitoring.interval` / `scrapeTimeout` | `60s` / `30s` | Scrape settings. |
+| `monitoring.rules.enabled` / `labels` / `runbookBaseUrl` | `false` / `{}` / `""` (chart home) | PrometheusRule with the alerts of docs/OPERATIONS.md; extra alert labels; `runbook_url` prefix. |
 | `networkPolicy.enabled` | `true` | Ingress allow-lists (see below). |
 | `networkPolicy.gatewayNamespaces` | `[envoy-gateway-system]` | Namespaces allowed to reach the ui. |
 | `networkPolicy.uiAllowedNamespaces` | `[]` | Extra namespaces allowed to reach the ui, for example landing-page probers. |
@@ -212,6 +219,10 @@ Clair accept traffic only from the scan worker. The ui accepts traffic only
 from the gateway namespaces. Worker egress is limited to DNS, the release's
 pods, `networkPolicy.workerEgress.allowedNamespaces` and TCP
 `workerEgress.ports`; the api, ui and report-worker have no egress policy.
+The workers and the report-worker accept no ingress (the kubelet probes are not
+subject to policies on common CNIs); with `monitoring.enabled`,
+`monitoring.namespace` may reach the workers' `:9000` and the api's `:8000`
+(`/metrics` has no authentication).
 
 ServiceAccounts and RBAC:
 

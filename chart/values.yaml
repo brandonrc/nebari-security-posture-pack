@@ -152,6 +152,10 @@ scanner:
   # Images larger than this (GB, from the manifest) are scanned last, one at a
   # time (SCAN_MAX_IMAGE_GB); 0 disables the admission rule.
   maxImageGB: 20
+  # RAW_MAX_GZ_BYTES: raw scanner JSON kept per image scan row (gzip-compressed,
+  # bytes or a Kubernetes quantity such as 8Mi); larger output keeps only a
+  # summary. null = application default (4Mi).
+  rawMaxGzBytes: null
   grype:
     # Grype runs inside the worker; its DB lives on the worker PVC.
     enabled: true
@@ -229,6 +233,12 @@ reports:
     # (REPORTS_RETENTION_MAX_TOTAL_BYTES; Kubernetes quantity). Keep it below
     # persistence.reports.
     maxTotalBytes: 2Gi
+  # Report queue lease (REPORT_LEASE_SECONDS): a claimed report whose worker
+  # stops renewing it for this long is requeued. null = default (120).
+  leaseSeconds: null
+  # REPORT_MAX_ATTEMPTS: expired leases before the report is failed instead
+  # of requeued. null = default (2).
+  maxAttempts: null
   # Default for settings `reports.autoGenerate` (editable in the UI): report
   # types generated after every completed scan, cluster scope, default format
   # (poam=xlsx, stig-checklist=cklb, sar=pdf, oscal-ar=json, inventory=xlsx,
@@ -684,9 +694,41 @@ hooks:
     limits: { cpu: "1", memory: 512Mi }
 
 # =============================================================================
+# Monitoring (Prometheus Operator; docs/OPERATIONS.md)
+# =============================================================================
+# ServiceMonitor for the api (:8000/metrics) and PodMonitor for worker,
+# worker-privileged and report-worker (port `metrics`, :9000/metrics), in the
+# release namespace. Needs the monitoring.coreos.com CRDs. /metrics has no
+# authentication: with networkPolicy.enabled only monitoring.namespace may
+# reach :8000 and :9000.
+monitoring:
+  enabled: false
+  # Namespace of the Prometheus pods (NetworkPolicy ingress peer).
+  namespace: monitoring
+  # Optional pod labels narrowing the peer to the Prometheus pods, e.g.
+  # {app.kubernetes.io/name: prometheus}. {} = every pod in `namespace`.
+  podSelector: {}
+  # Labels on the ServiceMonitor, PodMonitor and PrometheusRule; must match the
+  # Prometheus' serviceMonitorSelector / podMonitorSelector / ruleSelector
+  # (kube-prometheus-stack: `release: <its Helm release>`).
+  labels: {}
+  interval: 60s
+  scrapeTimeout: 30s
+  rules:
+    # PrometheusRule with the alerts of docs/OPERATIONS.md (scan staleness,
+    # scanner error rate, stale scanner DB, failed reports, stuck queues).
+    enabled: false
+    # Extra labels on every alert (routing), e.g. {team: platform}.
+    labels: {}
+    # runbook_url annotation prefix (anchors of docs/OPERATIONS.md).
+    # "" = <Chart.yaml home>/blob/master/docs/OPERATIONS.md
+    runbookBaseUrl: ""
+
+# =============================================================================
 # NetworkPolicy
 # =============================================================================
-# Ingress: api <- ui, workers | postgres <- api, workers, migrate, backup |
+# Ingress: api <- ui, workers (+ monitoring.namespace) | workers,
+# report-worker <- monitoring.namespace :9000 when monitoring.enabled, else none | postgres <- api, workers, migrate, backup |
 # trivy, clair <- worker | clair-postgres <- clair | ui <- gatewayNamespaces +
 # uiAllowedNamespaces. Egress is restricted only for the workers (workerEgress).
 networkPolicy:
