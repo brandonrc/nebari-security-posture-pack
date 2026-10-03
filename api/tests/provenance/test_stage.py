@@ -27,8 +27,6 @@ def stage():
 
 
 async def check(reg, ps, w=None, prev=None, cos=None, force=False):
-    tags = {}
-
     async def tags_for(r, repo):
         return reg.tags.get((r, repo))
 

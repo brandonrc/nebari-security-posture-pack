@@ -7,7 +7,10 @@ Usage (download + unzip the DISA zips first):
 
 The `EVAL` table below is the hand-maintained part (how each rule is evaluated).
 """
-import re, sys, xml.etree.ElementTree as ET, html
+import html
+import re
+import sys
+import xml.etree.ElementTree as ET
 import yaml
 
 NS = {'x': 'http://checklists.nist.gov/xccdf/1.1', 'dc': 'http://purl.org/dc/elements/1.1/'}

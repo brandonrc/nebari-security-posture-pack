@@ -29,7 +29,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "cryptography==50.0.2", "jsonschema==4.26.0"]
+dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-cov==7.1.0", "cryptography==50.0.2", "jsonschema==4.26.0"]
+lint = ["ruff==0.16.10", "mypy==2.4.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -46,3 +47,34 @@ asyncio_default_test_loop_scope = "session"
 pythonpath = ["src"]
 markers = ["integration: needs Postgres via TEST_DATABASE_URL"]
 filterwarnings = ["ignore::DeprecationWarning:starlette.*", "ignore:Using `httpx` with `starlette.testclient`"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 140
+extend-exclude = ["src/posture/alembic/versions"]
+
+[tool.ruff.lint]
+# pyflakes + the non-style pycodestyle errors (ruff's classic defaults). Formatting is not
+# enforced (yet): `ruff format --check` would rewrite most files. ASYNC (blocking open()
+# in async defs, `timeout` params) reports 17 findings in scanners/mirror/controls_engine;
+# enable it once those are cleaned up.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.coverage.run]
+source = ["posture"]
+branch = true
+omit = ["src/posture/alembic/versions/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "if __name__ == .__main__.:"]
+
+[tool.mypy]
+# Advisory for now (the `mypy` CI job is non-blocking); tighten module by module.
+python_version = "3.12"
+mypy_path = "src"
+packages = ["posture"]
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_ignores = true

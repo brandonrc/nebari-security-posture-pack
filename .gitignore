@@ -10,3 +10,16 @@ chart/Chart.lock
 
 # grace sample outputs (generated, not committed)
 deploy/grace/sample-reports/
+
+# test/coverage/lint artifacts
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+junit.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+ui/coverage/
+ui/playwright-report/
+ui/test-results/
