@@ -23,8 +23,8 @@ dependencies = [
   "jinja2==3.1.6",
   "weasyprint==70.0",
   # >>> operations / scale: /metrics (posture.metrics), streaming scanner JSON parse
-  "prometheus-client==0.23.1",
-  "ijson==3.4.0",
+  "prometheus-client==0.26.0",
+  "ijson==3.5.1",
   # <<< operations / scale
 ]
 
