@@ -19,6 +19,7 @@
 {{- $component := .component }}
 {{- $name := include "security-posture.componentName" (dict "ctx" $ctx "component" $component) }}
 {{- $secretName := include "security-posture.db.secretName" $ctx }}
+{{- $bindBackup := and (eq $component "postgres") $ctx.Values.postgresql.backup.enabled $ctx.Values.persistence.enabled }}
 {{- $conf := "" }}
 {{- range $k, $v := .config }}
 {{- $conf = printf "%s%s = %v\n" $conf $k $v }}
@@ -190,6 +191,16 @@ spec:
             # parallel query workers use POSIX shared memory (64Mi default in containers)
             - name: shm
               mountPath: /dev/shm
+            {{- if $bindBackup }}
+            # Only so the backup PVC binds at install: with WaitForFirstConsumer
+            # StorageClasses (most cloud defaults, microk8s-hostpath) it stays
+            # Pending until the first CronJob run and `helm --wait` / Argo CD
+            # health never complete. Postgres already holds the data the
+            # dumps contain; mounted read-only.
+            - name: backup
+              mountPath: /backup
+              readOnly: true
+            {{- end }}
       volumes:
         - name: init
           configMap:
@@ -205,6 +216,12 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 256Mi
+        {{- if $bindBackup }}
+        - name: backup
+          persistentVolumeClaim:
+            claimName: {{ include "security-posture.componentName" (dict "ctx" $ctx "component" "backup") }}
+            readOnly: true
+        {{- end }}
         {{- if not $ctx.Values.persistence.enabled }}
         - name: data
           emptyDir: {}

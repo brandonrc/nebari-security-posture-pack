@@ -118,4 +118,15 @@ spec:
           tolerations:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if and .Values.postgresql.enabled .Values.persistence.enabled }}
+          # The bundled Postgres pod also mounts the (ReadWriteOnce) backup PVC
+          # so it binds at install time; the dump pod must run on that node.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "postgres") | nindent 22 }}
+                  topologyKey: kubernetes.io/hostname
+          {{- end }}
 {{- end }}
