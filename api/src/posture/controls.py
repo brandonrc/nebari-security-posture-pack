@@ -38,3 +38,18 @@ def all_controls() -> list[str]:
             if c not in seen:
                 seen.append(c)
     return seen
+
+
+def scan_objectives(kind: str, control: str) -> list[str] | None:
+    """800-53A objectives that failing scan evidence counts against (M3). `kind`: `open`, `overdue`
+    (findings) or `posture`. None = every objective of the control."""
+    so = load_controls().get("scanObjectives") or {}
+    table = (so.get("findings") or {}).get(kind) if kind in ("open", "overdue") else so.get("posture")
+    v = (table or {}).get(control)
+    return list(v) if v else None
+
+
+def finding_objective_controls(kind: str) -> list[str]:
+    """Controls whose status open (`open`) or SLA-overdue (`overdue`) findings downgrade."""
+    so = load_controls().get("scanObjectives") or {}
+    return list(((so.get("findings") or {}).get(kind) or {}).keys())

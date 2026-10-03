@@ -128,6 +128,12 @@ def context(v: View) -> dict[str, Any]:
                 controls[c].checks += 1
 
     stig = stig_summary(v)
+    in_b = [s for s in v.engine_statuses if s.get("inBaseline", True)]
+    engine_counts = []
+    if in_b:
+        from ..controls_engine.engine import CONTROL_STATUSES
+
+        engine_counts = [(st, sum(s.get("status") == st for s in in_b)) for st in CONTROL_STATUSES]
     cve_rows = _cve_rows(v)
     appendix = sorted(v.open_findings, key=lambda f: (-sev_rank(f.severity), f.vuln_id, str(f.image_id)))
     img_refs = {i.id: i for i in v.images}
@@ -160,6 +166,9 @@ def context(v: View) -> dict[str, Any]:
         "checks": checks,
         "controls": sorted(controls.values(), key=lambda c: c.id),
         "stig": stig,
+        "engine_run": v.engine_run,
+        "engine_counts": engine_counts,
+        "engine_baseline": v.engine.get("baseline") or v.engine_run.get("baseline") or "selected",
         "appendix": appendix[:APPENDIX_FINDINGS_MAX],
         "appendix_truncated": max(0, len(appendix) - APPENDIX_FINDINGS_MAX),
         "sla_days": v.sla_days,

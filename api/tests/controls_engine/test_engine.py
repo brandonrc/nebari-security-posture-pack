@@ -221,3 +221,31 @@ def test_settings_validation_and_merge():
     assert new.controls_engine.not_applicable == {"AC-17": "no remote access"}
     with pytest.raises(Exception):
         app_settings.apply_patch(cur, {"controlsEngine": {"baseline": "extreme"}})
+
+
+def test_scan_evidence_downgrades_mapped_controls():
+    """M3: posture failures and open / overdue findings are inputs of the one status derivation."""
+    from posture.controls_engine.engine import scan_evidence
+
+    snap = {"lastDoneScan": {"id": 9}, "findingsByFixable": {"fixable": 120, "unfixable": 3},
+            "slaOverdue": {"critical": 2, "high": 0},
+            "postureFailures": [
+                {"checkId": "privileged", "namespace": "app", "kind": "Deployment", "name": "web"},
+                {"checkId": "privileged", "namespace": "kube-system", "kind": "DaemonSet", "name": "cni"}]}
+    ev = scan_evidence(snap, ["kube-system"])
+    assert ev["AC-6"]["inputs"] == {"scanId": 9, "postureFailures": 1}  # system namespace excluded
+    assert ev["SI-2"]["inputs"]["findingsOpenFixable"] == 120 and ev["SI-2"]["inputs"]["findingsOverdue"] == 2
+    good = [outcome(a, "pass") for a in ("k8s-workload-least-privilege", "k8s-pod-security-admission")]
+    rows = {r.control: r for r in derive_statuses(good)}
+    assert rows["AC-6"].status == "passing"
+    rows = {r.control: r for r in derive_statuses(good, scan=ev)}
+    assert rows["AC-6"].status == "failing" and "posture check privileged" in rows["AC-6"].detail
+    assert rows["AC-6"].inputs["postureFailures"] == 1
+    cm7 = {o["id"]: o["state"] for o in rows["CM-7"].objectives}
+    assert cm7["cm-7_obj.a"] == "not-satisfied"
+    # SI-2: overdue findings fail objective c-1, open fixable ones a-3; the SLA assertion passing is not enough
+    rows = {r.control: r for r in derive_statuses([outcome("pack-sla-overdue", "pass")], scan=ev)}
+    si2 = {o["id"]: o["state"] for o in rows["SI-2"].objectives}
+    assert si2["si-2_obj.c-1"] == "not-satisfied" and si2["si-2_obj.a-3"] == "not-satisfied"
+    assert rows["SI-2"].status in ("failing", "partial")
+    assert scan_evidence(None) == {} and scan_evidence({"lastDoneScan": None}) == {}

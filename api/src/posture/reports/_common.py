@@ -194,6 +194,26 @@ class View:
     options: dict[str, Any]
     images_by_id: dict[Any, SimpleNamespace] = field(default_factory=dict)
     checks_by_id: dict[str, SimpleNamespace] = field(default_factory=dict)
+    # control evidence engine run attached to the snapshot (M3: every report of a scan uses the same run)
+    engine: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def engine_run(self) -> dict[str, Any]:
+        return (self.engine.get("data") or {}).get("run") or {}
+
+    @property
+    def engine_results(self) -> list[dict[str, Any]]:
+        return list((self.engine.get("data") or {}).get("results") or [])
+
+    @property
+    def engine_statuses(self) -> list[dict[str, Any]]:
+        return list((self.engine.get("data") or {}).get("statuses") or [])
+
+    @property
+    def run_stamp(self) -> str:
+        """`scan <id> / control evidence run <id>` printed on every artifact (M3)."""
+        run = self.engine_run.get("id")
+        return f"scan {self.scan.id}" + (f" / control evidence run {run}" if run else " / no control evidence run")
 
     # ---- derived helpers
     def sla_due(self, severity: str, first_seen: datetime | None) -> datetime | None:
@@ -407,6 +427,8 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
     view = View(generated_at=gen, now=now, system=system, scan=scan, scope=scope, sla_days=sla,
                 scanners=scanners, images=images, findings=findings, workloads=workloads, namespaces=nss,
                 checks=checks, posture_results=results, trend=trend, options=opts)
+    ce = get(snapshot, "controls_engine", None)
+    view.engine = dict(ce) if isinstance(ce, dict) else {}
     view.images_by_id = {i.id: i for i in images}
     view.checks_by_id = {c.id: c for c in checks}
     for r in results:  # make sure every referenced check has a definition

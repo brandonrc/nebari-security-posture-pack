@@ -12,6 +12,7 @@ from .registry import GeneratedReport
 
 def generate(fmt: str, snapshot: Any, options: dict[str, Any]) -> GeneratedReport:
     from ..controls_engine.ssp import build_ssp
+    from .poam import poam_controls
 
     v = normalize(snapshot, options)
     ce = get(snapshot, "controls_engine") or {}
@@ -21,6 +22,7 @@ def generate(fmt: str, snapshot: Any, options: dict[str, Any]) -> GeneratedRepor
                     organization_statement=ce.get("organizationStatement") or "",
                     not_applicable=ce.get("notApplicable") or {},
                     inherit_organizational=bool(ce.get("inheritOrganizationalControls", False)),
-                    providers=ce.get("commonControlProviders") or [])
+                    providers=ce.get("commonControlProviders") or [],
+                    poam_controls=poam_controls(v), scan_id=v.scan.id)
     data = json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8")
     return GeneratedReport(data, filename(v, "oscal-ssp", "json"), "application/json")

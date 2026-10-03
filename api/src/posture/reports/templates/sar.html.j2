@@ -113,6 +113,7 @@
     {% if system.organization %}<dt>Organization</dt><dd>{{ system.organization }}</dd>{% endif %}
     <dt>Scope</dt><dd>{{ scope_label }}{% if not include_system %} (Kubernetes system namespaces excluded){% endif %}</dd>
     <dt>Assessment (scan)</dt><dd>#{{ scan.id }} &middot; {{ scan.started_at | dt }} &ndash; {{ scan.finished_at | dt }}</dd>
+    <dt>Control evidence run</dt><dd>{% if engine_run.id %}#{{ engine_run.id }} ({{ engine_run.finishedAt or '' }}){% else %}none attached{% endif %}</dd>
     <dt>Report generated</dt><dd>{{ generated_at | dt }}</dd>
     <dt>Overall result</dt><dd><strong>{{ scan.grade }}</strong> ({{ scan.score | num }} / 100)</dd>
     {% if system.poc_name or system.poc_email %}<dt>Point of contact</dt><dd>{{ system.poc_name }}{% if system.poc_email %} &lt;{{ system.poc_email }}&gt;{% endif %}</dd>{% endif %}
@@ -261,6 +262,14 @@
   {% endfor %}
 
   <h2>6. Control and STIG coverage</h2>
+  <h3>Control evidence status ({{ engine_baseline }} baseline, control evidence run {% if engine_run.id %}#{{ engine_run.id }}{% else %}none{% endif %})</h3>
+  {% if engine_counts %}
+  <p class="small">Evidence status per control from the same run as the SSP, POA&amp;M and OSCAL assessment results of this scan. A status describes machine-collected evidence, not an assessment determination.</p>
+  <table class="avoid">
+    <thead><tr>{% for k, n in engine_counts %}<th class="num">{{ k }}</th>{% endfor %}</tr></thead>
+    <tbody><tr>{% for k, n in engine_counts %}<td class="num">{{ n }}</td>{% endfor %}</tr></tbody>
+  </table>
+  {% else %}<p class="muted small">No control evidence engine run is attached to this scan.</p>{% endif %}
   <h3>NIST SP 800-53 controls with open items</h3>
   {% if controls %}
   <table class="avoid">

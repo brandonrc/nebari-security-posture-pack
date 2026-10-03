@@ -140,6 +140,8 @@ async def test_04_controls_and_families(env):
     assert ctl["AC-2"]["status"] == "hybrid"
     assert ctl["RA-5(2)"]["status"] == "failing"  # scan recent, clair DB stale: the single objective fails
     assert ctl["AC-6"]["findingStatus"] == "open" and ctl["AC-6"]["checksFailed"] >= 1
+    # M3: the posture failure is an input of the same derivation
+    assert ctl["AC-6"]["status"] == "failing" and ctl["AC-6"]["scanEvidence"]["postureFailures"] >= 1
     only = (await c.get("/compliance/controls", params={"status": "passing", "family": "AC"})).json()
     assert only and all(x["status"] == "passing" and x["family"] == "AC" for x in only)
     crm = (await c.get("/compliance/crm")).json()

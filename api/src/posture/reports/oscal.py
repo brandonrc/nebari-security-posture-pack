@@ -107,6 +107,7 @@ def build(v: View) -> dict[str, Any]:
     observations, risks = [], []
     control_obs: dict[str, list[str]] = {}
     control_risks: dict[str, list[str]] = {}
+    control_fail: set[str] = set()
 
     # ---- vulnerability observations / risks
     by_vuln: dict[str, list] = {}
@@ -205,20 +206,49 @@ def build(v: View) -> dict[str, Any]:
             control_obs.setdefault(control_id(c), []).append(o_uuid)
             control_risks.setdefault(control_id(c), []).append(r_uuid)
 
-    # ---- findings per control (also controls that were assessed and are satisfied)
-    assessed = set(control_obs) | {"ra-5", "si-2"}
-    for c in v.checks:
-        assessed.update(control_id(x) for x in c.controls)
+    # ---- control assertion observations (M3: the same control evidence run as the SSP / POA&M)
+    run = v.engine_run
+    for r in sorted(v.engine_results, key=lambda r: r.get("id", "")):
+        aid = r.get("id", "")
+        o_uuid = uid("obs-assertion", aid, run.get("id"))
+        status = r.get("status", "unknown")
+        observations.append({
+            "uuid": o_uuid, "title": f"Control assertion {aid}: {r.get('title', '')}",
+            "description": f"{status.upper()}: {_clean(r.get('detail'))}",
+            "props": [_prop("assertion-id", aid), _prop("assertion-status", status),
+                      _prop("component", r.get("component") or "-"), _prop("control-evidence-run", run.get("id"))],
+            "methods": ["TEST"], "types": ["control-objective"],
+            "origins": [{"actors": [{"type": "tool", "actor-uuid": tool_uuid}]}],
+            "relevant-evidence": [{"href": f"/api/v1/compliance/assertions/{aid}",
+                                   "description": "Raw evidence JSON and history of this assertion"}],
+            "collected": r.get("checkedAt") or collected,
+        })
+        for c in r.get("controls") or []:
+            control_obs.setdefault(control_id(c), []).append(o_uuid)
+            if status == "fail":
+                control_fail.add(control_id(c))
+
+    # ---- findings per control: not-satisfied on failing evidence (scan risks, failing assertions or
+    # objectives); satisfied only when the control evidence run shows every objective passing (M3)
+    engine_status = {control_id(s["control"]): s for s in v.engine_statuses}
+    assessed = set(control_obs) | set(control_risks)
     findings = []
     for cid in sorted(assessed):
         obs, rks = control_obs.get(cid, []), control_risks.get(cid, [])
         upper = cid.upper().replace(".", "(", 1) + (")" if "." in cid else "")
-        state = "not-satisfied" if rks else "satisfied"
+        es = engine_status.get(cid) or {}
+        bad_obj = [o["id"] for o in es.get("objectives") or [] if o.get("state") == "not-satisfied"]
+        if rks or cid in control_fail or bad_obj or es.get("status") == "failing":
+            state = "not-satisfied"
+        elif es.get("status") == "passing":
+            state = "satisfied"
+        else:
+            continue  # partially evidenced: no determination is made
         fnd = {
             "uuid": uid("finding", cid),
             "title": f"{upper} {CONTROL_TITLES.get(upper, '')}".strip(),
-            "description": (f"{len(rks)} open risk(s) and {len(obs)} observation(s) map to {upper}."
-                            if rks else f"No open automated findings map to {upper} in this scan."),
+            "description": (f"{len(rks)} open risk(s) and {len(obs)} observation(s) map to {upper}"
+                            + (f"; control evidence status {es['status']}" if es.get("status") else "") + "."),
             "target": {"type": "statement-id", "target-id": f"{cid}_smt", "status": {"state": state}},
         }
         if obs:
@@ -233,15 +263,17 @@ def build(v: View) -> dict[str, Any]:
         "title": f"Automated assessment - scan {v.scan.id}",
         "description": (f"Continuous automated assessment of {v.scope_label}: {len(v.images)} image(s) scanned by "
                         f"{', '.join(SCANNER_TITLES.get(s.name, s.name) for s in v.scanners) or 'configured scanners'}"
-                        f" and {len(v.posture_results)} posture check evaluation(s). Overall score "
+                        f" and {len(v.posture_results)} posture check evaluation(s); {v.run_stamp}. Hygiene index "
                         f"{v.scan.score if v.scan.score is not None else 'n/a'} (grade {v.scan.grade})."),
         "start": iso(v.scan.started_at or v.generated_at),
         "local-definitions": {"components": components, **({"inventory-items": inventory} if inventory else {})},
-        "props": [_prop("scan-id", v.scan.id), _prop("grade", v.scan.grade or "?")]
-                 + ([_prop("score", v.scan.score)] if v.scan.score is not None else []),
+        "props": [_prop("scan-id", v.scan.id), _prop("control-evidence-run", v.engine_run.get("id") or "none"),
+                  _prop("hygiene-grade", v.scan.grade or "?")]
+                 + ([_prop("hygiene-index", v.scan.score)] if v.scan.score is not None else []),
         "reviewed-controls": {"control-selections": [{
-            "description": "NIST SP 800-53 Rev. 5 controls evidenced by automated scanning.",
-            "include-controls": [{"control-id": c} for c in sorted(assessed)],
+            "description": "NIST SP 800-53 Rev. 5 controls with automated evidence (scans, posture checks and "
+                           "control assertions).",
+            "include-controls": [{"control-id": c} for c in sorted(assessed or {"ra-5"})],
         }]},
     }
     if v.scan.finished_at:

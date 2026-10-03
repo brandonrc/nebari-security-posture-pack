@@ -236,12 +236,59 @@ def _objective_states(label: str, cat: Any, results: list[Outcome], amap_obj: di
     return out
 
 
+def scan_evidence(snapshot: dict[str, Any] | None, system_namespaces: Iterable[str] = ()) -> dict[str, Any]:
+    """Scan results as failing evidence per control (compliance review M3): posture-check failures
+    of non-system workloads, open fixable findings and SLA-overdue findings, mapped through
+    reports/data/controls.yaml (`checks`, `vulnerabilities`, `scanObjectives`).
+
+    Returns {control label: {"items": [{id, status, objectives, detail}], "inputs": {...}}}."""
+    from ..controls import check_controls, finding_objective_controls, scan_objectives, vuln_controls
+
+    out: dict[str, Any] = {}
+    if not snapshot or not snapshot.get("lastDoneScan"):
+        return out
+    scan_id = snapshot["lastDoneScan"].get("id")
+    sysns = set(system_namespaces)
+
+    def add(control: str, item: dict[str, Any], key: str, n: int) -> None:
+        e = out.setdefault(control, {"items": [], "inputs": {"scanId": scan_id}})
+        e["items"].append(item)
+        e["inputs"][key] = e["inputs"].get(key, 0) + n
+
+    by_check: dict[str, set[str]] = {}
+    for f in snapshot.get("postureFailures") or []:
+        if f.get("namespace") in sysns:
+            continue
+        by_check.setdefault(f.get("checkId") or "", set()).add(f"{f.get('namespace')}/{f.get('kind')}/{f.get('name')}")
+    for check, workloads in sorted(by_check.items()):
+        for c in check_controls(check):
+            add(to_label(c), {"id": f"scan:posture:{check}", "status": FAIL,
+                              "objectives": scan_objectives("posture", to_label(c)),
+                              "detail": f"posture check {check} fails on {len(workloads)} workload(s)"},
+                "postureFailures", len(workloads))
+    fixable = int((snapshot.get("findingsByFixable") or {}).get("fixable") or 0)
+    if fixable:
+        open_controls = set(vuln_controls(True)) & set(finding_objective_controls("open"))
+        for c in sorted(open_controls):
+            add(to_label(c), {"id": "scan:findings-open", "status": FAIL, "objectives": scan_objectives("open", c),
+                              "detail": f"{fixable} open finding(s) with a fix available"}, "findingsOpenFixable", fixable)
+    overdue = sum(int(v) for v in (snapshot.get("slaOverdue") or {}).values())
+    if overdue:
+        for c in finding_objective_controls("overdue"):
+            add(to_label(c), {"id": "scan:findings-overdue", "status": FAIL,
+                              "objectives": scan_objectives("overdue", c),
+                              "detail": f"{overdue} finding(s) past their remediation SLA"}, "findingsOverdue", overdue)
+    return out
+
+
 def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
                     components: dict[str, Component] | None = None, catalog: Catalog | None = None,
                     assertions: Iterable[Assertion] | None = None,
                     not_applicable: dict[str, str] | None = None,
                     inherit_organizational: bool = False,
-                    providers: Iterable[Any] | None = None) -> list[ControlResult]:
+                    providers: Iterable[Any] | None = None,
+                    scan: dict[str, Any] | None = None) -> list[ControlResult]:
+    """`scan` = `scan_evidence(snapshot)`: failing scan evidence that downgrades mapped controls (M3)."""
     catalog = catalog or get_catalog()
     components = load_components() if components is None else components
     assertions = list(all_assertions() if assertions is None else assertions)
@@ -256,7 +303,8 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
     scope: dict[str, None] = {}
     for c in catalog.baseline(baseline):
         scope[c.label] = None
-    for label in [*amap, *reqs]:
+    scan = scan or {}
+    for label in [*amap, *reqs, *scan]:
         cat = catalog.get(label)
         if cat is None or not cat.withdrawn:
             scope[to_label(label)] = None
@@ -265,6 +313,7 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
     for label in scope:
         cat = catalog.get(label)
         ids = [i for i in amap.get(label, []) if i in by_id]
+        scan_items = (scan.get(label) or {}).get("items") or []
         declared = reqs.get(label, [])
         comps = list(dict.fromkeys([*(comp.id for comp, _ in declared),
                                     *(comp_of[i] for i in ids if i in comp_of)]))
@@ -275,6 +324,16 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
                             components=comps, assertions=ids, responsibility=responsibility_of(label, declared, cat))
         results = [by_id[i] for i in ids]
         evaluated = [r for r in results if r.status in (PASS, FAIL, UNKNOWN)]
+        if scan_items:  # M3: scan results are evidence too (failing posture checks, open/overdue findings)
+            res.inputs = dict((scan.get(label) or {}).get("inputs") or {})
+            for it in scan_items:
+                o = Outcome(id=it["id"], title=it["id"], controls=[label], component="scan", severity="high",
+                            status=it["status"], detail=it.get("detail", ""), evidence={}, duration_ms=0,
+                            checked_at=datetime.now(UTC))
+                evaluated.append(o)
+                leaves = (cat.expand_objectives(it["objectives"]) if it.get("objectives") else list(cat.objective_ids)) \
+                    if cat is not None else []
+                amap_obj = {**amap_obj, o.id: {**amap_obj.get(o.id, {}), label: leaves}}
         org_declared = [(comp, req) for comp, req in declared if req.responsibility == "org"]
         if evaluated or results:
             res.objectives = _objective_states(label, cat, evaluated, amap_obj, declared)
@@ -320,14 +379,17 @@ def _status_from_objectives(res: ControlResult, evaluated: list[Outcome]) -> Non
     bad = sum(o["state"] == OBJ_NOT_SATISFIED for o in objs)
     unk = sum(o["state"] == OBJ_UNKNOWN for o in objs)
     asg = sum(o["state"] == OBJ_ASSIGNED for o in objs)
-    p = sum(r.status == PASS for r in evaluated)
-    f = sum(r.status == FAIL for r in evaluated)
-    u = sum(r.status == UNKNOWN for r in evaluated)
+    real = [r for r in evaluated if not r.id.startswith("scan:")]
+    p = sum(r.status == PASS for r in real)
+    f = sum(r.status == FAIL for r in real)
+    u = sum(r.status == UNKNOWN for r in real)
+    scan_fail = [r for r in evaluated if r.id.startswith("scan:")]
     res.score = round(sat / m, 3) if m else None
     cov = f"{sat} of {m} objective(s) with passing evidence"
     if asg:
         cov += f", {asg} assigned to the program/organization"
-    tail = f" ({p} assertion(s) pass, {f} fail, {u} unknown)"
+    tail = f" ({p} assertion(s) pass, {f} fail, {u} unknown" + (
+        "; scan: " + "; ".join(r.detail for r in scan_fail) if scan_fail else "") + ")"
     if bad and not sat:
         res.status, res.detail = FAILING, f"{cov}; {bad} objective(s) with failing evidence" + tail
     elif not sat:
@@ -426,6 +488,9 @@ async def load_snapshot(session: AsyncSession, st: Any | None = None) -> dict[st
     snap["openFindings"] = int(await session.scalar(
         select(func.count()).select_from(ConsensusFindingRow).join(Image, Image.id == ConsensusFindingRow.image_id)
         .where(Image.running.is_(True))) or 0)
+    snap["findingsByFixable"] = {("fixable" if fx else "unfixable"): int(n) for fx, n in (await session.execute(
+        select(ConsensusFindingRow.fixable, func.count()).join(Image, Image.id == ConsensusFindingRow.image_id)
+        .where(Image.running.is_(True)).group_by(ConsensusFindingRow.fixable))).all()}
     snap["slaOverdue"] = await compute_sla_overdue(session, st.remediation_sla_days.model_dump())
     snap["postureFailures"] = [
         {"checkId": r.check_id, "namespace": r.namespace, "kind": r.kind, "name": r.name, "severity": r.severity}
@@ -519,6 +584,8 @@ async def execute(sm: async_sessionmaker[AsyncSession], env: Any, *, run_id: int
         else:
             row = await s.get(ControlAssertionRun, run_id)
             row.baseline = cfg.baseline
+        if row.scan_id is None and snapshot and snapshot.get("lastDoneScan"):
+            row.scan_id = snapshot["lastDoneScan"].get("id")  # M3: the scan whose evidence this run used
     ctx = None
     try:
         ctx = await (context_factory(cfg, snapshot) if context_factory else build_context(cfg, snapshot))
@@ -526,7 +593,8 @@ async def execute(sm: async_sessionmaker[AsyncSession], env: Any, *, run_id: int
         statuses = derive_statuses(outcomes, baseline=cfg.baseline,
                                    not_applicable=dict(getattr(ce, "not_applicable", None) or {}),
                                    inherit_organizational=bool(getattr(ce, "inherit_organizational_controls", False)),
-                                   providers=list(getattr(ce, "common_control_providers", None) or []))
+                                   providers=list(getattr(ce, "common_control_providers", None) or []),
+                                   scan=scan_evidence(snapshot, cfg.system_namespaces))
         summary = summarize(statuses, outcomes, cfg.baseline)
         if ctx.keycloak_error:
             summary["keycloak"] = ctx.keycloak_error
@@ -586,11 +654,18 @@ async def prune(sm: async_sessionmaker[AsyncSession], keep: int = KEEP_RUNS) -> 
 
 
 # ------------------------------------------------------------------------- reads (API / reports)
-async def latest_run(session: AsyncSession) -> Any:
+async def latest_run(session: AsyncSession, scan_id: int | None = None) -> Any:
+    """Latest finished run; with `scan_id`, the latest run made from that scan when one exists (M3:
+    reports of one scan all use the same control evidence run)."""
     from .models import ControlAssertionRun
 
-    return (await session.execute(select(ControlAssertionRun).where(ControlAssertionRun.status == "done")
-                                  .order_by(ControlAssertionRun.id.desc()).limit(1))).scalar_one_or_none()
+    q = select(ControlAssertionRun).where(ControlAssertionRun.status == "done")
+    if scan_id is not None:
+        row = (await session.execute(q.where(ControlAssertionRun.scan_id == scan_id)
+                                     .order_by(ControlAssertionRun.id.desc()).limit(1))).scalar_one_or_none()
+        if row is not None:
+            return row
+    return (await session.execute(q.order_by(ControlAssertionRun.id.desc()).limit(1))).scalar_one_or_none()
 
 
 def run_dict(r: Any) -> dict[str, Any]:
@@ -605,11 +680,12 @@ def result_dict(r: Any) -> dict[str, Any]:
             "durationMs": r.duration_ms, "checkedAt": _iso(r.checked_at), "runId": r.run_id}
 
 
-async def latest_data(session: AsyncSession) -> dict[str, Any] | None:
-    """{run, results[], statuses[]} of the latest finished run (for routers and the OSCAL SSP)."""
+async def latest_data(session: AsyncSession, scan_id: int | None = None) -> dict[str, Any] | None:
+    """{run, results[], statuses[]} of the latest finished run (for routers and the reports; with
+    `scan_id`, preferably the run made from that scan)."""
     from .models import ControlAssertionResult, ControlStatusRow
 
-    run = await latest_run(session)
+    run = await latest_run(session, scan_id)
     if run is None:
         return None
     results = [result_dict(r) for r in (await session.execute(

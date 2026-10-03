@@ -116,7 +116,7 @@ async def _control_rows(session: AsyncSession, statuses: list[dict[str, Any]], d
             "family": s["family"], "baseline": s.get("baseline"), "inBaseline": bool(s.get("inBaseline")),
             "status": s["status"], "detail": s.get("detail"), "score": s.get("score"),
             "responsibility": s.get("responsibility"), "provider": s.get("provider"),
-            "objectives": s.get("objectives") or [],
+            "objectives": s.get("objectives") or [], "scanEvidence": s.get("inputs") or {},
             "implementationLevel": c.implementation_level if c else None,
             "components": s.get("components") or [],
             "assertions": [{"id": a, "title": results[a]["title"], "status": results[a]["status"],

@@ -139,7 +139,7 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
               organization_statement: str = "", not_applicable: dict[str, str] | None = None,
               inherit_organizational: bool = False, providers: list[Any] | None = None,
               components: dict[str, Component] | None = None,
-              poam_controls: set[str] | None = None) -> dict[str, Any]:
+              poam_controls: set[str] | None = None, scan_id: Any = None) -> dict[str, Any]:
     """`engine_data` = `engine.latest_data()` ({run, results[], statuses[]}) or None (engine never ran)."""
     if baseline not in BASELINES:
         raise ValueError(f"unknown baseline {baseline!r}")
@@ -299,6 +299,8 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
             "description": _text(description or f"{system_name}: Nebari platform (Kubernetes, Keycloak, Envoy "
                                                 "Gateway, cert-manager, observability stack and data-science packs)."),
             "props": [_prop("control-evidence-run", run.get("id") or "none"),
+                      *([_prop("scan-id", scan_id)] if scan_id not in (None, "") else []),
+                      *([_prop("control-evidence-scan-id", run["scanId"])] if run.get("scanId") else []),
                       _prop("control-evidence-checked-at", run.get("finishedAt") or "never"),
                       *[_prop(f"controls-{k}", v) for k, v in counts.items()]],
             "security-sensitivity-level": level,

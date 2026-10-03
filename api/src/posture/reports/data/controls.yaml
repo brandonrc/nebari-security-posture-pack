@@ -53,3 +53,22 @@ provenance:
   major-update-available: [SI-2]
   mutable-tag: [CM-2, CM-14]
   helm-release-behind: [SI-2, CM-3]
+# Scan evidence in the control status derivation (compliance review M3): a failing posture check
+# or an open / overdue finding counts as failing evidence against these SP 800-53A objectives of
+# each mapped control (a control not listed here: every objective).
+scanObjectives:
+  findings:
+    open:
+      SI-2: [si-2_obj.a-3]
+      RA-5: [ra-5_obj.d]
+    overdue:
+      SI-2: [si-2_obj.c-1]
+      RA-5: [ra-5_obj.d]
+  posture:
+    AC-4: [ac-4_obj]
+    AC-6: [ac-6_obj]
+    AC-6(10): [ac-6.10_obj]
+    CM-2: [cm-2_obj.a-2]
+    CM-6: [cm-6_obj.b]
+    CM-7: [cm-7_obj.a]
+    SC-7: [sc-7_obj.a-4]
