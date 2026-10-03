@@ -64,6 +64,19 @@ class Mirror:
         self.rewrite = settings.rewrite_map
         self.insecure_registries = {self.registry, *self.rewrite.values()} if settings.mirror_insecure else set()
         self._policy_path: str | None = None
+        # MIRROR_MODE (architecture review M7): registry (this class) | local (per-digest OCI
+        # layout, posture.image_cache) | off (scan the original ref)
+        self.mode = settings.effective_mirror_mode
+        self.cache = None
+        if self.mode == "local":
+            from .image_cache import LocalImageCache
+
+            self.cache = LocalImageCache(settings, self)
+
+    def release(self, target: ScanTarget) -> None:
+        """A scan finished reading `target` (unpins a local cache layout for LRU eviction)."""
+        if self.cache is not None and target.ref.startswith("oci-dir:"):
+            self.cache.release(target.ref)
 
     def policy_path(self) -> str:
         if self._policy_path and os.path.exists(self._policy_path):
@@ -123,10 +136,15 @@ class Mirror:
     async def prepare(self, ref: ImageRef, timeout: float = 900) -> ScanTarget:
         src, src_insecure, in_mirror = self.plan(ref)
         source = src.pullable
+        if self.mode == "local" and self.cache is not None:
+            from .image_cache import prepare_local
+
+            target = await prepare_local(self.cache, ref, source, src_insecure, timeout)
+            return target or ScanTarget(source, src_insecure, False, source)
         if in_mirror:
             # e.g. localhost:32000 -> in-cluster registry: already local, scan in place
             return ScanTarget(source, src_insecure, False, source)
-        if not self.s.mirror_enabled:
+        if self.mode == "off" or not self.s.mirror_enabled:
             return ScanTarget(source, src_insecure, False, source)
         dest = mirror_target(ref, self.registry)
         dest_repo = dest.rsplit(":", 1)[0]

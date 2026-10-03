@@ -386,10 +386,13 @@ class Worker:
             force = scan.force
             target_ids = list(scan.target_image_ids or [])
             target_ns = list(scan.target_namespaces or [])
-        enabled = [n for n in ("trivy", "grype", "clair") if getattr(settings.scanners, n) and n in self.scanners]
+        enabled = self.enabled_scanners(settings)
         ctx = ScanContext(scan_id, settings, enabled)
         ctx.per_scanner = {n: {"ok": 0, "error": 0} for n in enabled}
         ctx.add_log(f"scan started (scanners: {', '.join(enabled) or 'none'})")
+        if self.clair_skipped(settings):
+            ctx.add_log(f"clair skipped: it needs MIRROR_MODE=registry (mirror mode is {self.mirror_mode})")
+            log.warning("scan.clair_skipped", scan_id=scan_id, mirror_mode=self.mirror_mode)
         log.info("scan.started", scan_id=scan_id, scanners=",".join(enabled), force=force)
         progress = asyncio.create_task(self._progress_loop(ctx))
         prov_task: asyncio.Task | None = None
@@ -682,7 +685,7 @@ class Worker:
         async with self.sm() as s:
             imgs = (await s.execute(select(Image).where(Image.id.in_(candidates)))).scalars().all()
         cutoff = now() - timedelta(hours=settings.rescan_after_hours)
-        enabled = [n for n in ("trivy", "grype", "clair") if getattr(settings.scanners, n) and n in self.scanners]
+        enabled = self.enabled_scanners(settings)
         out = []
         for img in imgs:
             runs = img.scanners or {}
@@ -715,6 +718,19 @@ class Worker:
             return ScanResult(name, "timeout", error=f"timed out after {self.s.scan_timeout_seconds}s")
         except Exception as e:  # noqa: BLE001
             return ScanResult(name, "error", error=f"adapter error: {e}")
+
+    @property
+    def mirror_mode(self) -> str:
+        return getattr(self.mirror, "mode", "registry")
+
+    def clair_skipped(self, settings: app_settings.AppSettings) -> bool:
+        """Clair pulls through clairctl from a registry only: with MIRROR_MODE local or off there
+        is no registry copy for it, so it is left out (logged) instead of failing every image."""
+        return bool(settings.scanners.clair) and "clair" in self.scanners and self.mirror_mode != "registry"
+
+    def enabled_scanners(self, settings: app_settings.AppSettings) -> list[str]:
+        out = [n for n in ("trivy", "grype", "clair") if getattr(settings.scanners, n) and n in self.scanners]
+        return [n for n in out if not (n == "clair" and self.clair_skipped(settings))]
 
     async def _image_sizes(self, ids: list[int]) -> dict[int, int | None]:
         async with self.sm() as s:
@@ -758,7 +774,12 @@ class Worker:
         target = await self.mirror.prepare(ref)
         for w in target.warnings:
             ctx.add_log(f"{display}: {w}")
-        results = await asyncio.gather(*(self._scan_one(n, target) for n in ctx.enabled)) if ctx.enabled else []
+        try:
+            results = await asyncio.gather(*(self._scan_one(n, target) for n in ctx.enabled)) if ctx.enabled else []
+        finally:
+            release = getattr(self.mirror, "release", None)
+            if callable(release):
+                release(target)
         analysis = analyze(list(results))
         for r in results:
             metrics.observe_scanner(r.scanner, r.status, r.duration_ms)
@@ -830,7 +851,11 @@ class Worker:
             img.confidence = analysis.score.confidence
             img.scanners = analysis.scanners
             img.mirrored = target.mirrored
-            img.mirror_ref = target.ref if target.mirrored else None
+            mref = target.ref
+            if target.mirrored and getattr(target, "digest_verified", False) and "@" not in mref \
+                    and getattr(target, "mirror_digest", None):
+                mref = f"{mref}@{target.mirror_digest}"  # local OCI layout: show the verified digest
+            img.mirror_ref = mref if target.mirrored else None
             warnings = [w for w in (img.warnings or []) if not w.startswith(("mirror failed", "all scanners failed",
                                                                                 "only one scanner"))]
             warnings += target.warnings

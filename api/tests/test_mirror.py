@@ -56,7 +56,7 @@ def _mirror(tmp_path, store: dict[str, bytes]):
     skopeo.write_text(FAKE_SKOPEO)
     skopeo.chmod(0o755)
     (tmp_path / "skopeo.store").write_text(json.dumps({k: v.hex() for k, v in store.items()}))
-    s = Settings(skopeo_bin=str(skopeo), cache_dir=str(tmp_path / "cache"), mirror_registry="mirror:5000",
+    s = Settings(mirror_mode="registry", skopeo_bin=str(skopeo), cache_dir=str(tmp_path / "cache"), mirror_registry="mirror:5000",
                  mirror_insecure=True, mirror_enabled=True)
     return Mirror(s), tmp_path / "skopeo.store.log"
 
