@@ -1,0 +1,56 @@
+{{/*
+  provenance-collector-pack compatibility (DESIGN §12): their Grafana dashboards
+  (Infinity datasource) read /api/reports/latest from an in-cluster Service
+  without auth. This Service targets the api's second listener (port `compat`,
+  PROVENANCE_COMPAT_INTERNAL_PORT) which serves ONLY the read-only endpoints
+  /api/reports, /api/reports/{filename}, /api/export and /healthz, without
+  auth. It is a ClusterIP Service that the NebariApp / gateway never routes;
+  the NetworkPolicy below limits callers to provenance.compat.internalService.allowedNamespaces.
+  Grafana URL: http://<this service>.<namespace>.svc:<port>/api/reports/latest
+*/}}
+{{- if and .Values.provenance.enabled .Values.provenance.compat.internalService.enabled }}
+{{- $svc := .Values.provenance.compat.internalService }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "security-posture.provenanceInternalServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+    app.kubernetes.io/component: web-internal
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ $svc.port }}
+      targetPort: compat
+      protocol: TCP
+  selector:
+    {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 4 }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "api") }}-compat
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  {{- toYaml (required "provenance.compat.internalService.allowedNamespaces must not be empty" (default nil $svc.allowedNamespaces)) | nindent 18 }}
+      ports:
+        - port: {{ $svc.containerPort }}
+          protocol: TCP
+{{- end }}
+{{- end }}

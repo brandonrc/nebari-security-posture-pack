@@ -58,6 +58,7 @@ spec:
             - name: REGISTRY_AUTH_FILE
               value: /etc/posture/docker/config.json
             {{- end }}
+            {{- include "security-posture.provenanceEnv" . | nindent 12 }}
             {{- with .Values.worker.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -75,6 +76,11 @@ spec:
             {{- if .Values.registryAuth.existingSecret }}
             - name: registry-auth
               mountPath: /etc/posture/docker
+              readOnly: true
+            {{- end }}
+            {{- if .Values.provenance.cosign.existingSecret }}
+            - name: cosign-key
+              mountPath: /etc/posture/cosign
               readOnly: true
             {{- end }}
       volumes:
@@ -95,6 +101,14 @@ spec:
             items:
               - key: .dockerconfigjson
                 path: config.json
+        {{- end }}
+        {{- if .Values.provenance.cosign.existingSecret }}
+        - name: cosign-key
+          secret:
+            secretName: {{ .Values.provenance.cosign.existingSecret }}
+            items:
+              - key: cosign.pub
+                path: cosign.pub
         {{- end }}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector:

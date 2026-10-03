@@ -59,3 +59,37 @@ subjects:
     name: {{ include "security-posture.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
+{{- /* ---------------------------------------------------------------- # provenance
+  DESIGN §12: Helm release discovery reads sh.helm.release.v1.* Secrets in every
+  namespace (label owner=helm). RBAC cannot filter by label, so this grants
+  get/list on ALL Secrets cluster-wide to the api/worker ServiceAccount. Only
+  rendered with provenance.helmReleases.enabled (default false). */}}
+{{- if and .Values.rbac.create .Values.provenance.enabled .Values.provenance.helmReleases.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-helm-releases
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-helm-releases
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "security-posture.fullname" . }}-{{ .Release.Namespace }}-helm-releases
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "security-posture.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- /* ---------------------------------------------------------------- # end provenance */}}

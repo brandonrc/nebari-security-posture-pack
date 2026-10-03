@@ -59,10 +59,21 @@ spec:
             {{- include "security-posture.commonEnv" . | nindent 12 }}
             - name: CACHE_DIR
               value: /tmp
+            {{- include "security-posture.provenanceEnv" . | nindent 12 }}
+            {{- if .Values.provenance.compat.internalService.enabled }}
+            - name: PROVENANCE_COMPAT_INTERNAL_PORT
+              value: {{ .Values.provenance.compat.internalService.containerPort | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8000
               protocol: TCP
+            {{- if .Values.provenance.compat.internalService.enabled }}
+            # unauthenticated read-only provenance-collector-pack API (Grafana); see provenance-internal-service.yaml
+            - name: compat
+              containerPort: {{ .Values.provenance.compat.internalService.containerPort }}
+              protocol: TCP
+            {{- end }}
           startupProbe:
             httpGet: { path: /api/v1/health, port: http }
             periodSeconds: 5

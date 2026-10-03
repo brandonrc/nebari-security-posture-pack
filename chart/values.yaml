@@ -170,6 +170,76 @@ reports:
   autoGenerate: []
 
 # =============================================================================
+# Supply-chain provenance (DESIGN §12)
+# =============================================================================
+# Superset of nebari-dev/provenance-collector-pack: per image digest the worker
+# checks cosign signatures, SBOM and SLSA provenance attestations (OCI
+# referrers, BuildKit attestation manifests, cosign .sig/.att/.sbom tags) and
+# newer semver tags; Helm releases come from sh.helm.release.v1 Secrets.
+# Key names mirror their chart's `config:` block. Every toggle except the
+# cosign key material and helmReleases.chartRepos is also editable at runtime
+# (Settings page / PUT /api/v1/settings `provenance`).
+provenance:
+  enabled: true
+  # Check cosign signatures (theirs: config.verifySignatures). Without a key or
+  # keyless identity below this is an existence check (signed, not verified).
+  verifySignatures: true
+  # cosign public key: PEM text, or a KMS / remote URI cosign understands
+  # (awskms://, gcpkms://, hashivault://, k8s://, https://). Theirs:
+  # config.cosignPublicKey.
+  cosignPublicKey: ""
+  cosign:
+    # Secret (release namespace) with key `cosign.pub`; mounted into the
+    # worker and wins over cosignPublicKey.
+    existingSecret: ""
+    # Keyless (Fulcio/Rekor) verification; both required. Example for
+    # Kubernetes release images: identity "^krel-trust@k8s-releng-prod\.iam\.gserviceaccount\.com$",
+    # issuer "^https://accounts\.google\.com$".
+    certificateIdentityRegexp: ""
+    certificateOidcIssuerRegexp: ""
+  checkSBOM: true
+  checkProvenance: true
+  checkUpdates: true
+  # "patch" flags every newer version, "minor" ignores patch-only bumps,
+  # "major" only flags major version changes.
+  updateLevel: patch
+  # Ignore alpha/beta/rc tags when looking for updates.
+  skipPrerelease: true
+  # Reuse a digest's signature / SBOM / provenance results for this long
+  # (tags are re-listed every scan).
+  recheckHours: 24
+  # Concurrent registry requests from the worker.
+  concurrency: 8
+  registryTimeoutSeconds: 30
+  helmReleases:
+    # Read sh.helm.release.v1.* Secrets cluster-wide. Adds cluster-wide
+    # Secrets get/list to the ClusterRole (every Secret, not only Helm's:
+    # RBAC cannot filter by label). Off by default; theirs: config.helmEnabled.
+    enabled: false
+    # Optional chart sources for the chart update check (theirs never fills
+    # helmReleases[].update): classic repos (index.yaml) and/or OCI prefixes,
+    # e.g. [https://charts.jetstack.io, oci://quay.io/nebari/charts].
+    chartRepos: []
+  compat:
+    # Their Grafana dashboards read /api/reports/latest over an in-cluster
+    # Service without auth. internalService.enabled starts a second listener
+    # in the api (port 8081, ONLY /api/reports*, /api/export, /healthz, no
+    # auth) behind ClusterIP Service <fullname>-web-internal (or `name`). It is
+    # never routed by the gateway; with networkPolicy.enabled only
+    # allowedNamespaces may reach it. Grafana Infinity URL:
+    #   http://<service>.<namespace>.svc:<port>/api/reports/latest
+    internalService:
+      enabled: false
+      # Service name override, e.g. "provenance-collector-web" to keep an
+      # existing dashboard's host name (same namespace required).
+      name: ""
+      port: 8080
+      containerPort: 8081
+      # Namespaces allowed through the NetworkPolicy (e.g. Grafana's).
+      allowedNamespaces:
+        - monitoring
+
+# =============================================================================
 # Database
 # =============================================================================
 database:
@@ -351,7 +421,7 @@ serviceAccount:
 rbac:
   # ClusterRole + ClusterRoleBinding: get/list/watch on workloads, pods,
   # namespaces, nodes, networkpolicies, serviceaccounts and NebariApps.
-  # No Secret access.
+  # No Secret access unless provenance.helmReleases.enabled (get/list).
   create: true
 
 # =============================================================================
