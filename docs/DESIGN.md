@@ -332,19 +332,20 @@ an assessor, so continuous scanning feeds continuous ATO. No manual re-keying.
 |---|---|---|
 | `poam` | `xlsx`, `csv` | **Plan of Action & Milestones** in the eMASS POA&M import column layout (see §11.3). One row per consensus finding per image (optionally rolled up per CVE), with NIST 800-53 control, scheduled completion from severity SLA, source scanner(s), status `Ongoing`, raw + residual severity, mitigation text (fixed version). Posture check failures are rows too (control CM-6/CM-7/AC-6). |
 | `stig-checklist` | `ckl` (STIG Viewer 2.x XML), `cklb` (STIG Viewer 3 JSON) | Posture checks mapped to **Kubernetes STIG** (V2R2) / **Container Platform SRG** vuln IDs via a mapping table `reports/data/stig_mapping.yaml` (checkId → `{vulnId, ruleId, ruleTitle, severity(cat), stigId, benchmark}`). Each rule gets `NotAFinding` / `Open` / `Not_Reviewed` with finding details listing offending workloads, plus comments. Scope: cluster, namespace or workload. Unmapped STIG rules are `Not_Reviewed` so the checklist is complete and importable. |
-| `sar` | `pdf`, `html` | **Security Assessment Report** style narrative: system name/date/scope, methodology (three scanners, consensus, scoring), overall score/grade and trend, inventory (namespaces, workloads, images with digests), findings by severity with agreement, posture results, scanner versions and DB freshness, limitations, appendix tables. Printable, Nebari-branded (logo, tokens). |
+| `sar` | `pdf`, `html` | **Automated Assessment Summary (input to the SAR)**; the SAR itself is the SCA's deliverable. Narrative: system name/date/scope, methodology (three scanners, consensus, scoring), hygiene index (grade, not an assessment result) and trend, inventory (namespaces, workloads, images with digests), findings by severity with agreement, posture results, scanner versions and DB freshness, limitations, appendix tables. Printable, Nebari-branded (logo, tokens). |
 | `oscal-ar` | `json` | **OSCAL Assessment Results** 1.1.x: `assessment-results` with one `result` per scan, `observations` per finding (subjects = image/workload), `risks` with severity & deadline, `findings` tied to control ids (`ra-5`, `si-2`, `cm-6`, …), `local-definitions` listing scanner tools as components. Validated against the OSCAL JSON schema in tests. |
 | `inventory` | `xlsx`, `csv` | **Hardware/Software inventory** (eMASS asset list style): image, digest, registry, version/tag, namespaces, workloads, pack, running count, base OS (from scanner metadata), scanner coverage. |
 | `vuln-export` | `csv`, `json`, `cyclonedx-vex` (stretch) | Flat findings export for ingest into Nessus/ACAS-style trackers or Iron Bank VAT justification sheets: one row per (image, CVE, package) with all three scanners' severities. |
 
 ### NIST 800-53 control tagging
-Every finding carries `controls[]`: vulnerabilities → `RA-5`, `SI-2` (+ `SI-2(2)` when fix
-available). Posture checks: privileged/root/privilege-escalation/capabilities → `AC-6`,
-`CM-7`; host namespaces/hostPath → `SC-7`, `CM-7`; resource limits → `SC-6`; mutable tag →
-`CM-2`, `CM-14`; probes → `SI-13`; automount SA token → `AC-6(10)`, `IA-5`; seccomp →
-`CM-6`, `SI-16`; no NetworkPolicy → `SC-7`, `AC-4`. Mapping lives in
-`reports/data/controls.yaml` and is surfaced in the API (`controls` field on findings and
-checks) and UI.
+Every finding carries `controls[]` (corrected per docs/reviews/compliance-sme.md M4):
+vulnerabilities → `SI-2` (overdue → SI-2(c)); privileged/root/privilege-escalation/capabilities →
+`AC-6`, `CM-7`, `SC-39` (+ `AC-6(8)` for root / escalation); host namespaces/hostPath → `SC-39`,
+`AC-6`, `CM-7`; writable root fs → `CM-6`, `CM-7`, `SI-7`; resource limits/requests → `SC-5`;
+mutable tag → `CM-2`, `SI-7`; probes → no control (no POA&M row); automount SA token → `AC-6`,
+`CM-7`; seccomp → `CM-6`, `CM-7`, `SC-39`; no NetworkPolicy → `AC-4`, `SC-7`. STIG-derived items
+also carry the controls of their DISA CCIs. `reports/data/controls.yaml` is the single source
+(API, UI and every report); the POA&M keeps only controls of the selected baseline.
 
 ### Severity → remediation SLA (configurable in settings `remediationSlaDays`)
 critical 15, high 30, medium 90, low 180 days from first-seen. POA&M scheduled completion =
@@ -440,8 +441,8 @@ behind → SI-2, CM-3. Added to `controls.yaml` under `provenance:`.
 ## 13. Control evidence engine (phase 2: 800-53 "top to bottom")
 
 Goal: because NIC deploys the whole platform declaratively, assert **control implementation** for the
-technical controls it provides and **prove them continuously** with live checks, producing an OSCAL
-SSP + assessment results an assessor can accept, with per-control status and evidence. Package
+technical controls it provides and **collect evidence continuously** with live checks, producing an OSCAL
+SSP draft + assessment results an assessor can *review*, with per-control evidence status and evidence. Package
 `api/src/posture/controls_engine/`; router `routers/controls.py`; worker stage `controls` after each scan.
 
 ### Model
@@ -477,26 +478,34 @@ SSP + assessment results an assessor can accept, with per-control status and evi
     SR-4); image pull policy / mutable tags covered by posture checks.
   - This pack: scan ran within `scanIntervalHours`×2 (RA-5(2)); scanner DBs < 72h old (RA-5(2), SI-5);
     POA&M generated for open findings (CA-5); SLA overdue count = 0 (SI-2(c)).
-- Status derivation per control: `implemented` if all mapped assertions pass, `partial` if some,
-  `planned/not-implemented` if all fail, `inherited` for organizational controls per component-definition,
-  `not-applicable` per baseline tailoring, `unknown` if assertion errored. Rollup per family.
+- Status derivation per control (evidence status, compliance review M1-M3/M5): one derivation over the
+  assertions (tagged with the SP 800-53A objectives they evidence), posture-check failures and open /
+  SLA-overdue findings. `passing` only when every objective has passing evidence; `hybrid` when the
+  platform's objectives pass and the rest is assigned to the program (CRM); otherwise `partial`
+  ("n of m objectives"), `failing` or `not-assessed`. `inherited` only from a named, authorized common
+  control provider; `org-provided-unverified` (opt-in) never counts; `not-applicable` only from AO
+  tailoring. Rollup per family. Details: CONTROLS.md.
 
 ### API
 - `GET /compliance/controls` (extend existing): per control `{control,title,family,baseline,status,
-  components[],assertions:[{id,title,status,evidence,checkedAt}],findingsOpen,checksFailed}`.
-- `GET /compliance/families` → `{baseline, items:[{family,title,total,implemented,partial,notImplemented,
-  inherited,notApplicable,unknown}], totals:{baseline:{name,total,implemented,partial,notImplemented,
-  inherited,unknown,notApplicable}, catalog:{...}}}` (items = the selected baseline; DECISIONS 2026-10-03).
+  responsibility,provider,objectives:[{id,state}],scanEvidence,components[],assertions:[{id,title,status,
+  evidence,checkedAt}],findingsOpen,checksFailed}`.
+- `GET /compliance/families` → `{baseline, items:[{family,title,total,passing,partial,failing,hybrid,
+  inherited,orgProvided,notApplicable,notAssessed}], totals:{baseline:{name,total,...same keys},
+  catalog:{...}}}` (items = the selected baseline; DECISIONS 2026-10-03).
+- `GET /compliance/crm?baseline=` → `{baseline, runId, summary:{provider,shared,customer,org}, items:[...]}`.
 - `GET /compliance/assertions`, `POST /compliance/assertions/run` (202, runs engine now), `GET
   /compliance/assertions/{id}` (history).
 - Report type `oscal-ssp` (json): OSCAL 1.1.2 `system-security-plan` with `control-implementation.
   implemented-requirements[]` statuses + by-component + links to evidence; validate against official
-  schema in tests. Report `oscal-ar` now also includes assertion observations. Add `oscal-component-definition`.
+  schema in tests. Report `oscal-ar` includes assertion observations from the same run. Add
+  `oscal-component-definition` and the draft CRM (`GET /compliance/crm`, report `crm`).
 - Settings: `controlsEngine.baseline` (low|moderate|high, default moderate), allowlists for admin
   subjects, `organization` inherited-controls statement text.
 
 ### UI
 - `/compliance` gains tabs: **Controls** (family rollup bar chart + sortable catalog table with status
   badges, filter by family/status/baseline; row expands to evidence per assertion with "checked at" and
-  raw evidence JSON), **STIG** (existing), **SLA** (existing). Overview gets a "Controls implemented
-  x/y (moderate)" tile. Reports dialog gains `oscal-ssp` and `oscal-component-definition`.
+  raw evidence JSON), **STIG** (existing), **SLA** (existing). Overview gets a "Controls with passing
+  evidence x/y (moderate)" tile. Reports dialog gains `oscal-ssp`, `oscal-component-definition` and `crm`;
+  the one-click button is the "Evidence package".

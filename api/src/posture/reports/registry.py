@@ -39,8 +39,8 @@ REPORT_TYPES: list[dict[str, Any]] = [
         "scopes": SCOPES,
         "options": ["rollupByCve", "systemName", "includeSystemNamespaces", "poamVariant"],
         "description": "eMASS POA&M import layout: one row per consensus finding per image (or per CVE with "
-                       "rollupByCve) plus one row per failing posture check, with NIST 800-53 control, "
-                       "SLA-based scheduled completion date and mitigation.",
+                       "rollupByCve) plus one row per failing posture check and per failing control assertion, "
+                       "with the primary in-baseline NIST 800-53 control and an SLA-based scheduled completion date.",
     },
     {
         "type": "stig-checklist",
@@ -53,13 +53,13 @@ REPORT_TYPES: list[dict[str, Any]] = [
     },
     {
         "type": "sar",
-        "title": "Security Assessment Report (SAR)",
+        "title": "Automated Assessment Summary (input to SAR)",
         "formats": ["pdf", "html"],
         "scopes": SCOPES,
         "options": ["systemName", "includeSystemNamespaces"],
-        "description": "Printable narrative assessment report: scope, methodology, score and trend, inventory, "
-                       "findings by severity with scanner agreement, posture results, scanner freshness, "
-                       "limitations and appendices.",
+        "description": "Printable narrative input for the assessor's Security Assessment Report: scope, methodology, "
+                       "hygiene index and trend, inventory, findings by severity with scanner agreement, posture "
+                       "results, control evidence status, scanner freshness, limitations and appendices.",
     },
     {
         "type": "oscal-ar",
@@ -94,9 +94,10 @@ REPORT_TYPES: list[dict[str, Any]] = [
         "formats": ["json"],
         "scopes": ["cluster"],
         "options": ["systemName", "baseline"],
-        "description": "NIST OSCAL 1.1.2 system-security-plan importing the NIST SP 800-53 rev5 baseline profile: "
-                       "per-control implementation status derived from live control assertions, by-component "
-                       "statements and embedded evidence (DESIGN §13).",
+        "description": "Draft NIST OSCAL 1.1.2 system-security-plan importing the selected baseline profile: per-control "
+                       "evidence status (SP 800-53A objective coverage from live assertions and scan results), "
+                       "by-component statements, the program's residual responsibilities and embedded evidence "
+                       "(DESIGN §13). Placeholders must be completed before submission.",
     },
     {
         "type": "crm",

@@ -1,4 +1,7 @@
-"""Security Assessment Report (SAR): Jinja2 HTML -> PDF (WeasyPrint)."""
+"""Automated Assessment Summary (input to the SAR; report type `sar`): Jinja2 HTML -> PDF (WeasyPrint).
+
+The Security Assessment Report itself is the SCA's deliverable (SP 800-37 task A-4); this document
+is tool output that feeds it (compliance review M8). The A-F grade is a hygiene index."""
 
 from __future__ import annotations
 

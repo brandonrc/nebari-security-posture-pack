@@ -8,7 +8,7 @@ def test_html_sections(snapshot, opts):
     rep = generate("sar", "html", snapshot, opts)
     html = rep.content.decode()
     assert rep.content_type.startswith("text/html")
-    for s in ("Security Assessment Report", "1. Executive summary", "2. System and assessment scope", "3. Methodology",
+    for s in ("Automated Assessment Summary (input to SAR)", "Hygiene index", "1. Executive summary", "2. System and assessment scope", "3. Methodology",
               "4. Vulnerability results", "5. Configuration (posture) results", "6. Control and STIG coverage",
               "7. Scanner versions and database freshness", "8. Limitations", "Appendix A. Inventory",
               "Appendix B. All open vulnerability findings"):
@@ -34,3 +34,12 @@ def test_pdf(snapshot, opts):
     assert rep.content.startswith(b"%PDF")
     assert rep.content_type == "application/pdf"
     assert len(rep.content) > 20_000
+
+
+def test_summary_makes_no_assessment_claim(snapshot, opts):
+    """M8: the SAR is the SCA's deliverable; this is an input to it and the grade is a hygiene index."""
+    from posture.reports.registry import generate
+
+    html = generate("sar", "html", snapshot, opts).content.decode()
+    assert "Overall result" not in html and ">Security Assessment Report<" not in html
+    assert "input</strong> to the Security Assessment Report" in html and "not an assessment result" in html

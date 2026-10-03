@@ -142,7 +142,7 @@ describe('Compliance & reports', () => {
 
   it('offers OSCAL SSP / component definition and the compliance package', async () => {
     renderApp('/reports');
-    expect(await screen.findByRole('button', { name: /Compliance package/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Evidence package/ })).toBeInTheDocument();
   });
 
   it('lists reports in done/running/failed states', async () => {

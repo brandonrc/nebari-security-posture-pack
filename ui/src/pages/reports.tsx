@@ -157,13 +157,18 @@ function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   );
 }
 
-/** One-click ATO package (DESIGN §11/§13): POA&M, STIG checklist, SAR, OSCAL AR + SSP. */
+/**
+ * Evidence package (DESIGN §11/§13): POA&M, STIG checklist, automated assessment summary, OSCAL AR +
+ * SSP and the draft CRM, all from the same scan and control evidence run. Inputs to an ATO package,
+ * not the package itself (compliance review M8).
+ */
 const COMPLIANCE_PACKAGE: Array<{ type: string; format: string }> = [
   { type: 'poam', format: 'xlsx' },
   { type: 'stig-checklist', format: 'cklb' },
   { type: 'sar', format: 'pdf' },
   { type: 'oscal-ar', format: 'json' },
   { type: 'oscal-ssp', format: 'json' },
+  { type: 'crm', format: 'xlsx' },
 ];
 
 function CompliancePackageButton() {
@@ -188,17 +193,19 @@ function CompliancePackageButton() {
         ...(skipped.length ? [`not offered by the API: ${skipped.map((p) => `${p.type}.${p.format}`).join(', ')}`] : []),
       ];
       toast.add({
-        title: ok ? `Compliance package queued (${ok} report${ok === 1 ? '' : 's'})` : 'Compliance package failed',
-        description: notes.length ? notes.join(' · ') : 'POA&M (xlsx), STIG checklist (cklb), SAR (pdf), OSCAL AR and OSCAL SSP for the cluster.',
+        title: ok ? `Evidence package queued (${ok} report${ok === 1 ? '' : 's'})` : 'Evidence package failed',
+        description: notes.length
+          ? notes.join(' · ')
+          : 'POA&M (xlsx), STIG checklist (cklb), automated assessment summary (pdf), OSCAL AR, OSCAL SSP and the draft CRM for the cluster.',
         type: failed.length || skipped.length ? (ok ? 'warning' : 'error') : 'info',
       });
     },
-    onError: (e) => toast.add({ title: 'Compliance package failed', description: errorMessage(e), type: 'error' }),
+    onError: (e) => toast.add({ title: 'Evidence package failed', description: errorMessage(e), type: 'error' }),
   });
   return (
-    <Button variant="outline" onClick={() => queue.mutate()} loading={queue.isPending} loadingText="Queuing…" disabled={types.isLoading} title="POA&M xlsx + STIG cklb + SAR pdf + OSCAL AR + OSCAL SSP">
+    <Button variant="outline" onClick={() => queue.mutate()} loading={queue.isPending} loadingText="Queuing…" disabled={types.isLoading} title="Evidence for an assessor: POA&M xlsx + STIG cklb + assessment summary pdf + OSCAL AR + OSCAL SSP + CRM xlsx">
       <PackageCheck />
-      Compliance package
+      Evidence package
     </Button>
   );
 }
@@ -341,7 +348,7 @@ export function ReportsPage() {
     <>
       <PageHeader
         title="Reports"
-        description="ATO / cATO artifacts generated from scan snapshots: POA&M, STIG checklists, SAR, OSCAL assessment results, SSP and component definitions, inventories."
+        description="Evidence for ATO / cATO packages generated from scan snapshots: POA&M, STIG checklists, automated assessment summaries (input to the SAR), OSCAL assessment results, SSP drafts, the draft CRM, component definitions and inventories."
         actions={
           <>
             <CompliancePackageButton />
@@ -368,7 +375,7 @@ export function ReportsPage() {
             error={error ? errorMessage(error) : undefined}
             onRetry={() => void refetch()}
             emptyTitle="No reports yet"
-            emptyDescription="Generate a POA&M, STIG checklist or SAR from the latest scan."
+            emptyDescription="Generate a POA&M, STIG checklist or assessment summary from the latest scan."
             emptyAction={
               <Button variant="outline" onClick={() => setOpen(true)}>
                 <FilePlus2 />
