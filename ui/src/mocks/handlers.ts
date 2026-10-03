@@ -1,7 +1,7 @@
 import { delay, http, HttpResponse } from 'msw';
 import type { Grade, ImageSummary, Report, ReportCreate, Scan, Settings, Severity, VulnSummary } from '@/api/types';
 import { SCANNERS } from '@/api/types';
-import { FAMILY_TITLES } from '@/lib/controls';
+import { complianceTotals, inBaseline, rollupFamilies } from '@/lib/controls';
 import { gradeRank, severityRank } from '@/lib/scoring';
 import {
   buildSummary,
@@ -351,15 +351,10 @@ export const handlers = [
   }),
   http.get(`${API}/compliance/families`, () => {
     settleAssertionRun();
-    const map = new Map<string, { family: string; title: string; implemented: number; partial: number; notImplemented: number; inherited: number; notApplicable: number; unknown: number }>();
-    const key = { implemented: 'implemented', partial: 'partial', 'not-implemented': 'notImplemented', inherited: 'inherited', 'not-applicable': 'notApplicable', unknown: 'unknown' } as const;
-    for (const c of controlCoverage()) {
-      const f = c.family ?? c.control.split('-')[0];
-      const row = map.get(f) ?? { family: f, title: FAMILY_TITLES[f] ?? f, implemented: 0, partial: 0, notImplemented: 0, inherited: 0, notApplicable: 0, unknown: 0 };
-      row[key[c.status as keyof typeof key] ?? 'unknown'] += 1;
-      map.set(f, row);
-    }
-    return HttpResponse.json([...map.values()].sort((a, b) => a.family.localeCompare(b.family)));
+    const all = controlCoverage();
+    const baseline = 'moderate' as const;
+    const items = rollupFamilies(all.filter((c) => c.inBaseline ?? inBaseline(c.baseline, baseline)));
+    return HttpResponse.json({ baseline, items, totals: complianceTotals(all, baseline) });
   }),
   http.get(`${API}/compliance/assertions`, () => {
     settleAssertionRun();

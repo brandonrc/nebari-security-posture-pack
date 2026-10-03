@@ -3,6 +3,7 @@ import type {
   Assertion,
   AssertionRun,
   CheckDetail,
+  FamiliesRollup,
   FamilyRollup,
   HelmRelease,
   SupplyChainSummary,
@@ -135,8 +136,10 @@ export const api = {
 
   complianceControls: async () =>
     asArray(await request<ControlCoverage[] | { items: ControlCoverage[] }>('GET', '/compliance/controls')),
-  complianceFamilies: async () =>
-    asArray(await request<FamilyRollup[] | { items: FamilyRollup[] }>('GET', '/compliance/families')),
+  complianceFamilies: async (): Promise<FamiliesRollup> => {
+    const r = await request<FamilyRollup[] | FamiliesRollup | undefined>('GET', '/compliance/families');
+    return Array.isArray(r) ? { items: r } : { ...r, items: asArray(r?.items ?? []) };
+  },
   assertions: async () => asArray(await request<Assertion[] | { items: Assertion[] }>('GET', '/compliance/assertions')),
   runAssertions: () => request<AssertionRun | undefined>('POST', '/compliance/assertions/run'),
 

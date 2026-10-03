@@ -76,7 +76,12 @@ async def test_01_before_any_run(env):
     c = env["client"]
     rows = (await c.get("/compliance/assertions")).json()
     assert len(rows) >= 25 and all(r["status"] is None for r in rows)
-    fams = (await c.get("/compliance/families")).json()
+    fr = (await c.get("/compliance/families")).json()
+    fams = fr["items"]
+    assert fr["baseline"] == "moderate" and fr["totals"]["baseline"]["name"] == "moderate"
+    keys = {"total", "implemented", "partial", "notImplemented", "inherited", "notApplicable", "unknown"}
+    assert keys <= set(fr["totals"]["baseline"]) and keys == set(fr["totals"]["catalog"])
+    assert fr["totals"]["baseline"]["total"] == 287
     assert sum(f["total"] for f in fams) == 287 and {"family", "title", "implemented", "partial", "notImplemented",
                                                      "inherited", "notApplicable", "unknown"} <= set(fams[0])
     ctl = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
@@ -134,10 +139,20 @@ async def test_04_controls_and_families(env):
     assert ctl["AC-6"]["findingStatus"] == "open" and ctl["AC-6"]["checksFailed"] >= 1
     only = (await c.get("/compliance/controls", params={"status": "implemented", "family": "IA"})).json()
     assert only and all(x["status"] == "implemented" and x["family"] == "IA" for x in only)
-    fams = {f["family"]: f for f in (await c.get("/compliance/families")).json()}
+    fr = (await c.get("/compliance/families")).json()
+    fams = {f["family"]: f for f in fr["items"]}
     assert fams["AC"]["notImplemented"] >= 1 and sum(f["total"] for f in fams.values()) == 287
+    # totals: baseline = sum of the family rows; catalog = every row /compliance/controls lists
+    tb, tc = fr["totals"]["baseline"], fr["totals"]["catalog"]
+    for k in ("implemented", "partial", "notImplemented", "inherited", "notApplicable", "unknown"):
+        assert tb[k] == sum(f[k] for f in fams.values()), k
+        assert tc[k] == sum(1 for x in ctl.values() if {"not-implemented": "notImplemented",
+                                                         "not-applicable": "notApplicable"}.get(x["status"], x["status"]) == k), k
+    assert tb["total"] == 287 and tc["total"] == len(ctl) and tc["total"] > tb["total"]
+    assert tb["total"] == sum(tb[k] for k in ("implemented", "partial", "notImplemented", "inherited",
+                                               "notApplicable", "unknown"))
     high = (await c.get("/compliance/families", params={"baseline": "high"})).json()
-    assert sum(f["total"] for f in high) == 370
+    assert sum(f["total"] for f in high["items"]) == 370 and high["totals"]["baseline"]["total"] == 370
 
 
 async def test_05_oscal_reports(env):
@@ -166,7 +181,7 @@ async def test_06_settings_and_disabled(env):
     st = (await c.put("/settings", json={"controlsEngine": {"baseline": "low", "adminSubjects": ["alice"],
                                                             "notApplicable": {"AC-7": "kiosk system"}}})).json()
     assert st["controlsEngine"]["baseline"] == "low" and st["controlsEngine"]["enabled"] is True
-    assert sum(f["total"] for f in (await c.get("/compliance/families")).json()) == 149
+    assert sum(f["total"] for f in (await c.get("/compliance/families")).json()["items"]) == 149
     assert (await c.put("/settings", json={"controlsEngine": {"baseline": "nope"}})).status_code == 422
     from posture.config import get_settings
 

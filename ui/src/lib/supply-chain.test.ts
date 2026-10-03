@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeControlStatus, baselineCoverage, inBaseline, lowestBaseline, rollupFamilies, compareControlId } from './controls';
+import { normalizeControlStatus, baselineCoverage, catalogHint, complianceTotals, inBaseline, lowestBaseline, rollupFamilies, compareControlId } from './controls';
 import { clusterScore, clusterWeights, deriveSupplyChainSummary, isCurrentImage, latestTag, parseSemver, semverDiff, supplyChainDeductions, supplyChainScore, updateLevel } from './supply-chain';
 
 const signedVerified = { signed: true, verified: true };
@@ -101,6 +101,18 @@ describe('control helpers (DESIGN §13)', () => {
       { family: 'SC', title: 'System and Communications Protection', implemented: 1, partial: 0, notImplemented: 0, inherited: 0, notApplicable: 0, unknown: 0 },
     ]);
     expect(baselineCoverage(list, 'moderate')).toEqual({ implemented: 1, inherited: 1, total: 3 });
+  });
+  it('splits totals into the selected baseline and the full catalog view', () => {
+    const list = [
+      { control: 'AC-6', title: '', findingsOpen: 0, checksFailed: 2, status: 'not-implemented', baseline: 'moderate' },
+      { control: 'AC-7', title: '', findingsOpen: 0, checksFailed: 0, status: 'implemented', baseline: 'low' },
+      { control: 'SC-12(1)', title: '', findingsOpen: 0, checksFailed: 0, status: 'not-implemented', baseline: 'high' },
+      { control: 'SI-2(2)', title: '', findingsOpen: 1, checksFailed: 0, status: 'unknown', baseline: 'moderate', inBaseline: false },
+    ];
+    const t = complianceTotals(list, 'moderate');
+    expect(t.baseline).toEqual({ name: 'moderate', total: 2, implemented: 1, partial: 0, notImplemented: 1, inherited: 0, notApplicable: 0, unknown: 0 });
+    expect(t.catalog).toEqual({ total: 4, implemented: 1, partial: 0, notImplemented: 2, inherited: 0, notApplicable: 0, unknown: 1 });
+    expect(catalogHint(t.catalog, t.baseline.total, 'not-implemented')).toBe('Full catalog: 2 not implemented of 4 controls (incl. 2 outside the baseline)');
   });
   it('orders control ids naturally', () => {
     expect(['AC-10', 'AC-2(1)', 'AC-2', 'AU-2'].sort(compareControlId)).toEqual(['AC-2', 'AC-2(1)', 'AC-10', 'AU-2']);

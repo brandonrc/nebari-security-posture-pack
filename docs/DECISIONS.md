@@ -168,3 +168,9 @@
   (`?includeStale=true` restores all of the provenance scan's rows; `stale` = left out).
   `/images` items carry `current` and accept `?current=`; the UI Supply chain page asks for
   `current=true` and filters client-side too (also in its fallback summary).
+- 2026-10-03 (api/ui, controls): `GET /compliance/families` returns `{baseline, items, totals:{baseline,
+  catalog}}` instead of a bare list (the UI client accepts both). The Compliance tiles mixed
+  denominators ("20/287" was the MODERATE baseline, "64 not implemented / 2 unknown" counted the
+  292-control catalog view). Every tile (Compliance and the Overview controls tile) now shows the
+  baseline numbers with the baseline name in the label; catalog numbers are in a tooltip. Clicking
+  a status tile also filters the catalog table to the baseline so its row count matches.

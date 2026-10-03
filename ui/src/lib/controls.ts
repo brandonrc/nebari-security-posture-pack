@@ -1,4 +1,4 @@
-import type { Baseline, ControlCoverage, ControlStatus, FamilyRollup } from '@/api/types';
+import type { Baseline, ComplianceTotals, ControlCoverage, ControlStatus, FamilyRollup } from '@/api/types';
 import { BASELINES } from '@/api/types';
 
 export const CONTROL_STATUSES: ControlStatus[] = ['implemented', 'partial', 'not-implemented', 'inherited', 'not-applicable', 'unknown'];
@@ -168,4 +168,36 @@ export function compareControlId(a: string, b: string): number {
   const [fa, na, ea] = parse(a);
   const [fb, nb, eb] = parse(b);
   return fa.localeCompare(fb) || na - nb || ea - eb;
+}
+
+function countTotals(controls: ControlCoverage[]): ComplianceTotals {
+  const t: ComplianceTotals = { total: controls.length, ...EMPTY };
+  for (const c of controls) t[ROLLUP_KEY[normalizeControlStatus(c.status)]] += 1;
+  return t;
+}
+
+/**
+ * Fallback for `GET /compliance/families` `totals`: the selected baseline's controls and
+ * every listed control (catalog view, incl. assertion / scan-evidence controls outside it).
+ */
+export function complianceTotals(controls: ControlCoverage[], baseline: Baseline): { baseline: ComplianceTotals & { name: Baseline }; catalog: ComplianceTotals } {
+  const scoped = controls.filter((c) => c.inBaseline ?? inBaseline(c.baseline, baseline));
+  return { baseline: { name: baseline, ...countTotals(scoped) }, catalog: countTotals(controls) };
+}
+
+/** Totals as per-status counts (for status bars / tiles keyed by ControlStatus). */
+export function totalsByStatus(t: ComplianceTotals): Record<ControlStatus, number> {
+  return Object.fromEntries(CONTROL_STATUSES.map((s) => [s, t[ROLLUP_KEY[s]]])) as Record<ControlStatus, number>;
+}
+
+/** Controls that count towards "implemented of N": everything but not-applicable. */
+export function applicableTotal(t: ComplianceTotals): number {
+  return t.total - t.notApplicable;
+}
+
+/** Tooltip text with the full-catalog figure for one status (or implemented). */
+export function catalogHint(t: ComplianceTotals, baselineTotal: number, status: ControlStatus): string {
+  const outside = t.total - baselineTotal;
+  return `Full catalog: ${t[ROLLUP_KEY[status]]} ${CONTROL_STATUS_LABEL[status].toLowerCase()} of ${t.total} controls` +
+    (outside > 0 ? ` (incl. ${outside} outside the baseline)` : '');
 }

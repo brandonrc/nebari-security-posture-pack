@@ -2,9 +2,10 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, Minus, ServerCrash, ShieldChe
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
-import { useControls, useSettings, useSummary, useSupplyChain } from '@/api/queries';
+import { useControls, useFamilies, useSettings, useSummary, useSupplyChain } from '@/api/queries';
 import { ROLLUP_SERIES, ROLLUP_STATUS } from '@/components/family-rollup';
-import { baselineCoverage, CONTROL_STATUSES, normalizeControlStatus } from '@/lib/controls';
+import type { Baseline } from '@/api/types';
+import { applicableTotal, complianceTotals, totalsByStatus } from '@/lib/controls';
 import { gradeForScore } from '@/lib/scoring';
 import { clusterWeights, percent } from '@/lib/supply-chain';
 import type { ScannerHealth, Severity, Summary, TrendPoint } from '@/api/types';
@@ -188,11 +189,17 @@ function SupplyChainTile() {
 
 function ControlsTile() {
   const { data } = useControls();
+  const families = useFamilies();
   const settings = useSettings();
   if (!data?.length || !data.some((c) => c.family || c.assertions || c.baseline)) return null;
-  const baseline = settings.data?.controlsEngine?.baseline ?? 'moderate';
-  const cov = baselineCoverage(data, baseline);
-  const counts = Object.fromEntries(CONTROL_STATUSES.map((s) => [s, data.filter((c) => normalizeControlStatus(c.status) === s).length]));
+  const baseline = (families.data?.baseline ?? settings.data?.controlsEngine?.baseline ?? 'moderate') as Baseline;
+  // baseline numbers throughout (same as the Compliance tiles); full catalog in the title
+  const totals = families.data?.totals ?? complianceTotals(data, baseline);
+  const inB = totals.baseline;
+  const counts = totalsByStatus(inB);
+  const cov = { implemented: inB.implemented, total: applicableTotal(inB) };
+  const cat = totals.catalog;
+  const catalogTitle = `Full catalog (${cat.total} controls): ${cat.implemented} implemented · ${cat.partial} partial · ${cat.notImplemented} not implemented · ${cat.inherited} inherited · ${cat.unknown} unknown`;
   return (
     <Card>
       <CardHeader>
@@ -212,8 +219,8 @@ function ControlsTile() {
           <span className="ml-2 text-muted-foreground text-sm">controls implemented ({baseline} baseline)</span>
         </Link>
         <FamilyRollupBar counts={counts} />
-        <p className="text-muted-foreground text-xs tabular-nums">
-          {counts.partial} partial · {counts['not-implemented']} not implemented · {counts.inherited} inherited · {counts.unknown} unknown
+        <p className="w-fit text-muted-foreground text-xs tabular-nums" title={catalogTitle}>
+          {counts.partial} partial · {counts['not-implemented']} not implemented · {counts.inherited} inherited · {counts.unknown} unknown ({baseline} baseline)
         </p>
       </CardContent>
     </Card>

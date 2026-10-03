@@ -68,21 +68,30 @@ async def catalog(family: str | None = None, baseline: str | None = None, q: str
     return out
 
 
+def _totals(rows: list[dict[str, Any]]) -> dict[str, int]:
+    out = {"total": len(rows), **{k: 0 for k in engine.ROLLUP_KEYS.values()}}
+    for r in rows:
+        out[engine.ROLLUP_KEYS.get(r["status"], "unknown")] += 1
+    return out
+
+
 @router.get("/compliance/families")
-async def families(baseline: str | None = None, session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
-    st = await app_settings.load(session)
-    b = _baseline(baseline, st.controls_engine.baseline)
-    statuses, _ = await _statuses(session, b, st)
-    return engine.family_rollup(statuses)
-
-
-@router.get("/compliance/controls")
-async def controls(family: str | None = None, status: str | None = None, baseline: str | None = None,
-                   includeAll: bool = False,  # noqa: N803  (also controls outside the baseline)
-                   session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
+async def families(baseline: str | None = None, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Per-family rollup of the baseline plus consistent totals: `totals.baseline` counts the
+    selected baseline's controls (the sum of `items`), `totals.catalog` every control
+    `GET /compliance/controls` lists by default (baseline + assertion-covered + scan-evidence
+    controls outside it)."""
     st = await app_settings.load(session)
     b = _baseline(baseline, st.controls_engine.baseline)
     statuses, data = await _statuses(session, b, st)
+    rows = await _control_rows(session, statuses, data)
+    return {"baseline": b, "items": engine.family_rollup(statuses),
+            "totals": {"baseline": {"name": b, **_totals([r for r in rows if r["inBaseline"]])},
+                       "catalog": _totals(rows)}}
+
+
+async def _control_rows(session: AsyncSession, statuses: list[dict[str, Any]], data: dict | None,
+                        include_all: bool = False) -> list[dict[str, Any]]:
     results = {r["id"]: r for r in (data or {}).get("results") or []}
     coverage = {c["control"]: c for c in await control_coverage(session)}
     catalog = get_catalog()
@@ -96,11 +105,7 @@ async def controls(family: str | None = None, status: str | None = None, baselin
                                  "detail": "outside the selected baseline; see findingsOpen / checksFailed"}
     out = []
     for label, s in by_control.items():
-        if not includeAll and not s.get("inBaseline") and not s.get("assertions") and label not in coverage:
-            continue
-        if family and s["family"].upper() != family.upper():
-            continue
-        if status and s["status"] != status:
+        if not include_all and not s.get("inBaseline") and not s.get("assertions") and label not in coverage:
             continue
         cov = coverage.get(label) or {}
         c = catalog.get(label)
@@ -117,6 +122,21 @@ async def controls(family: str | None = None, status: str | None = None, baselin
             "findingStatus": cov.get("status"),  # §11 value: not_assessed | open | satisfied
         })
     out.sort(key=lambda r: catalog.sort_key(r["control"]))
+    return out
+
+
+@router.get("/compliance/controls")
+async def controls(family: str | None = None, status: str | None = None, baseline: str | None = None,
+                   includeAll: bool = False,  # noqa: N803  (also controls outside the baseline)
+                   session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
+    st = await app_settings.load(session)
+    b = _baseline(baseline, st.controls_engine.baseline)
+    statuses, data = await _statuses(session, b, st)
+    out = await _control_rows(session, statuses, data, include_all=includeAll)
+    if family:
+        out = [r for r in out if r["family"].upper() == family.upper()]
+    if status:
+        out = [r for r in out if r["status"] == status]
     return out
 
 

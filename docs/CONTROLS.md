@@ -112,7 +112,11 @@ forbids it, Keycloak credentials are wrong, Loki is down, it timed out after
 `controlsEngine.timeoutSeconds`). A run never fails because of one assertion.
 
 The family rollup (`GET /api/v1/compliance/families`) counts controls of the selected baseline
-per family: `implemented`, `partial`, `notImplemented`, `inherited`, `notApplicable`, `unknown`.
+per family (`items`): `implemented`, `partial`, `notImplemented`, `inherited`, `notApplicable`,
+`unknown`. `totals.baseline` (with `name`) sums the same baseline controls; `totals.catalog` counts
+every control `GET /compliance/controls` lists by default (the baseline plus assertion-covered and
+scan-evidence controls outside it, e.g. 287 vs 292 for MODERATE). The UI tiles use the baseline
+numbers and show the catalog numbers in a tooltip.
 
 In the OSCAL SSP each control becomes an `implemented-requirement` with a prop
 `implementation-status` (the status above), one `by-component` per component that implements it
@@ -204,7 +208,7 @@ is a dedicated service-account client in the target realm with the `realm-manage
 | API (`/api/v1`) | returns |
 |---|---|
 | `GET /compliance/controls?family=&status=&baseline=&includeAll=` | per control: status, baseline, components, assertions with evidence and `checkedAt`, plus the scan evidence counts `findingsOpen` / `checksFailed` (§11) and their old status as `findingStatus` |
-| `GET /compliance/families?baseline=` | family rollup |
+| `GET /compliance/families?baseline=` | family rollup + baseline / catalog totals |
 | `GET /compliance/assertions` | every assertion with its latest result |
 | `GET /compliance/assertions/{id}` | latest evidence + history |
 | `POST /compliance/assertions/run` | 202, queues a run (the worker picks it up within seconds) |

@@ -87,6 +87,40 @@ describe('Compliance & reports', () => {
     expect(screen.getByRole('button', { name: /Run assertions/ })).toBeEnabled();
   });
 
+  it('uses baseline numbers on every tile, with the full catalog in a tooltip', async () => {
+    const totals = {
+      baseline: { name: 'moderate', total: 287, implemented: 20, partial: 6, notImplemented: 62, inherited: 199, notApplicable: 0, unknown: 0 },
+      catalog: { total: 292, implemented: 20, partial: 6, notImplemented: 64, inherited: 200, notApplicable: 0, unknown: 2 },
+    };
+    server.use(http.get('*/api/v1/compliance/families', () => HttpResponse.json({ baseline: 'moderate', items: [], totals })));
+    const user = userEvent.setup();
+    renderApp('/compliance');
+    const impl = await screen.findByTestId('tile-implemented');
+    await waitFor(() => expect(impl).toHaveTextContent('20/287'));
+    expect(impl).toHaveTextContent('Implemented (moderate baseline)');
+    const ni = screen.getByTestId('tile-not-implemented');
+    expect(ni).toHaveTextContent('Not implemented (moderate baseline)');
+    expect(ni).toHaveTextContent('62');
+    expect(ni).toHaveTextContent('of 287 moderate baseline controls');
+    expect(ni).not.toHaveTextContent('292');
+    expect(screen.getByTestId('tile-unknown')).toHaveTextContent(/^Unknown \(moderate baseline\)0of 287/);
+    await user.hover(within(ni).getByText('of 287 moderate baseline controls'));
+    expect(await screen.findByText('Full catalog: 64 not implemented of 292 controls (incl. 5 outside the baseline)')).toBeInTheDocument();
+  });
+
+  it('shows the same baseline numbers on the Overview controls tile', async () => {
+    const totals = {
+      baseline: { name: 'moderate', total: 287, implemented: 20, partial: 6, notImplemented: 62, inherited: 199, notApplicable: 0, unknown: 0 },
+      catalog: { total: 292, implemented: 20, partial: 6, notImplemented: 64, inherited: 200, notApplicable: 0, unknown: 2 },
+    };
+    server.use(http.get('*/api/v1/compliance/families', () => HttpResponse.json({ baseline: 'moderate', items: [], totals })));
+    renderApp('/');
+    expect(await screen.findByRole('link', { name: 'Controls implemented 20 of 287 (moderate baseline)' })).toBeInTheDocument();
+    const line = screen.getByText(/62 not implemented/);
+    expect(line).toHaveTextContent('6 partial · 62 not implemented · 199 inherited · 0 unknown (moderate baseline)');
+    expect(line).toHaveAttribute('title', expect.stringContaining('Full catalog (292 controls)'));
+  });
+
   it('filters the catalog by family from the URL', async () => {
     renderApp('/compliance?family=SR');
     const table = await screen.findByRole('table', { name: 'Control catalog' });

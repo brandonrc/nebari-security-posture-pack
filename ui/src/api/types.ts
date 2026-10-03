@@ -562,11 +562,35 @@ export interface ControlCoverage {
   family?: string | null;
   /** lowest baseline containing the control (`low`…), or a list of baselines; null = not in a baseline. */
   baseline?: string | string[] | null;
+  /** In the selected baseline (§13 API); derived from `baseline` when absent. */
+  inBaseline?: boolean;
   components?: string[];
   assertions?: ControlAssertion[];
 }
 
-/** `GET /compliance/families`. */
+/** Control counts by status (`GET /compliance/families` `totals.*`). */
+export interface ComplianceTotals {
+  total: number;
+  implemented: number;
+  partial: number;
+  notImplemented: number;
+  inherited: number;
+  notApplicable: number;
+  unknown: number;
+}
+
+/**
+ * `GET /compliance/families`: per-family rollup of the selected baseline (`items`) plus
+ * totals for the baseline and for every control `GET /compliance/controls` lists (`catalog`).
+ * Older APIs return the bare `items` array.
+ */
+export interface FamiliesRollup {
+  baseline?: string;
+  items: FamilyRollup[];
+  totals?: { baseline: ComplianceTotals & { name?: string }; catalog: ComplianceTotals };
+}
+
+/** One family row of `GET /compliance/families`. */
 export interface FamilyRollup {
   family: string;
   title: string;

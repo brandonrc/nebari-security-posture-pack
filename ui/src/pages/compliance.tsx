@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Clock, ListChecks, Play, ShieldCheck } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api } from '@/api/client';
 import { useControls, useFamilies, useSettings, useStig, useSummary } from '@/api/queries';
@@ -13,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { toast } from '@/components/ui/toast';
-import { baselineCoverage, CONTROL_STATUS_LABEL, CONTROL_STATUSES, normalizeControlStatus, rollupFamilies } from '@/lib/controls';
+import { applicableTotal, catalogHint, complianceTotals, CONTROL_STATUS_LABEL, rollupFamilies, totalsByStatus } from '@/lib/controls';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataTable, type DataTableColumnDef } from '@/components/ui/data-table';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -139,6 +140,18 @@ async function runAssertionsAndWait() {
   return { done: false, list: [] as Awaited<ReturnType<typeof api.assertions>> };
 }
 
+/** Tile caption with the full-catalog numbers in a tooltip (also its accessible description). */
+function CatalogHint({ hint, children }: { hint: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span />} tabIndex={0} className="w-fit cursor-default text-muted-foreground text-xs underline decoration-dotted underline-offset-4">
+        {children}
+      </TooltipTrigger>
+      <TooltipContent className="max-w-72 text-xs">{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function useAssertionRun() {
   const queryClient = useQueryClient();
   const run = useMutation({
@@ -166,33 +179,40 @@ function ControlsTab() {
   const settings = useSettings();
   const [state, update] = useUrlState({ tab: 'controls', family: '', status: '', baseline: '', q: '' });
   const list = controls.data ?? [];
-  const baseline: Baseline = settings.data?.controlsEngine?.baseline ?? 'moderate';
-  const coverage = baselineCoverage(list, baseline);
-  const rollup = families.data?.length ? families.data : rollupFamilies(list);
-  const statusCounts = Object.fromEntries(CONTROL_STATUSES.map((s) => [s, list.filter((c) => normalizeControlStatus(c.status) === s).length]));
+  const baseline = (families.data?.baseline ?? settings.data?.controlsEngine?.baseline ?? 'moderate') as Baseline;
+  const rollup = families.data?.items.length ? families.data.items : rollupFamilies(list.filter((c) => c.inBaseline ?? true));
+  // every tile uses the selected baseline; the full-catalog figure is in the tooltip
+  const totals = families.data?.totals ?? complianceTotals(list, baseline);
+  const inB = totals.baseline;
+  const inBCounts = totalsByStatus(inB);
+  const loading = controls.isLoading && families.isLoading;
 
   return (
     <div className="flex flex-col gap-4 pt-2">
       {controls.error ? <ErrorAlert error={controls.error} onRetry={() => void controls.refetch()} /> : null}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <Card size="sm">
+        <Card size="sm" data-testid="tile-implemented">
           <CardContent className="flex flex-col gap-1">
             <span className="text-muted-foreground text-xs uppercase tracking-wide">Implemented ({baseline} baseline)</span>
             <span className="font-semibold text-3xl tabular-nums">
-              {controls.isLoading ? '…' : coverage.implemented}
-              <span className="font-normal text-base text-muted-foreground">/{coverage.total}</span>
+              {loading ? '…' : inB.implemented}
+              <span className="font-normal text-base text-muted-foreground">/{applicableTotal(inB)}</span>
             </span>
-            <span className="text-muted-foreground text-xs">+ {coverage.inherited} inherited from the organization</span>
+            <CatalogHint hint={catalogHint(totals.catalog, inB.total, 'implemented')}>+ {inB.inherited} inherited from the organization</CatalogHint>
           </CardContent>
         </Card>
         {(['partial', 'not-implemented', 'unknown'] as const).map((s) => (
-          <Card key={s} size="sm">
+          <Card key={s} size="sm" data-testid={`tile-${s}`}>
             <CardContent className="flex flex-col gap-1">
-              <span className="text-muted-foreground text-xs uppercase tracking-wide">{CONTROL_STATUS_LABEL[s]}</span>
-              <button type="button" className="w-fit rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" onClick={() => update({ status: s, family: '' })}>
-                <span className="font-semibold text-3xl tabular-nums">{controls.isLoading ? '…' : statusCounts[s]}</span>
+              <span className="text-muted-foreground text-xs uppercase tracking-wide">
+                {CONTROL_STATUS_LABEL[s]} ({baseline} baseline)
+              </span>
+              <button type="button" className="w-fit rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" onClick={() => update({ status: s, family: '', baseline })}>
+                <span className="font-semibold text-3xl tabular-nums">{loading ? '…' : inBCounts[s]}</span>
               </button>
-              <span className="text-muted-foreground text-xs">of {list.length} catalog controls</span>
+              <CatalogHint hint={catalogHint(totals.catalog, inB.total, s)}>
+                of {inB.total} {baseline} baseline controls
+              </CatalogHint>
             </CardContent>
           </Card>
         ))}
