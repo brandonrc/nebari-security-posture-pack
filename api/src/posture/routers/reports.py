@@ -56,6 +56,21 @@ def _uuid(report_id: str) -> uuid.UUID:
         raise HTTPException(404, detail="report not found") from None
 
 
+def _report_path(row: Report) -> Path | None:
+    """The report file, only if it lies inside REPORTS_DIR (a tampered `reports.path` must not
+    turn download/delete into arbitrary file read/unlink). None when it does not."""
+    base = report_jobs.reports_dir().resolve()
+    candidate = Path(row.path) if row.path else base / f"{row.id}.{row.format}"
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None
+    if resolved.parent != base and base not in resolved.parents:
+        log.warning("report.path_outside_reports_dir", report_id=str(row.id), path=str(candidate)[:300])
+        return None
+    return resolved
+
+
 @router.get("/reports/types")
 async def report_types() -> list[dict[str, Any]]:
     return [{**t, "defaultFormat": report_jobs.DEFAULT_FORMATS.get(t["type"], t["formats"][0])}
@@ -121,8 +136,8 @@ async def download_report(report_id: str, session: AsyncSession = Depends(get_se
         raise HTTPException(404, detail="report not found")
     if row.status != "done" or not row.path:
         raise HTTPException(409, detail=f"report is {row.status}")
-    path = Path(row.path)
-    if not await asyncio.to_thread(path.is_file):
+    path = _report_path(row)
+    if path is None or not await asyncio.to_thread(path.is_file):
         raise HTTPException(410, detail="report file is missing (storage was reset); generate it again")
     return FileResponse(path, media_type=row.content_type or "application/octet-stream",
                         filename=row.filename or path.name, content_disposition_type="attachment",
@@ -130,15 +145,20 @@ async def download_report(report_id: str, session: AsyncSession = Depends(get_se
 
 
 @router.delete("/reports/{report_id}", status_code=204)
-async def delete_report(report_id: str, session: AsyncSession = Depends(get_session)) -> Response:
+async def delete_report(report_id: str, user: User = Depends(require_admin),
+                        session: AsyncSession = Depends(get_session)) -> Response:
     rid = _uuid(report_id)
     async with session.begin():
         row = await session.get(Report, rid, with_for_update=True)
         if row is None:
             raise HTTPException(404, detail="report not found")
-        path = row.path or str(report_jobs.reports_dir() / f"{rid}.{row.format}")
+        path = _report_path(row)
+        meta = {"type": row.type, "format": row.format, "scan_id": row.scan_id, "created_by": row.created_by}
         await session.delete(row)
-    await asyncio.to_thread(report_jobs.delete_file, path)
+    if path is not None:
+        await asyncio.to_thread(report_jobs.delete_file, str(path))
+    # security review L7: deletions of ATO evidence are attributed
+    log.info("report.deleted", report_id=str(rid), user=user.username, **meta)
     return Response(status_code=204)
 
 
