@@ -84,7 +84,9 @@ describe('FindingsTable server-side paging', () => {
   });
 
   it('sends a debounced search and filters as query params and returns to page 1', async () => {
-    const user = userEvent.setup();
+    // delay: null types without yielding between keystrokes, so a slow (coverage-instrumented) run
+    // cannot space them past the debounce window and fire one request per key.
+    const user = userEvent.setup({ delay: null });
     const requests = serve();
     renderApp('/images/img-big');
     await screen.findByText('1–50 of 260');

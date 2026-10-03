@@ -31,6 +31,7 @@ import type {
   VulnQuery,
   Workload,
 } from './types';
+import * as normalize from './normalize';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -98,33 +99,37 @@ type RawScanDetail = Omit<ScanDetail, 'log'> & { log?: string[] | string; logs?:
 
 export const api = {
   me: () => request<Me>('GET', '/me'),
-  summary: () => request<Summary>('GET', '/summary'),
+  summary: async (): Promise<Summary> => normalize.summary(await request<unknown>('GET', '/summary')),
 
-  images: (query: ImageQuery) => request<Page<ImageSummary>>('GET', '/images', { params: { ...query } }),
-  image: (id: string, query: ImageFindingsQuery = {}) => request<ImageDetail>('GET', `/images/${encodeURIComponent(id)}`, { params: { ...query } }),
+  images: async (query: ImageQuery): Promise<Page<ImageSummary>> =>
+    normalize.page(await request<unknown>('GET', '/images', { params: { ...query } }), normalize.imageSummary),
+  image: async (id: string, query: ImageFindingsQuery = {}): Promise<ImageDetail> =>
+    normalize.imageDetail(await request<unknown>('GET', `/images/${encodeURIComponent(id)}`, { params: { ...query } })),
 
-  vulnerabilities: (query: VulnQuery) => request<VulnList>('GET', '/vulnerabilities', { params: { ...query } }),
-  vulnerability: (vulnId: string) => request<VulnDetail>('GET', `/vulnerabilities/${encodeURIComponent(vulnId)}`),
+  vulnerabilities: async (query: VulnQuery): Promise<VulnList> =>
+    normalize.vulnList(await request<unknown>('GET', '/vulnerabilities', { params: { ...query } })),
+  vulnerability: async (vulnId: string): Promise<VulnDetail> =>
+    normalize.vulnDetail(await request<unknown>('GET', `/vulnerabilities/${encodeURIComponent(vulnId)}`)),
 
   workloads: async (params: { namespace?: string; kind?: string } = {}) =>
     asArray(await request<Workload[] | { items: Workload[] }>('GET', '/workloads', { params })),
   namespaces: async () => asArray(await request<Namespace[] | { items: Namespace[] }>('GET', '/namespaces')),
 
   checks: async () => asArray(await request<Check[] | { items: Check[] }>('GET', '/checks')),
-  check: (id: string) => request<CheckDetail>('GET', `/checks/${encodeURIComponent(id)}`),
+  check: async (id: string): Promise<CheckDetail> => normalize.checkDetail(await request<unknown>('GET', `/checks/${encodeURIComponent(id)}`)),
 
   scans: async (page = 1) => asArray(await request<Scan[] | { items: Scan[] }>('GET', '/scans', { params: { page } })),
   scan: async (id: string | number): Promise<ScanDetail> => {
-    const raw = await request<RawScanDetail>('GET', `/scans/${encodeURIComponent(String(id))}`);
+    const raw = normalize.obj(await request<unknown>('GET', `/scans/${encodeURIComponent(String(id))}`)) as RawScanDetail;
     const log = raw.log ?? raw.logs ?? raw.logTail ?? [];
-    return { ...raw, perScanner: raw.perScanner ?? {}, log: typeof log === 'string' ? log.split('\n') : log };
+    return { ...raw, perScanner: raw.perScanner ?? {}, log: typeof log === 'string' ? log.split('\n') : normalize.arr(log) };
   },
   startScan: (body: ScanCreate = {}) => request<Scan>('POST', '/scans', { body }),
   cancelScan: (id: string | number) => request<unknown>('DELETE', `/scans/${encodeURIComponent(String(id))}`),
 
   scanners: async () => asArray(await request<Scanner[] | { items: Scanner[] }>('GET', '/scanners')),
 
-  settings: () => request<Settings>('GET', '/settings'),
+  settings: async (): Promise<Settings> => normalize.settings(await request<unknown>('GET', '/settings')),
   saveSettings: (settings: Settings) => request<Settings>('PUT', '/settings', { body: settings }),
 
   reportTypes: async () => asArray(await request<ReportType[] | { items: ReportType[] }>('GET', '/reports/types')),
@@ -144,7 +149,7 @@ export const api = {
   assertions: async () => asArray(await request<Assertion[] | { items: Assertion[] }>('GET', '/compliance/assertions')),
   runAssertions: () => request<AssertionRun | undefined>('POST', '/compliance/assertions/run'),
 
-  supplyChain: () => request<SupplyChainSummary>('GET', '/supply-chain'),
+  supplyChain: async (): Promise<SupplyChainSummary> => normalize.supplyChain(await request<unknown>('GET', '/supply-chain')),
   helmReleases: async () => asArray(await request<HelmRelease[] | { items: HelmRelease[] }>('GET', '/helm-releases')),
 
   complianceStig: async () => asArray(await request<StigRule[] | { items: StigRule[] }>('GET', '/compliance/stig')),

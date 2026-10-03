@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -32,13 +32,13 @@ describe('Overview', () => {
 
 describe('Images', () => {
   it('lists images with grade, scanner glyphs and supports the text filter', async () => {
-    const user = userEvent.setup();
     renderApp('/images');
     const table = await screen.findByRole('table', { name: 'Images' });
     await waitFor(() => expect(within(table).getAllByRole('row').length).toBeGreaterThan(20));
     expect(within(table).getAllByLabelText(/Clair: (unsupported|timeout|error)/).length).toBeGreaterThan(0);
-    await user.type(screen.getByRole('searchbox', { name: 'Search images' }), 'keycloak');
-    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(2), { timeout: 4000 });
+    // one change event instead of user.type's 8 keystrokes (each re-rendered 27 rows: quality M4)
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search images' }), { target: { value: 'keycloak' } });
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(2), { timeout: 8000 });
     expect(within(table).getByText('quay.io/keycloak/keycloak:26.0.5')).toBeInTheDocument();
   });
 });

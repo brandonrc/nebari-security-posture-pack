@@ -2,6 +2,7 @@ import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import { createBrowserRouter, createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
 import { AppLayout } from '@/components/app-layout';
+import { RootErrorBoundary, RouteErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toast';
 import { ThemeProvider } from '@/hooks/theme-provider';
 import { CheckDetailPage } from '@/pages/check-detail';
@@ -26,23 +27,30 @@ export const routes: RouteObject[] = [
   {
     path: '/',
     element: <AppLayout />,
+    errorElement: <RootErrorBoundary />,
     children: [
-      { index: true, element: <OverviewPage /> },
-      { path: 'images', element: <ImagesPage /> },
-      { path: 'images/:id', element: <ImageDetailPage /> },
-      { path: 'vulnerabilities', element: <VulnerabilitiesPage /> },
-      { path: 'vulnerabilities/:vulnId', element: <VulnerabilityDetailPage /> },
-      { path: 'workloads', element: <WorkloadsPage /> },
-      { path: 'namespaces', element: <NamespacesPage /> },
-      { path: 'checks', element: <ChecksPage /> },
-      { path: 'supply-chain', element: <SupplyChainPage /> },
-      { path: 'checks/:id', element: <CheckDetailPage /> },
-      { path: 'scans', element: <ScansPage /> },
-      { path: 'scans/:id', element: <ScanDetailPage /> },
-      { path: 'reports', element: <ReportsPage /> },
-      { path: 'compliance', element: <CompliancePage /> },
-      { path: 'settings', element: <SettingsPage /> },
-      { path: '*', element: <NotFoundPage /> },
+      {
+        // pathless layout route: a page error renders inside the app shell (sidebar stays usable)
+        errorElement: <RouteErrorBoundary />,
+        children: [
+          { index: true, element: <OverviewPage /> },
+          { path: 'images', element: <ImagesPage /> },
+          { path: 'images/:id', element: <ImageDetailPage /> },
+          { path: 'vulnerabilities', element: <VulnerabilitiesPage /> },
+          { path: 'vulnerabilities/:vulnId', element: <VulnerabilityDetailPage /> },
+          { path: 'workloads', element: <WorkloadsPage /> },
+          { path: 'namespaces', element: <NamespacesPage /> },
+          { path: 'checks', element: <ChecksPage /> },
+          { path: 'supply-chain', element: <SupplyChainPage /> },
+          { path: 'checks/:id', element: <CheckDetailPage /> },
+          { path: 'scans', element: <ScansPage /> },
+          { path: 'scans/:id', element: <ScanDetailPage /> },
+          { path: 'reports', element: <ReportsPage /> },
+          { path: 'compliance', element: <CompliancePage /> },
+          { path: 'settings', element: <SettingsPage /> },
+          { path: '*', element: <NotFoundPage /> },
+        ],
+      },
     ],
   },
 ];
