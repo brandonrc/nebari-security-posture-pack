@@ -63,3 +63,37 @@
   `strategy: Recreate`. Retention: newest 50 finished reports per type
   (`REPORTS_KEEP_PER_TYPE`). `GET /reports/types` adds `defaultFormat`; `/checks` items carry
   `stig: {vulnId, ruleId, cat, benchmark, all[]}`; `/compliance/stig` rows add `checkId`.
+- 2026-10-03 (controls engine, §13): Package `controls_engine/` with assertions registered by a
+  decorator (`@assertion(id, title, controls, component, severity)` on `async def evaluate(ctx)`);
+  components in `controls_engine/data/components/*.yaml`; catalog trimmed from the official
+  usnistgov/oscal-content rev5 files (5.2.0) by `data/build_catalog.py` (250 KB, controls +
+  enhancements, family, class, NIST implementation level, LOW/MODERATE/HIGH membership).
+  35 assertions: the §13 list, with Keycloak events split into login/admin events, the gateway
+  HTTPS check split into listener/redirect, and four additions (`kc-ssl-required`,
+  `k8s-workload-least-privilege` from the scan's posture checks, `pack-inventory-current` for
+  CM-8, `log-retention` for AU-4/AU-11).
+- 2026-10-03 (controls engine): One `not-implemented` status (OSCAL `planned`) instead of
+  "planned/not-implemented". Added derivation rules: controls with assertions but no run yet are
+  `unknown`; uncovered NIST organization-level controls are `inherited` (common controls) while
+  settings `controlsEngine.inheritOrganizationalControls` is true (default), uncovered
+  system-level controls are `not-implemented`; component requirements without an assertion are
+  `unknown`. Organization-defined parameters (settings `controlsEngine.parameters`) default to the
+  FedRAMP Moderate values (AC-7 3 attempts, AC-11 15 min, IA-5(1) 12 chars, AU-11 90 days).
+- 2026-10-03 (controls engine): `GET /compliance/controls` is served by `routers/controls.py`;
+  `status` is now the engine status and the §11 value (`not_assessed|open|satisfied`) moved to
+  `findingStatus`. Default rows: the selected baseline, plus controls an assertion covers, plus the
+  §11 scan-evidence controls (`includeAll=true` adds the rest of the scope). Extra routes:
+  `GET /compliance/runs`, `GET /compliance/runs/{id}`. `POST /compliance/assertions/run` queues a
+  `control_assertion_runs` row (returns the pending one instead of a duplicate; 409 when
+  `controlsEngine.enabled` is false); the worker claims it in its poll loop and also runs the engine
+  after every completed scan (after `reports.autoGenerate`, so `pack-poam-current` sees the new
+  POA&M). Last 100 runs kept.
+- 2026-10-03 (controls engine): Report types `oscal-ssp` and `oscal-component-definition` are
+  cluster-scope only. report_jobs attaches the latest engine run to the snapshot for `oscal-ssp`.
+  `oscal-ar` does not include assertion observations yet (deferred; the SSP embeds the evidence as
+  back-matter resources). Migration `0003_controls_engine` follows `0002_provenance`.
+- 2026-10-03 (controls engine): Keycloak admin client accepts master-realm or target-realm
+  credentials (`adminRealm` empty = target realm first, then master) and client-credentials
+  secrets. RBAC adds pods and serviceaccounts (needed by the namespace checks) to the §13 list.
+  `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
+  never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
