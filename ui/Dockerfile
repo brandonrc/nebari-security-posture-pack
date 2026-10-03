@@ -20,6 +20,7 @@ USER root
 RUN rm -f /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY docker/default.conf.template /etc/nginx/templates/default.conf.template
+COPY docker/security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY docker/05-security-posture.envsh /docker-entrypoint.d/05-security-posture.envsh
 COPY --from=build /app/dist /usr/share/nginx/html
 RUN chmod 0755 /docker-entrypoint.d/05-security-posture.envsh \

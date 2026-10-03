@@ -5,6 +5,7 @@ server {
     listen       ${NGINX_PORT};
     server_name  _;
     root         /usr/share/nginx/html;
+    include      /etc/nginx/snippets/security-headers.conf;
 
     # Re-resolve the API service periodically instead of pinning its IP at
     # startup; nginx also starts cleanly before the API Service exists.
@@ -35,28 +36,33 @@ server {
     location = /config.json {
         default_type application/json;
         add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/security-headers.conf;
         try_files /config.json =404;
     }
 
     location = /index.html {
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        include /etc/nginx/snippets/security-headers.conf;
     }
 
     # Vite emits content-hashed filenames under /assets.
     location /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
+        include /etc/nginx/snippets/security-headers.conf;
         try_files $uri =404;
     }
 
     # Public, unauthenticated-safe static files (landing page tile icon, favicon).
     location ~* \.(?:svg|ico|png|woff2?)$ {
         add_header Cache-Control "public, max-age=86400" always;
+        include /etc/nginx/snippets/security-headers.conf;
         try_files $uri =404;
     }
 
     # SPA history fallback.
     location / {
         add_header Cache-Control "no-cache" always;
+        include /etc/nginx/snippets/security-headers.conf;
         try_files $uri $uri/ /index.html;
     }
 }
