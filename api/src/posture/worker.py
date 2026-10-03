@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
 import os
 import signal
@@ -41,6 +42,7 @@ from .aggregate import ImageInfo, aggregate
 from .analysis import analyze
 from .config import Settings, get_settings
 from .db.models import (
+    CompatReportRow,
     ConsensusFindingRow,
     ContainerRow,
     FindingRow,
@@ -50,6 +52,7 @@ from .db.models import (
     Scan,
     ScannerStatus,
     ScanSnapshot,
+    VulnRollupRow,
     WorkerHeartbeat,
     WorkloadRow,
 )
@@ -76,6 +79,8 @@ log = get_logger("posture.worker")
 
 LOG_LINES_KEPT = 200
 KEEP_INVENTORY_SCANS = 10
+LAST_SEEN_RESOLUTION = timedelta(hours=1)  # images.last_seen_at is bumped at most hourly (m9)
+VULN_ROLLUPS_KEPT = 2  # latest done scans whose vuln_rollup rows are kept
 
 ALL_STAGES = ("inventory", "scan", "provenance", "controls", "reports")
 SCAN_STAGES = frozenset({"inventory", "scan"})
@@ -217,6 +222,9 @@ class Worker:
         self._next_due: datetime | None = None
         self._versions: dict[str, str] = {}
         self._metrics_at = 0.0
+        self._scanning = 0
+        self._grype_lock = asyncio.Lock()
+        self._grype_update_pending = False
         self._parallelism = settings.scan_parallelism
         self.report_worker = None
         self.provenance_stage: provenance_stage.ProvenanceStage | None = (
@@ -343,17 +351,43 @@ class Worker:
                 else:
                     row.last_error = r.error
 
-    async def update_grype_db(self) -> None:
+    async def update_grype_db(self) -> bool:
+        """`grype db update` on the shared /cache/grype, never while a scan runs grype against it
+        (m7): skipped and retried after the scan; a scan that starts meanwhile waits for it."""
         grype = self.scanners.get("grype")
         if not isinstance(grype, GrypeScanner):
-            return
-        log.info("grype.db_update.start")
-        ok, err = await grype.update_db()
+            return False
+        if self._scanning:
+            self._grype_update_pending = True
+            log.info("grype.db_update.deferred", reason="scan running")
+            return False
+        async with self._grype_lock:
+            if self._scanning:  # a scan slipped in while we waited for the lock
+                self._grype_update_pending = True
+                return False
+            self._grype_update_pending = False
+            log.info("grype.db_update.start")
+            ok, err = await grype.update_db()
+        metrics.GRYPE_DB_UPDATES.labels("ok" if ok else "error").inc()
         if ok:
             log.info("grype.db_update.done")
         else:
             log.error("grype.db_update.failed", error=err)
         await self.refresh_scanner_status(["grype"])
+        return ok
+
+    @contextlib.asynccontextmanager
+    async def scanning(self):
+        """Marks the image-scanning phase: waits for a running grype DB update, blocks new ones."""
+        async with self._grype_lock:
+            self._scanning += 1
+        try:
+            yield
+        finally:
+            self._scanning -= 1
+            if not self._scanning and self._grype_update_pending:
+                self._grype_update_pending = False
+                asyncio.create_task(self.update_grype_db())
 
     # ------------------------------------------------------------ pipeline
     async def _flush_progress(self, ctx: ScanContext) -> None:
@@ -415,43 +449,44 @@ class Worker:
             async with self.sm() as s, s.begin():
                 await s.execute(update(Scan).where(Scan.id == scan_id).values(images_total=len(to_scan)))
             ctx.add_log(f"{len(to_scan)} image(s) to scan, {len(key_to_id)} unique image(s) in inventory")
-            if enabled and to_scan:
+            if enabled and to_scan:  # outside the scanning window: may wait for the first grype DB update
                 await self._wait_scanners_ready(ctx, enabled)
-            if enabled:
-                await self.refresh_scanner_status(enabled)
-            self._parallelism = max(1, settings.parallelism)
-            sem = asyncio.Semaphore(self._parallelism)
-            max_bytes = int(max(0.0, self.s.scan_max_image_gb) * 1024**3)
-            sizes = await self._image_sizes(to_scan) if max_bytes else {}
-            to_scan, deferred = order_for_admission(to_scan, sizes, max_bytes)
+            async with self.scanning():  # m7: no grype DB update during the scan
+                if enabled:
+                    await self.refresh_scanner_status(enabled)
+                self._parallelism = max(1, settings.parallelism)
+                sem = asyncio.Semaphore(self._parallelism)
+                max_bytes = int(max(0.0, self.s.scan_max_image_gb) * 1024**3)
+                sizes = await self._image_sizes(to_scan) if max_bytes else {}
+                to_scan, deferred = order_for_admission(to_scan, sizes, max_bytes)
 
-            async def one(image_id: int) -> None:
-                try:
-                    await self._process_image(ctx, image_id)
-                except Exception as e:  # noqa: BLE001  (never fail the scan for one image)
-                    log.exception("image.failed", scan_id=scan_id, image_id=image_id)
-                    ctx.failed += 1
-                    ctx.done += 1
-                    ctx.add_log(f"image {image_id}: internal error {e}")
+                async def one(image_id: int) -> None:
+                    try:
+                        await self._process_image(ctx, image_id)
+                    except Exception as e:  # noqa: BLE001  (never fail the scan for one image)
+                        log.exception("image.failed", scan_id=scan_id, image_id=image_id)
+                        ctx.failed += 1
+                        ctx.done += 1
+                        ctx.add_log(f"image {image_id}: internal error {e}")
 
-            async def guarded(image_id: int) -> None:
-                async with sem:
-                    if ctx.cancelled:
-                        return
-                    if max_bytes and sizes.get(image_id) is None and not await self._admit(ctx, image_id, max_bytes):
-                        deferred.append(image_id)
-                        return
-                    await one(image_id)
+                async def guarded(image_id: int) -> None:
+                    async with sem:
+                        if ctx.cancelled:
+                            return
+                        if max_bytes and sizes.get(image_id) is None and not await self._admit(ctx, image_id, max_bytes):
+                            deferred.append(image_id)
+                            return
+                        await one(image_id)
 
-            await asyncio.gather(*(guarded(i) for i in to_scan))
-            if deferred and not ctx.cancelled:  # admission (M2): big images last, one at a time
-                ctx.add_log(f"warning: {len(deferred)} image(s) larger than {self.s.scan_max_image_gb:g} GB "
-                            "(SCAN_MAX_IMAGE_GB) scanned last, one at a time")
-                metrics.IMAGES_DEFERRED.inc(len(deferred))
-                for image_id in deferred:
-                    if ctx.cancelled:
-                        break
-                    await one(image_id)
+                await asyncio.gather(*(guarded(i) for i in to_scan))
+                if deferred and not ctx.cancelled:  # admission (M2): big images last, one at a time
+                    ctx.add_log(f"warning: {len(deferred)} image(s) larger than {self.s.scan_max_image_gb:g} GB "
+                                "(SCAN_MAX_IMAGE_GB) scanned last, one at a time")
+                    metrics.IMAGES_DEFERRED.inc(len(deferred))
+                    for image_id in deferred:
+                        if ctx.cancelled:
+                            break
+                        await one(image_id)
             await self._flush_progress(ctx)
             if ctx.cancelled:
                 await provenance_stage.finish(prov_task, ctx.add_log, cancel=True)
@@ -648,7 +683,14 @@ class Worker:
         key_to_id: dict[str, int] = {}
         async with self.sm() as s, s.begin():
             existing = {i.key: i for i in (await s.execute(select(Image).where(Image.key.in_(list(info) or [""])))).scalars()}
-            await s.execute(update(Image).values(running=False))
+            # m9: touch only rows that change (was: UPDATE images SET running=false on every row)
+            await s.execute(update(Image).where(Image.running.is_(True), Image.key.notin_(list(info) or [""]))
+                            .values(running=False).execution_options(synchronize_session=False))
+
+            def put(img: Image, attr: str, value: Any) -> None:
+                if getattr(img, attr) != value:
+                    setattr(img, attr, value)
+
             for key, e in info.items():
                 ref = e["ident"].ref
                 img = existing.get(key)
@@ -656,16 +698,17 @@ class Worker:
                     img = Image(key=key, registry_host=ref.registry, repository=ref.repository, digest=ref.digest,
                                 counts={}, fixable={}, scanners={}, warnings=[], tags=[], namespaces=[], first_seen_at=ts)
                     s.add(img)
-                img.ref = ref.display
-                img.tag = ref.tag or img.tag
-                img.tags = sorted(set(img.tags or []) | e["tags"])
-                img.namespaces = sorted(e["namespaces"])
-                img.workloads = len(e["workloads"])
-                img.containers = e["containers"]
-                img.running = e["running"]
-                img.last_seen_at = ts
+                put(img, "ref", ref.display)
+                put(img, "tag", ref.tag or img.tag)
+                put(img, "tags", sorted(set(img.tags or []) | e["tags"]))
+                put(img, "namespaces", sorted(e["namespaces"]))
+                put(img, "workloads", len(e["workloads"]))
+                put(img, "containers", e["containers"])
+                put(img, "running", e["running"])
+                if img.last_seen_at is None or ts - img.last_seen_at > LAST_SEEN_RESOLUTION:
+                    img.last_seen_at = ts
                 base = [w for w in (img.warnings or []) if not w.startswith(("imageID", "unparseable"))]
-                img.warnings = sorted(set(base) | set(e["ident"].warnings))
+                put(img, "warnings", sorted(set(base) | set(e["ident"].warnings)))
             await s.flush()
             for key in info:
                 key_to_id[key] = (existing.get(key) or (await s.execute(select(Image).where(Image.key == key))).scalar_one()).id
@@ -947,6 +990,42 @@ class Worker:
             old = now() - timedelta(days=14)
             await s.execute(update(ImageScan).where(ImageScan.started_at < old, ImageScan.raw_gz.isnot(None))
                             .values(raw_gz=None))
+        await self.prune_history()
+
+    async def prune_history(self, retain: int | None = None) -> dict[str, int]:
+        """HISTORY_RETAIN_SCANS (30): drop image_scans (and their raw JSON), scan_snapshots and
+        compat reports of finished scans older than the newest N. The newest done scan is always
+        kept, and so is every image_scans row the current findings still reference."""
+        retain = self.s.history_retain_scans if retain is None else retain
+        out = {"image_scans": 0, "scan_snapshots": 0, "vuln_rollup": 0, "compat_reports": 0}
+        if retain <= 0:
+            return out
+        async with self.sm() as s, s.begin():
+            keep = {r for (r,) in (await s.execute(select(Scan.id).order_by(Scan.id.desc()).limit(retain))).all()}
+            latest_done = await s.scalar(select(func.max(Scan.id)).where(Scan.status == "done"))
+            if latest_done is not None:
+                keep.add(latest_done)
+            if not keep:
+                return out
+            floor = min(keep)
+            finished = select(Scan.id).where(Scan.id < floor, Scan.status.in_(("done", "failed", "cancelled")),
+                                             Scan.id.notin_(keep))
+            referenced = select(FindingRow.id).where(FindingRow.image_scan_id == ImageScan.id).exists()
+            out["image_scans"] = (await s.execute(delete(ImageScan).where(
+                ImageScan.scan_id.in_(finished), ~referenced))).rowcount or 0
+            out["scan_snapshots"] = (await s.execute(delete(ScanSnapshot).where(
+                ScanSnapshot.scan_id.in_(finished)))).rowcount or 0
+            out["compat_reports"] = (await s.execute(delete(CompatReportRow).where(
+                CompatReportRow.scan_id.in_(finished)))).rowcount or 0
+            rollups = [r for (r,) in (await s.execute(select(Scan.id).where(
+                Scan.status == "done", Scan.vuln_rollup_at.isnot(None)).order_by(Scan.id.desc())
+                .limit(VULN_ROLLUPS_KEPT))).all()]
+            if rollups:
+                out["vuln_rollup"] = (await s.execute(delete(VulnRollupRow).where(
+                    VulnRollupRow.scan_id < min(rollups)))).rowcount or 0
+        if any(out.values()):
+            log.info("history.pruned", retain=retain, **out)
+        return out
 
     # ------------------------------------------------------------ controls (DESIGN §13)
     async def run_controls(self, trigger: str = "scan", scan_id: int | None = None,

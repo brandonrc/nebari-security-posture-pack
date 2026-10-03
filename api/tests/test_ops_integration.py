@@ -179,3 +179,97 @@ async def test_summary_from_snapshot(env):
     assert s1["counts"]["critical"] == sum(int((i.counts or {}).get("critical", 0)) for i in imgs)
     assert s1["fixable"]["high"] == sum(int((i.fixable or {}).get("high", 0)) for i in imgs)
     assert s1["topRisks"][0]["ref"] == min(imgs, key=lambda i: i.score).ref
+
+
+async def _xmins(env):
+    from sqlalchemy import text
+
+    async with env["sm"]() as s:
+        return dict((await s.execute(text("SELECT key, xmin::text FROM images"))).all())
+
+
+async def test_images_rows_untouched_when_unchanged(env):
+    from posture.db.models import Image
+
+    async with env["sm"]() as s, s.begin():  # an image no pod runs any more
+        s.add(Image(key="old/stale@sha256:" + "9" * 64, ref="old/stale", registry_host="r", repository="old",
+                    running=False, counts={}, fixable={}, scanners={}, warnings=[], tags=[], namespaces=[]))
+    before = await _xmins(env)
+    r = await env["client"].post("/scans", json={})
+    assert r.status_code == 202
+    w = make_worker(env)
+    w.provenance_stage = None  # the provenance stage rewrites images.provenance (its own data) per scan
+    await w.poll_once()
+    assert (await env["client"].get(f"/scans/{r.json()['id']}")).json()["imagesTotal"] == 0  # all fresh
+    after = await _xmins(env)
+    assert after == before  # m9: no UPDATE on unchanged rows (was: running=false on the whole table)
+
+
+async def test_history_retention_keeps_referenced_rows(env):
+    from sqlalchemy import func, select
+
+    from posture.db.models import FindingRow, ImageScan, Scan, ScanSnapshot, VulnRollupRow
+
+    for _ in range(2):
+        await env["client"].post("/scans", json={"force": True})
+        await make_worker(env).poll_once()
+    async with env["sm"]() as s:
+        n_scans = await s.scalar(select(func.count()).select_from(Scan))
+        referenced = {i for (i,) in (await s.execute(select(FindingRow.image_scan_id).distinct())).all()}
+    assert n_scans >= 4
+    w = make_worker(env)
+    out = await w.prune_history(retain=1)
+    assert out["image_scans"] > 0 and out["scan_snapshots"] > 0
+    async with env["sm"]() as s:
+        latest = await s.scalar(select(func.max(Scan.id)).where(Scan.status == "done"))
+        left = {i for (i,) in (await s.execute(select(ImageScan.id))).all()}
+        snap_scans = {i for (i,) in (await s.execute(select(ScanSnapshot.scan_id).distinct())).all()}
+        rollups = {i for (i,) in (await s.execute(select(VulnRollupRow.scan_id).distinct())).all()}
+    assert referenced <= left  # current findings keep their image_scans rows
+    assert snap_scans == {latest} and latest in rollups and len(rollups) <= 2
+    assert (await env["client"].get("/summary")).json()["score"] is not None
+    assert (await env["client"].get("/vulnerabilities")).json()["total"] > 0
+
+
+async def test_grype_db_update_never_overlaps_a_scan(env):
+    from posture.scanners.grype import GrypeScanner
+
+    class FakeGrype(GrypeScanner):
+        def __init__(self):
+            super().__init__("grype", "/tmp/posture-test-cache")
+            self.updates = 0
+
+        async def update_db(self, timeout=1800):
+            self.updates += 1
+            return True, None
+
+        async def version(self):
+            return "1"
+
+        async def db_updated_at(self):
+            return None
+
+    w = make_worker(env)
+    g = FakeGrype()
+    w.scanners = {"grype": g}
+    async with w.scanning():
+        assert await w.update_grype_db() is False and w._grype_update_pending  # deferred
+        assert g.updates == 0
+    await asyncio.sleep(0.2)  # the deferred update runs once the scan window closes
+    assert g.updates == 1 and not w._grype_update_pending
+    # a scan that starts during an update waits for it
+    order = []
+
+    async def slow_update(timeout=1800):
+        order.append("update-start")
+        await asyncio.sleep(0.2)
+        order.append("update-end")
+        return True, None
+
+    g.update_db = slow_update
+    upd = asyncio.create_task(w.update_grype_db())
+    await asyncio.sleep(0.05)
+    async with w.scanning():
+        order.append("scan")
+    await upd
+    assert order == ["update-start", "update-end", "scan"]
