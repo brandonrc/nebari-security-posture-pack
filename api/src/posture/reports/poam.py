@@ -13,6 +13,8 @@ CSV emits one variant (``options.poamVariant``: ``emass`` (default) | ``generic`
 
 from __future__ import annotations
 
+from copy import copy
+
 import csv
 import io
 from datetime import datetime
@@ -306,26 +308,36 @@ def _xlsx(v: View, items: list) -> bytes:
             "Comments", "Overall Remediation Plan", "Recommendations", "Milestone Description",
             "Mitigations (in-house and in conjunction with the Navy CSSP)", "Mitigations", "Impact Description"}
 
+    scratch = wb.create_sheet("_styles")
+    styles = {}
+    for is_date in (False, True):
+        for overdue in (False, True):
+            c = scratch.cell(row=1 + len(styles), column=1)
+            c.alignment = wrap
+            if is_date:
+                c.number_format = "mm/dd/yyyy"
+            if overdue:
+                c.fill = overdue_fill
+            styles[(is_date, overdue)] = copy(c._style)
+    wb.remove(scratch)
+
     for variant in ("emass", "generic", "emass-legacy"):
         title, cols, rowf = VARIANTS[variant]
         ws = wb.create_sheet(title)
         ws.append(cols)
         for c in ws[1]:
             c.font, c.fill, c.alignment = bold, head_fill, Alignment(wrap_text=True, vertical="center")
-        for i in items:
+        # Performance (25k findings x 3 sheets): ws.max_row is O(cells), and assigning style
+        # objects per cell hashes them against the workbook registry. Track the row number and
+        # copy pre-registered StyleArrays instead.
+        for r, i in enumerate(items, start=2):
             ws.append(rowf(i, v, True))
-            r = ws.max_row
-            for idx, col in enumerate(cols, start=1):
-                cell = ws.cell(row=r, column=idx)
-                cell.alignment = wrap
-                if col in date_cols and cell.value:
-                    cell.number_format = "mm/dd/yyyy"
-                if i.overdue:
-                    cell.fill = overdue_fill
+            for idx, (col, cell) in enumerate(zip(cols, ws[r]), start=1):
+                cell._style = copy(styles[(col in date_cols and bool(cell.value), bool(i.overdue))])
         for idx, col in enumerate(cols, start=1):
             ws.column_dimensions[get_column_letter(idx)].width = 60 if col in wide else max(14, min(30, len(col) + 2))
         ws.freeze_panes = "B2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{max(ws.max_row, 1)}"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{len(items) + 1}"
 
     info = wb.create_sheet("Info")
     sc = {s: 0 for s in SEVERITIES}
