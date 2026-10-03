@@ -6,7 +6,7 @@ import { SCANNERS } from '@/api/types';
 import { EmptyState } from '@/components/page';
 import { ControlChips, SCANNER_LABEL, SeverityBadge } from '@/components/posture';
 import { SimpleSelect } from '@/components/simple-select';
-import { SearchInput, SortableHead, StateRow, Toolbar } from '@/components/table-kit';
+import { Pager, SearchInput, SortableHead, StateRow, Toolbar, useClientPagination } from '@/components/table-kit';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -53,7 +53,9 @@ export function FindingsTable({ findings, scanners }: { findings: Finding[]; sca
     setSort(field);
     setOrder(next);
   };
-  const agreedAll = findings.filter((f) => okScanners.length > 1 && f.scanners.length === okScanners.length).length;
+  // summary over the full filtered set, not just the visible page
+  const agreedAll = rows.filter((f) => okScanners.length > 1 && f.scanners.length === okScanners.length).length;
+  const { pageRows, pagerProps } = useClientPagination(rows, { resetKey: JSON.stringify([q, severity, onlyFixable, onlyDisagree, sort, order, findings.length]) });
   const COLS = 9;
 
   return (
@@ -71,7 +73,7 @@ export function FindingsTable({ findings, scanners }: { findings: Finding[]; sca
         </label>
         <span className="ml-auto text-muted-foreground text-xs">
           <span className="mr-1 inline-block size-2.5 rounded-sm border border-primary/40 bg-primary/10 align-middle" aria-hidden="true" />
-          {agreedAll} of {findings.length} flagged by all {okScanners.length} scanners
+          {agreedAll.toLocaleString()} of {rows.length.toLocaleString()} flagged by all {okScanners.length} scanners
         </span>
       </Toolbar>
       <Table aria-label="Findings">
@@ -98,7 +100,7 @@ export function FindingsTable({ findings, scanners }: { findings: Finding[]; sca
               </EmptyState>
             </StateRow>
           ) : (
-            rows.map((f) => {
+            pageRows.map((f) => {
               const allAgree = okScanners.length > 1 && f.scanners.length === okScanners.length;
               return (
                 <TableRow
@@ -160,6 +162,7 @@ export function FindingsTable({ findings, scanners }: { findings: Finding[]; sca
           )}
         </TableBody>
       </Table>
+      {rows.length > 0 ? <Pager {...pagerProps} /> : null}
     </div>
   );
 }

@@ -80,7 +80,9 @@ Append `?mockAuth=401` or `?mockAuth=403` to any URL to see the session-expired 
 `screenshots/run.sh` builds the mock bundle, serves it with `vite preview`, and captures
 Overview, Images, Image detail (Findings and Supply chain tabs), Supply chain, Compliance (Controls
 tab with one control expanded, and STIG tab) and Reports in light and dark (plus Overview at
-900 px) with Playwright in `mcr.microsoft.com/playwright:v1.63.0-noble`.
+900 px) with Playwright in `mcr.microsoft.com/playwright:v1.63.0-noble`. Both containers use
+`--network host` (preview on `127.0.0.1:$PORT`, default 4173); the script must never run
+`docker network create`, which restarts MicroK8s on the grace host.
 
 ## API assumptions (§12 / §13)
 

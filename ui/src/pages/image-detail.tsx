@@ -7,6 +7,7 @@ import { useImage } from '@/api/queries';
 import type { ImageDetail } from '@/api/types';
 import { SCANNERS } from '@/api/types';
 import { FindingsTable } from '@/components/findings-table';
+import { Pager, useClientPagination } from '@/components/table-kit';
 import { CardsSkeleton, CopyButton, EmptyState, ErrorAlert, Meta, PageHeader, errorMessage } from '@/components/page';
 import { AgreementDots, ControlChips, GradeRing, SCANNER_LABEL, ScannerStatusIcon, SeverityBadge, SeverityChips, StatusBadge } from '@/components/posture';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -80,7 +81,9 @@ function Header({ image }: { image: ImageDetail }) {
 }
 
 function UsedBy({ image }: { image: ImageDetail }) {
+  const { pageRows, pagerProps } = useClientPagination(image.usedBy, { resetKey: image.id });
   return (
+    <div className="flex flex-col gap-3">
     <Table aria-label="Containers using this image">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -101,7 +104,7 @@ function UsedBy({ image }: { image: ImageDetail }) {
             </TableCell>
           </TableRow>
         ) : (
-          image.usedBy.map((u, i) => (
+          pageRows.map((u, i) => (
             <TableRow key={`${u.namespace}/${u.name}/${u.pod ?? i}/${u.container}`}>
               <TableCell className="px-3 py-2">
                 <Link to={`/images?namespace=${encodeURIComponent(u.namespace)}`} className="underline-offset-4 hover:underline">
@@ -121,6 +124,8 @@ function UsedBy({ image }: { image: ImageDetail }) {
         )}
       </TableBody>
     </Table>
+    {image.usedBy.length > pagerProps.pageSizeOptions[0] ? <Pager {...pagerProps} /> : null}
+    </div>
   );
 }
 

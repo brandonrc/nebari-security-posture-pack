@@ -200,3 +200,36 @@ export function StateRow({ cols, children }: { cols: number; children: ReactNode
     </TableRow>
   );
 }
+
+export const CLIENT_PAGE_SIZES = [25, 50, 100, 250];
+
+/**
+ * Client-side pagination over an already filtered + sorted list. `resetKey`
+ * (e.g. the serialised filters/sort) jumps back to page 1 when it changes.
+ */
+export function useClientPagination<T>(rows: T[], { initialPageSize = 50, resetKey = '' }: { initialPageSize?: number; resetKey?: string } = {}) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(initialPageSize);
+  const [key, setKey] = useState(resetKey);
+  if (key !== resetKey) {
+    setKey(resetKey);
+    setPage(1);
+  }
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const current = Math.min(page, pages);
+  const pageRows = rows.slice((current - 1) * pageSize, current * pageSize);
+  return {
+    pageRows,
+    pagerProps: {
+      page: current,
+      pageSize,
+      total: rows.length,
+      onPage: setPage,
+      onPageSize: (n: number) => {
+        setPageSize(n);
+        setPage(1);
+      },
+      pageSizeOptions: CLIENT_PAGE_SIZES,
+    },
+  };
+}
