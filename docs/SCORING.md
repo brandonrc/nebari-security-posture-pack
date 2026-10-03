@@ -63,7 +63,11 @@ expected to be privileged); they are flagged `systemNamespace: true`.
   + 0.3 × workloadPostureScore.
 - **Namespace score** = container-weighted mean of workload scores (more replicas = more
   exposure).
-- **Cluster score** = 0.7 × `vulnScore` + 0.3 × `postureScore`, where
+- **Supply-chain score** per image (DESIGN §12): start 100; −40 unsigned (−20 signed but unverified),
+  −20 no SBOM, −15 no provenance, −15 update available (−25 if a major version behind), −10 mutable tag
+  without digest pin; floor 0. `supplyChainScore` = container-weighted mean over running containers.
+- **Cluster score** = 0.6 × `vulnScore` + 0.25 × `postureScore` + 0.15 × `supplyChainScore`
+  (before §12 ships: 0.7 / 0.3 with supply chain omitted), where
   `vulnScore` = container-weighted mean of imageVulnScore over all running containers with
   a scored image, and `postureScore` = container-weighted mean of workloadPostureScore.
 - `grade` from the table above. Trend compares to previous completed scan.

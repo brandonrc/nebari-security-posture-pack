@@ -338,3 +338,118 @@ pydantic model (system/org/scan metadata, images, findings, workloads, posture r
 scanner status) built by `reports/snapshot.py` from the DB. Generators: `poam.py` (openpyxl),
 `stig.py` (ckl XML via `xml.etree`, cklb JSON), `sar.py` (Jinja2 HTML → PDF via WeasyPrint),
 `oscal.py`, `inventory.py`, `vuln_export.py`. Data: `data/stig_mapping.yaml`, `data/controls.yaml`.
+
+## 12. Supply-chain provenance (superset of provenance-collector-pack)
+
+Goal: everything `nebari-dev/provenance-collector-pack` does, inside this pack, with
+**drop-in API compatibility** so its Grafana dashboards and consumers keep working, and so
+this pack can replace it in NIC. Reference clone:
+`/tmp/claude-1000/-home-geraci/a8c043a6-2ce9-493d-b5c3-2c0b8a63e889/scratchpad/provenance-collector-pack/`
+(see `internal/report/types.go`, `internal/verify/`, `internal/discovery/`,
+`docs/src/content/docs/report-schema.md`, `examples/grafana-dashboard.json`).
+
+### Checks (worker stage `provenance`, runs per unique image after inventory, before/independent of CVE scanning)
+| check | how | result fields |
+|---|---|---|
+| signature | `cosign verify` (key/keyless per `provenance.cosign.*`), else `cosign tree`/referrers lookup for existence | `signature:{signed,verified,error}` |
+| SLSA provenance | OCI referrers API / cosign attestation tags; predicateType `https://slsa.dev/provenance/v1` or v0.2 | `provenance:{hasProvenance,predicateType}` |
+| SBOM | attestation with predicateType spdx/cyclonedx, or `.sbom` tag | `sbom:{hasSBOM,format}` |
+| update check | `skopeo list-tags`, semver parse, `updateLevel` patch/minor/major, `skipPrerelease` | `update:{currentTag,latestInMajor,newestAvailable,updateAvailable}` |
+| Helm releases | read `sh.helm.release.v1.*` secrets cluster-wide (optional RBAC, `provenance.helmReleases.enabled`, default true on grace) | `helmReleases[]` per their schema |
+
+Tools in the worker image: `cosign` (pinned release binary), `skopeo` (already), `oras` optional.
+Results stored per image per scan (`image_provenance` table) and surfaced on `ImageSummary.provenance`
+and `ImageDetail`. SBOM attestations, when present, are downloaded and fed to grype as `sbom:` input
+(faster; `provenance.useSbomForGrype`, default false).
+
+### Compatibility API (served by our API, no auth difference from the rest: admin-gated; a value
+`provenance.compat.internalService` additionally exposes `/api/reports/*` on a ClusterIP Service without
+auth for Grafana Infinity, exactly like their `-web-internal` Service)
+- `GET /api/reports` → `[{filename, generatedAt, sizeBytes}]`
+- `GET /api/reports/latest`, `GET /api/reports/{filename}` → their report JSON **verbatim schema**
+  (`metadata{generatedAt,collectorVersion,clusterName,namespacesScanned}`, `images[]`, `helmReleases[]`,
+  `summary{totalImages,uniqueImages,signedImages,verifiedImages,imagesWithSBOM,imagesWithProvenance,
+  imagesWithUpdates,totalHelmReleases,helmReleasesWithUpdates}`). `collectorVersion` = our version with
+  suffix `+posture`. Generated from the latest done scan; one file per scan (`provenance-<ts>.json`).
+- `GET /api/export?format=csv|json` → their flat export.
+- `GET /api/me`, `POST /api/scan`, `GET /healthz` → aliases to ours.
+Our native endpoints: `GET /api/v1/supply-chain` summary `{signed,verified,withSbom,withProvenance,
+withUpdates,unique,helmReleases,helmWithUpdates,score,grade}`, `GET /api/v1/helm-releases`.
+
+### Scoring and controls
+Supply-chain score per image: start 100; −40 unsigned (−20 signed-but-unverified), −20 no SBOM,
+−15 no provenance, −15 update available (−25 if major behind), −10 mutable tag w/o digest pin.
+Cluster `supplyChainScore` = container-weighted mean. Cluster score becomes
+`0.6 vuln + 0.25 posture + 0.15 supplyChain` (update SCORING.md). Controls: unsigned → CM-14, SR-4;
+no SBOM → SR-4, SA-8(3)… no provenance → SR-3, SR-4, SA-10; update available → SI-2; Helm release
+behind → SI-2, CM-3. Added to `controls.yaml` under `provenance:`.
+
+### UI
+- Images table: three glyph columns Signed / SBOM / Provenance (tooltips with details) and an "update"
+  arrow with latest tag. Image detail: new tab **Supply chain**.
+- New page `/supply-chain`: stat tiles (signed %, verified %, SBOM %, provenance %, updates), Helm releases
+  table (release, namespace, chart, version → latest, status), unsigned/outdated image lists.
+- Overview gains a supply-chain tile; Settings gains the `provenance.*` toggles, cosign key, updateLevel.
+
+## 13. Control evidence engine (phase 2: 800-53 "top to bottom")
+
+Goal: because NIC deploys the whole platform declaratively, assert **control implementation** for the
+technical controls it provides and **prove them continuously** with live checks, producing an OSCAL
+SSP + assessment results an assessor can accept, with per-control status and evidence. Package
+`api/src/posture/controls_engine/`; router `routers/controls.py`; worker stage `controls` after each scan.
+
+### Model
+- `catalog`: NIST SP 800-53 rev5 OSCAL catalog (JSON, vendored, trimmed to id/title/family/class, plus
+  the moderate baseline profile ids) → `GET /compliance/catalog?family=`.
+- `components`: OSCAL component-definitions (YAML in `controls_engine/data/components/*.yaml`) for
+  Keycloak, Envoy Gateway + nebari-operator SecurityPolicy, cert-manager, nebari-operator, Loki/Promtail,
+  Prometheus/Alertmanager, Kubernetes (PodSecurity, RBAC, NetworkPolicy), container registry, this pack
+  itself (RA-5, SI-2, CM-8, SR-4 …). Each: `implemented-requirements[]` with `control-id`, statement
+  text, `inherited: true|false`, and `assertions[]` ids.
+- `assertions`: python functions, each `{id, title, controls[], component, severity, evaluate(ctx) ->
+  {status: pass|fail|unknown|not-applicable, evidence: {...}, detail}}`. Context gives K8s API clients,
+  Keycloak admin client (realm admin secret ref from values `controlsEngine.keycloak.adminSecret`),
+  HTTP client, and the latest scan snapshot. First-cut assertions (≥25):
+  - Keycloak: brute-force detection enabled (AC-7); password policy set (IA-5(1)); admin group members
+    have OTP/MFA required (IA-2(1)); SSO session idle/max timeouts ≤ policy (AC-12, AC-11); realm
+    `rememberMe` off (AC-12); `registrationAllowed` off (AC-2); events + admin events logging enabled
+    with retention (AU-2, AU-12); no users with `admin` realm role beyond allowlist (AC-6(5)).
+  - Gateway: HTTPS listener present and HTTP redirects (SC-8, SC-23); TLS min version ≥1.2 on
+    ClientTrafficPolicy (SC-8(1), SC-13); every NebariApp with `auth.enabled` has a SecurityPolicy or
+    `enforceAtGateway:false` with a documented in-app check (AC-3, IA-2); landing visibility consistent.
+  - cert-manager: ClusterIssuer exists and is Ready (SC-12, SC-17); no expired/near-expiry Certificates
+    (SC-12(1)).
+  - Kubernetes: every non-system namespace has `pod-security.kubernetes.io/enforce` ≥ baseline (CM-6,
+    CM-7); a default-deny ingress NetworkPolicy per app namespace (SC-7(5)); no ClusterRoleBinding to
+    `cluster-admin` for non-system subjects beyond allowlist (AC-6(1)); `default` ServiceAccounts have
+    `automountServiceAccountToken:false` (AC-6(10)); no anonymous auth binding (`system:anonymous`) (AC-14);
+    nodes on supported K8s version (SI-2); metrics-server/Prometheus scraping (AU-6); audit of API
+    server not visible → `unknown` with explanation.
+  - Logging: Loki (or lgtm) reachable and receiving logs from all namespaces within last 10 min (AU-2,
+    AU-12, AU-4 retention value); Alertmanager has at least one receiver (SI-4(5), IR-6).
+  - Registry: in-cluster registry not world-writable / requires auth or is cluster-internal only (CM-14,
+    SR-4); image pull policy / mutable tags covered by posture checks.
+  - This pack: scan ran within `scanIntervalHours`×2 (RA-5(2)); scanner DBs < 72h old (RA-5(2), SI-5);
+    POA&M generated for open findings (CA-5); SLA overdue count = 0 (SI-2(c)).
+- Status derivation per control: `implemented` if all mapped assertions pass, `partial` if some,
+  `planned/not-implemented` if all fail, `inherited` for organizational controls per component-definition,
+  `not-applicable` per baseline tailoring, `unknown` if assertion errored. Rollup per family.
+
+### API
+- `GET /compliance/controls` (extend existing): per control `{control,title,family,baseline,status,
+  components[],assertions:[{id,title,status,evidence,checkedAt}],findingsOpen,checksFailed}`.
+- `GET /compliance/families` → rollup `[{family,title,implemented,partial,notImplemented,inherited,
+  notApplicable,unknown}]`.
+- `GET /compliance/assertions`, `POST /compliance/assertions/run` (202, runs engine now), `GET
+  /compliance/assertions/{id}` (history).
+- Report type `oscal-ssp` (json): OSCAL 1.1.2 `system-security-plan` with `control-implementation.
+  implemented-requirements[]` statuses + by-component + links to evidence; validate against official
+  schema in tests. Report `oscal-ar` now also includes assertion observations. Add `oscal-component-definition`.
+- Settings: `controlsEngine.baseline` (low|moderate|high, default moderate), allowlists for admin
+  subjects, `organization` inherited-controls statement text.
+
+### UI
+- `/compliance` gains tabs: **Controls** (family rollup bar chart + sortable catalog table with status
+  badges, filter by family/status/baseline; row expands to evidence per assertion with "checked at" and
+  raw evidence JSON), **STIG** (existing), **SLA** (existing). Overview gets a "Controls implemented
+  x/y (moderate)" tile. Reports dialog gains `oscal-ssp` and `oscal-component-definition`.
