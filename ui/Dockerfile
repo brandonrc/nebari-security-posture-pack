@@ -11,7 +11,7 @@ RUN npm run build
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 # nginx-unprivileged: runs as uid/gid 101, listens on an unprivileged port.
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 LABEL org.opencontainers.image.title="security-posture-ui" \
       org.opencontainers.image.description="Nebari Security Posture pack UI (static SPA + /api proxy)" \
       org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
