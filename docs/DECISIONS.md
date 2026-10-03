@@ -97,3 +97,35 @@
   secrets. RBAC adds pods and serviceaccounts (needed by the namespace checks) to the §13 list.
   `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
   never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
+
+## Grace deployment status (2026-10-03)
+
+- Deployed tag `cefb217-1790989563` = phase-1 code (`ca2a6a7`) plus the POA&M xlsx fix
+  (`663e268`, cherry-picked locally as `cefb217`); phase-2 code (§12/§13) is not deployed yet.
+  API limit 4Gi (one POA&M xlsx peaks at ~1.06 GiB; nine concurrent reports OOMKilled it at 1Gi).
+- Scan #5 (scheduled, 2026-10-02 20:33-20:40 UTC): 68 images, 67 scored, 1 failed; cluster
+  score 28.2, grade F (vuln 8.3, configuration 74.6); 24,668 consensus findings
+  (777 critical / 6,830 high / 12,410 medium / 3,541 low); posture checks 1,140 pass / 464 fail.
+  Scans #1-#4 failed during the bring-up (worker/Clair OOMKills and redeploys).
+- Scanner coverage on scan #5: trivy 67/68, grype 67/68, clair 61/68.
+- Known failures:
+  - `artifacts.100-89-230-107.sslip.io/ray/ray-polars:2.56.0`: all three scanners and the skopeo
+    mirror fail with `x509: certificate signed by unknown authority`. The node's containerd trusts
+    that registry through `certs.d/.../hosts.toml` (`ca = .../ca.crt`); the worker and Clair pods
+    do not have the CA. Environment configuration, not an adapter bug; needs a CA-bundle mount
+    (chart feature, not implemented).
+  - Clair `unexpected return status: 500` on 6 images (artifact-keeper-backend,
+    postgres:16-alpine, dependencytrack/apiserver, opensearch, 2x artifact-keeper-scanner-adapter):
+    exactly the first parallelism-6 batch at 20:33:42, while the Clair Deployment was being
+    rolled (helm revision 5 at 20:33:28 changed its memory limit). The new Clair pod never
+    received those requests (its log has no 5xx), so the old, terminating pod answered them.
+    Transient, not an adapter bug; the stale-on-scanner-error rule (`a1b71f3`) rescans these
+    images on the next scan. The adapter does not retry 5xx.
+- Report verification from scan #5 (admin via the gateway, sequential): every type/format
+  generates; POA&M xlsx 86 s (previously >15 min, quadratic), SAR PDF 125 s / 199 pages, OSCAL AR
+  81 MB valid against the OSCAL 1.1.2 schema.
+- Grace hazard: creating a docker network (e.g. `ui/screenshots/run.sh` creates `sp-shots`) adds a
+  host IP; MicroK8s `apiserver-kicker` then regenerates certs and restarts kubelite and containerd,
+  killing every pod for ~40 s (2026-10-03 00:45). Use `--network host` or an existing network.
+- Capacity: node memory requests are 99% allocated; the root filesystem (hostpath PVCs, local
+  registry) is 98% full (7.7 GB free); the Clair database is 8 GB of the 10Gi postgres PVC.
