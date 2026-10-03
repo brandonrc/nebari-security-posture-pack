@@ -481,7 +481,8 @@ def engine_config(env: Any, st: Any) -> EngineConfig:
 async def load_snapshot(session: AsyncSession, st: Any | None = None) -> dict[str, Any]:
     """Pack evidence for `pack-*` / workload assertions, from the DB (read-only)."""
     from .. import app_settings
-    from ..db.models import ConsensusFindingRow, ContainerRow, Image, PostureResultRow, Report, ScannerStatus
+    from ..db.models import (ConsensusFindingRow, ContainerRow, Image, PostureResultRow, Report, Scan,
+                             ScannerStatus)
     from ..routers.summary import compute_sla_overdue
     from ..views import latest_done_scan
 
@@ -497,6 +498,15 @@ async def load_snapshot(session: AsyncSession, st: Any | None = None) -> dict[st
         return snap
     snap["lastDoneScan"] = {"id": last.id, "finishedAt": last.finished_at, "inventoryComplete": last.inventory_complete,
                             "imagesTotal": last.images_total, "score": last.score, "grade": last.grade}
+    # Targeted scans (pod-watcher event scans, image rescans) refresh the inventory and posture
+    # checks but scan only a few images and generate no reports: RA-5 recency and the POA&M
+    # check are judged against the latest full scan (the scheduler's definition).
+    full = (await session.execute(select(Scan).where(
+        Scan.status == "done", Scan.target_image_ids.is_(None), Scan.target_namespaces.is_(None))
+        .order_by(Scan.id.desc()).limit(1))).scalar_one_or_none()
+    snap["lastFullScan"] = None if full is None else {
+        "id": full.id, "finishedAt": full.finished_at, "imagesTotal": full.images_total, "score": full.score,
+        "grade": full.grade}
     snap["openFindings"] = int(await session.scalar(
         select(func.count()).select_from(ConsensusFindingRow).join(Image, Image.id == ConsensusFindingRow.image_id)
         .where(Image.running.is_(True))) or 0)

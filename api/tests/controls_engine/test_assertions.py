@@ -318,6 +318,22 @@ async def test_poam_not_needed_without_open_items():
     assert (await run_one(get_assertion("pack-poam-current"), make_ctx(w), 5)).status == "pass"
 
 
+async def test_event_scans_do_not_count_as_full_scans():
+    """A pod-watcher event scan (targeted, no reports) newer than the last full scan neither
+    satisfies RA-5 recency nor makes the full scan's POA&M look stale (grace, scan 15 vs 13)."""
+    w = good_world()
+    full = dict(w["snapshot"]["lastDoneScan"])
+    w["snapshot"]["lastDoneScan"].update(id=full["id"] + 2)  # the event scan
+    w["snapshot"]["lastFullScan"] = full
+    w["snapshot"]["latestPoam"].update(scanId=full["id"])
+    assert (await run_one(get_assertion("pack-poam-current"), make_ctx(w), 5)).status == "pass"
+    w["snapshot"]["lastFullScan"] = dict(full, finishedAt=NOW - timedelta(hours=20))
+    out = await run_one(get_assertion("pack-scan-recent"), make_ctx(w), 5)
+    assert out.status == "fail" and out.evidence["scanId"] == full["id"]
+    w["snapshot"]["lastFullScan"] = None  # only targeted scans ever finished
+    assert (await run_one(get_assertion("pack-scan-recent"), make_ctx(w), 5)).status == "fail"
+
+
 async def test_http_error_types():
     w = good_world()
     w["http"][f"{PROM}/api/v1/targets"] = httpx.ReadTimeout("slow", request=httpx.Request("GET", PROM))

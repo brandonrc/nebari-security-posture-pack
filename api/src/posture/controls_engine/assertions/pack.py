@@ -17,6 +17,11 @@ def _snap(ctx: EngineContext) -> dict[str, Any]:
     return ctx.snapshot
 
 
+def _full_scan(snap: dict[str, Any]) -> dict[str, Any] | None:
+    """Latest done full scan; snapshots without the key (older callers, tests) use lastDoneScan."""
+    return snap["lastFullScan"] if "lastFullScan" in snap else snap.get("lastDoneScan")
+
+
 def _ts(v: Any) -> datetime | None:
     if v is None or isinstance(v, datetime):
         return v.replace(tzinfo=v.tzinfo or UTC) if v else None
@@ -35,9 +40,10 @@ def _age_h(v: Any) -> float | None:
            controls=["RA-5"],
            objectives=["ra-5_obj.a-2"], component=C, severity="high")
 async def scan_recent(ctx: EngineContext) -> Result:
-    """The latest completed scan finished less than 2 x `scanIntervalHours` ago."""
+    """The latest completed full scan finished less than 2 x `scanIntervalHours` ago (targeted
+    event / image rescans do not count)."""
     snap = _snap(ctx)
-    last = snap.get("lastDoneScan")
+    last = _full_scan(snap)
     interval = float(snap.get("scanIntervalHours") or ctx.config.scan_interval_hours)
     if not last:
         return failed("no vulnerability scan has completed yet", scanIntervalHours=interval)
@@ -75,9 +81,10 @@ async def scanner_db_fresh(ctx: EngineContext) -> Result:
 @assertion(id="pack-poam-current", title="A POA&M exists for the latest scan's open findings", controls=["CA-5"], objectives=["ca-5_obj.a"],
            component=C, severity="medium")
 async def poam_current(ctx: EngineContext) -> Result:
-    """When the latest scan has open findings or failing checks, a POA&M report was generated from it."""
+    """When the latest full scan has open findings or failing checks, a POA&M report was generated
+    from it (targeted event scans generate no reports)."""
     snap = _snap(ctx)
-    last = snap.get("lastDoneScan")
+    last = _full_scan(snap)
     if not last:
         return unknown("no completed scan yet")
     open_items = int(snap.get("openFindings") or 0) + len(snap.get("postureFailures") or [])
