@@ -303,6 +303,11 @@
   (`2Gi`; config accepts quantities), `HISTORY_RETAIN_SCANS` (30). `auth.issuers` defaults to the
   in-cluster issuer (the API refuses an empty list); `auth.mode=disabled` fails the render because
   the chart never sets `POSTURE_DEV`.
+- **Wired ahead of the code (architecture M7/m11, in progress):** `MIRROR_MODE`
+  (`scanner.mirror.mode`, "" = `registry` with Clair, else `local`), `IMAGE_CACHE_MAX_BYTES`
+  (`scanner.mirror.imageCacheMaxBytes` 8Gi, below the 15Gi worker PVC; the code default of 20 GiB
+  would not fit), `EVENT_SCANS_ENABLED` / `EVENT_SCAN_DEBOUNCE_SECONDS` (`scanner.events`), scan
+  worker only. The reader ClusterRole already has `watch` on pods.
 - **grace values:** split workers, report-worker 4Gi, Clair on (8Gi) with
   `clair.postgres.dedicated: false` (no re-ingest of its 8 GB DB), main Postgres 2 CPU / 2Gi with
   512MB shared_buffers, PVC sizes kept, `iUnderstandClusterSecretsRead: true`, requests kept small

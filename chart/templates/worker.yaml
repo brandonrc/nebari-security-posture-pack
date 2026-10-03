@@ -92,6 +92,14 @@ spec:
               value: {{ .Values.scanner.grype.maxConcurrent | quote }}
             - name: SCAN_MAX_IMAGE_GB
               value: {{ .Values.scanner.maxImageGB | quote }}
+            - name: MIRROR_MODE
+              value: {{ .Values.scanner.mirror.mode | default (ternary "registry" "local" .Values.scanner.clair.enabled) | quote }}
+            - name: IMAGE_CACHE_MAX_BYTES
+              value: {{ .Values.scanner.mirror.imageCacheMaxBytes | quote }}
+            - name: EVENT_SCANS_ENABLED
+              value: {{ .Values.scanner.events.enabled | quote }}
+            - name: EVENT_SCAN_DEBOUNCE_SECONDS
+              value: {{ .Values.scanner.events.debounceSeconds | quote }}
             {{- end }}
             {{- if .Values.registryAuth.existingSecret }}
             - name: DOCKER_CONFIG

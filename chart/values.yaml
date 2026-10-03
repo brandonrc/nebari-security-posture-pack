@@ -167,10 +167,23 @@ scanner:
     # Turning it on raises confidence (scanner agreement), not coverage. It gets
     # its own Postgres (clair.postgres) unless clair.postgres.dedicated=false.
     enabled: false
+  # Pod watcher (EVENT_SCANS_ENABLED): targeted scans of new digests shortly
+  # after a pod starts, between scheduled scans (reader ClusterRole `watch`).
+  events:
+    enabled: true
+    debounceSeconds: 60
   mirror:
     # skopeo-copy each digest into an in-cluster registry before scanning so
     # all three scanners see identical bytes and upstreams are pulled once.
     enabled: true
+    # MIRROR_MODE: registry (copy into `registry`; required by Clair) | local
+    # (per-digest OCI layout on the worker PVC, scanned in place; no registry
+    # needed) | off. "" = registry when Clair is enabled, else local.
+    mode: ""
+    # IMAGE_CACHE_MAX_BYTES: cap of the local OCI layout cache on the worker
+    # PVC (persistence.worker also holds the grype DB ~3 GB and trivy client
+    # cache ~1.5 GB).
+    imageCacheMaxBytes: 8Gi
     registry: registry.container-registry.svc.cluster.local:5000
     # Plain-HTTP registry.
     insecure: true

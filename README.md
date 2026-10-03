@@ -174,6 +174,8 @@ The table lists the main settings. For everything else, see the comments in
 | `scanner.clair.enabled` | `false` | Clair (opt-in): ~8 GB database, 7.5 GiB spikes, updater egress, 0.2 % unique findings on grace. Raises confidence, not coverage. |
 | `clair.postgres.dedicated` / `size` | `true` / `15Gi` | Clair's own Postgres StatefulSet; `false` keeps its database on the main Postgres. |
 | `scanner.mirror.enabled/registry/insecure/rewrite` | on, in-cluster registry | Mirror-then-scan. |
+| `scanner.mirror.mode` / `imageCacheMaxBytes` | `""` (registry with Clair, else local) / `8Gi` | Mirror into the registry, a local OCI layout cache on the worker PVC, or off. |
+| `scanner.events.enabled` / `debounceSeconds` | `true` / `60` | Targeted scans of new digests from a pod watcher. |
 | `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the workers for private registries. |
 | `provenance.helmReleases.enabled` / `iUnderstandClusterSecretsRead` | `false` / `false` | Helm release discovery needs get/list on every Secret (bound to `<fullname>-controls` only); both must be true. |
 | `provenance.cosign.lockTrustSettings` | `true` | Cosign trust anchors only from values; the UI cannot change them. |
