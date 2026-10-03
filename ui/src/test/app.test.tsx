@@ -122,6 +122,28 @@ describe('Supply chain', () => {
     expect(within(await screen.findByRole('table', { name: 'Unsigned images' })).getAllByLabelText('Signature: unsigned').length).toBeGreaterThan(0);
   });
 
+  it('leaves stale images out of the fallback tiles and the unsigned/outdated lists', async () => {
+    const base = { registry: 'r', repository: 'x', tags: [], digest: null, score: 50, grade: 'C', confidence: 'normal', counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }, fixable: {}, scanners: {}, agreementIndex: null, namespaces: ['app'], workloads: 1, containers: 1, lastScannedAt: null, mirrored: false, warnings: [] };
+    const unsigned = { signature: { signed: false, verified: false }, update: { currentTag: '1.0.0', newestAvailable: '2.0.0', updateAvailable: true } };
+    const items = [
+      { ...base, id: 'live', ref: 'ghcr.io/org/live:1.0.0', tag: '1.0.0', running: true, current: true, provenance: unsigned },
+      { ...base, id: 'job', ref: 'ghcr.io/org/job:1.0.0', tag: '1.0.0', running: false, current: true, provenance: { ...unsigned, signature: { signed: true, verified: true } } },
+      { ...base, id: 'old', ref: 'localhost:32000/old:1.0.0', tag: '1.0.0', running: false, current: false, provenance: unsigned },
+    ];
+    server.use(
+      http.get('*/api/v1/supply-chain', () => HttpResponse.json({ detail: 'not found' }, { status: 404 })),
+      // an API that ignores ?current=true: the page must still filter client-side
+      http.get('*/api/v1/images', () => HttpResponse.json({ items, total: items.length, page: 1, pageSize: 500 })),
+    );
+    renderApp('/supply-chain');
+    expect(await screen.findByText('1 of 2 images lack a verified cosign signature')).toBeInTheDocument();
+    expect(screen.getAllByText('1 of 2 images').length).toBeGreaterThan(0); // Signed / Verified tiles
+    const unsignedTable = screen.getByRole('table', { name: 'Unsigned images' });
+    expect(within(unsignedTable).getByText('ghcr.io/org/live:1.0.0')).toBeInTheDocument();
+    expect(within(unsignedTable).queryByText('localhost:32000/old:1.0.0')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('table', { name: 'Outdated images' })).queryByText('localhost:32000/old:1.0.0')).not.toBeInTheDocument();
+  });
+
   it('shows signed / SBOM / provenance glyphs and update chips on the images table', async () => {
     renderApp('/images');
     const table = await screen.findByRole('table', { name: 'Images' });

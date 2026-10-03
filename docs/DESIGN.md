@@ -178,7 +178,7 @@ Endpoints:
 |---|---|
 | `GET /health`, `GET /ready` | `{status:"ok"}` (ready checks DB) |
 | `GET /me` | `{username,email,groups[],isAdmin}` |
-| `GET /summary` | `{score,grade,vulnScore,postureScore,generatedAt,lastScan:{id,status,startedAt,finishedAt,imagesTotal,imagesDone,imagesFailed},counts:{critical,high,medium,low,negligible,unknown},fixable:{critical,high,...},images:{total,scanned,failed},workloads,namespaces,scanners:[{name,version,dbUpdatedAt,healthy,lastError}],trend:[{scanId,finishedAt,score,grade,critical,high}] (last 30), topRisks:[{imageId,ref,score,grade,critical,high,workloads}] (10), checks:{passed,failed,total}}` |
+| `GET /summary` | `{score,grade,vulnScore,postureScore,generatedAt,lastScan:{id,status,startedAt,finishedAt,imagesTotal,imagesDone,imagesFailed},counts:{critical,high,medium,low,negligible,unknown},fixable:{critical,high,...},images:{total,scanned,failed,running} (latest done scan's unique images; DECISIONS 2026-10-03),workloads,namespaces,scanners:[{name,version,dbUpdatedAt,healthy,lastError}],trend:[{scanId,finishedAt,score,grade,critical,high}] (last 30), topRisks:[{imageId,ref,score,grade,critical,high,workloads}] (10), checks:{passed,failed,total}}` |
 | `GET /images?namespace=&grade=&severity=&q=&sort=&order=&page=&pageSize=` | `{items:[ImageSummary],total,page,pageSize}` |
 | `GET /images/{id}` | `ImageDetail` = ImageSummary + `findings:[Finding]` + `usedBy:[ContainerRef]` + `scans:[ScannerRun]` + `postureFindings` |
 | `GET /vulnerabilities?severity=&q=&fixable=&page=` | CVE-centric: `{items:[{vulnId,severity,scanners[],agreement,imagesAffected,workloadsAffected,fixAvailable,cvss,title,url}],total}` |

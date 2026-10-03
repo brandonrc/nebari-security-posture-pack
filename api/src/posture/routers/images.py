@@ -16,6 +16,7 @@ from ..severity import SEVERITIES, severity_rank
 from ..views import (
     container_ref,
     counts_of,
+    current_image_ids,
     finding_dict,
     image_scan_dict,
     image_summary,
@@ -40,7 +41,7 @@ SORT_KEYS = {
 
 
 def filter_images(items: list[dict[str, Any]], namespace: str | None, grade: str | None, severity: str | None,
-                  q: str | None, running: bool | None) -> list[dict[str, Any]]:
+                  q: str | None, running: bool | None, current: bool | None = None) -> list[dict[str, Any]]:
     out = items
     if namespace:
         nss = set(namespace.split(","))
@@ -56,6 +57,8 @@ def filter_images(items: list[dict[str, Any]], namespace: str | None, grade: str
         out = [d for d in out if ql in d["ref"].lower() or ql in (d["digest"] or "").lower()]
     if running is not None:
         out = [d for d in out if d["running"] == running]
+    if current is not None:
+        out = [d for d in out if (d.get("current") is not False) == current]
     return out
 
 
@@ -66,6 +69,7 @@ async def list_images(
     severity: str | None = None,
     q: str | None = None,
     running: bool | None = None,
+    current: bool | None = None,
     sort: str = "score",
     order: str | None = None,
     page: int = 1,
@@ -74,7 +78,11 @@ async def list_images(
 ) -> dict[str, Any]:
     page, page_size = page_params(page, pageSize)
     imgs = (await session.execute(select(Image))).scalars().all()
-    items = filter_images([image_summary(i) for i in imgs], namespace, grade, severity, q, running)
+    cur = await current_image_ids(session)
+    items = [image_summary(i) for i in imgs]
+    for d in items:  # in the latest done scan's inventory (False = stale); None before any scan
+        d["current"] = None if cur is None else d["id"] in cur
+    items = filter_images(items, namespace, grade, severity, q, running, current)
     keyfn = SORT_KEYS.get(sort, SORT_KEYS["score"])
     default_desc = sort not in ("score", "ref", "grade")
     desc = (order or ("desc" if default_desc else "asc")).lower() == "desc"

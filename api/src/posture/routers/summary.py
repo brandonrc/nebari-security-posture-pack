@@ -13,11 +13,13 @@ from ..severity import zero_counts
 from ..views import (
     SCANNERS,
     counts_of,
+    current_image_ids,
     freshness_warnings,
     iso,
     latest_done_scan,
     scanner_dict,
     scanner_rows,
+    scanner_succeeded,
     sla_due,
     utcnow,
 )
@@ -48,16 +50,23 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
 
     running_imgs = (await session.execute(select(Image).where(Image.running.is_(True)))).scalars().all()
     counts, fixable = zero_counts(), zero_counts()
-    scanned = failed = 0
     for img in running_imgs:
         if img.score is not None:
-            scanned += 1
             for k, v in counts_of(img.counts).items():
                 counts[k] += v
             for k, v in counts_of(img.fixable).items():
                 fixable[k] += v
-        elif img.last_scanned_at is not None:
-            failed += 1
+    # images.*: the latest done scan's unique images (same set as its imagesTotal), so the
+    # Overview agrees with the scan row; `running` = those with a Running pod (counts above).
+    current_ids = await current_image_ids(session, latest)
+    if current_ids is None:  # no completed scan yet
+        current_imgs = list(running_imgs)
+    else:
+        current_imgs = list((await session.execute(
+            select(Image).where(Image.id.in_(current_ids or {-1})))).scalars())
+    images = {"total": len(current_imgs), "scanned": sum(1 for i in current_imgs if i.score is not None),
+              "failed": sum(1 for i in current_imgs if i.score is None and not scanner_succeeded(i)),
+              "running": sum(1 for i in current_imgs if i.running)}
 
     workloads = namespaces = 0
     checks = {"passed": 0, "failed": 0, "total": 0}
@@ -119,7 +128,7 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
         },
         "counts": counts,
         "fixable": fixable,
-        "images": {"total": len(running_imgs), "scanned": scanned, "failed": failed},
+        "images": images,
         "workloads": workloads,
         "namespaces": namespaces,
         "scanners": scanners,

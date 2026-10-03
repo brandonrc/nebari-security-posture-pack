@@ -200,3 +200,29 @@ async def test_04_disabled_restores_old_weights(env):
     assert scan["score"] == round(0.7 * scan["vulnScore"] + 0.3 * scan["postureScore"], 1)
     assert len((await c.get("/api/reports")).json()) == 2  # scan 3 has no provenance results
     await c.put("/api/v1/settings", json={"provenance": {"enabled": True}})
+
+
+async def test_05_stale_images_excluded_by_default(env):
+    """Images missing from the latest done scan's inventory are stale: /supply-chain,
+    /summary and /images?current=true leave them out (includeStale=true adds them back)."""
+    c = env["client"]
+    from sqlalchemy import delete, func, select
+
+    from posture.db.models import ContainerRow, Image, Scan
+
+    async with env["sm"]() as s, s.begin():
+        latest = await s.scalar(select(func.max(Scan.id)).where(Scan.status == "done"))
+        bb = (await s.execute(select(Image).where(Image.ref.like("%busybox%")))).scalar_one()
+        await s.execute(delete(ContainerRow).where(ContainerRow.scan_id == latest, ContainerRow.image_fk == bb.id))
+    sc = (await c.get("/api/v1/supply-chain")).json()
+    assert sc["unique"] == 2 and sc["stale"] == 1 and sc["includeStale"] is False
+    assert {u["ref"] for u in sc["unsigned"]} == {"docker.io/library/alpine:3.17.0"}
+    full = (await c.get("/api/v1/supply-chain", params={"includeStale": "true"})).json()
+    assert full["unique"] == 3 and full["stale"] == 0
+    assert {u["ref"] for u in full["unsigned"]} == {"docker.io/library/alpine:3.17.0", "docker.io/library/busybox:latest"}
+    s = (await c.get("/api/v1/summary")).json()
+    assert s["supplyChain"]["unique"] == 2
+    assert s["images"] == {"total": 2, "scanned": 2, "failed": 0, "running": 2}
+    stale = (await c.get("/api/v1/images", params={"current": "false"})).json()["items"]
+    assert [i["ref"] for i in stale] == ["docker.io/library/busybox:latest"] and stale[0]["current"] is False
+    assert (await c.get("/api/v1/images", params={"current": "true"})).json()["total"] == 2

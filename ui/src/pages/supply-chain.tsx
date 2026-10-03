@@ -12,29 +12,11 @@ import { DataTable, type DataTableColumnDef } from '@/components/ui/data-table';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { asRows } from '@/lib/format';
 import { gradeForScore } from '@/lib/scoring';
-import { latestTag, percent, updateLevel } from '@/lib/supply-chain';
+import { deriveSupplyChainSummary, isCurrentImage, latestTag, percent, updateLevel } from '@/lib/supply-chain';
 import { cn } from '@/lib/utils';
 
 type HelmRow = HelmRelease & Record<string, unknown>;
 const LEVEL_RANK = { major: 3, minor: 2, patch: 1 } as const;
-
-/** Fallback when `GET /supply-chain` isn't available: derive the summary from images + releases. */
-function deriveSummary(images: ImageSummary[], releases: HelmRelease[], score: number | null | undefined): SupplyChainSummary {
-  const p = images.map((i) => i.provenance);
-  const s = score ?? null;
-  return {
-    signed: p.filter((x) => x?.signature?.signed).length,
-    verified: p.filter((x) => x?.signature?.verified).length,
-    withSbom: p.filter((x) => x?.sbom?.hasSBOM).length,
-    withProvenance: p.filter((x) => x?.provenance?.hasProvenance).length,
-    withUpdates: p.filter((x) => x?.update?.updateAvailable).length,
-    unique: images.length,
-    helmReleases: releases.length,
-    helmWithUpdates: releases.filter((r) => r.update?.updateAvailable).length,
-    score: s,
-    grade: gradeForScore(s),
-  };
-}
 
 function Meter({ value }: { value: number | null }) {
   return (
@@ -172,10 +154,12 @@ export function SupplyChainPage() {
   const sc = useSupplyChain();
   const summary = useSummary();
   const helm = useHelmReleases();
-  const imagesQuery = useImages({ pageSize: 500, sort: 'ref', order: 'asc' });
-  const images = imagesQuery.data?.items ?? [];
+  // current images only (the API's default); the client-side filter covers APIs that ignore `current`
+  const imagesQuery = useImages({ pageSize: 500, sort: 'ref', order: 'asc', current: true });
+  const allImages = imagesQuery.data?.items ?? [];
+  const images = allImages.filter(isCurrentImage);
   const releases = helm.data ?? [];
-  const data: SupplyChainSummary | null = sc.data ?? (imagesQuery.data ? deriveSummary(images, releases, summary.data?.supplyChainScore) : null);
+  const data: SupplyChainSummary | null = sc.data ?? (imagesQuery.data ? deriveSupplyChainSummary(allImages, releases, summary.data?.supplyChainScore) : null);
   const hasProvenance = images.some((i) => i.provenance);
 
   const unsigned = images.filter((i) => i.provenance?.signature && !i.provenance.signature.verified);

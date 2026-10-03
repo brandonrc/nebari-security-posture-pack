@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeControlStatus, baselineCoverage, inBaseline, lowestBaseline, rollupFamilies, compareControlId } from './controls';
-import { clusterScore, clusterWeights, latestTag, parseSemver, semverDiff, supplyChainDeductions, supplyChainScore, updateLevel } from './supply-chain';
+import { clusterScore, clusterWeights, deriveSupplyChainSummary, isCurrentImage, latestTag, parseSemver, semverDiff, supplyChainDeductions, supplyChainScore, updateLevel } from './supply-chain';
 
 const signedVerified = { signed: true, verified: true };
 
@@ -104,5 +104,21 @@ describe('control helpers (DESIGN §13)', () => {
   });
   it('orders control ids naturally', () => {
     expect(['AC-10', 'AC-2(1)', 'AC-2', 'AU-2'].sort(compareControlId)).toEqual(['AC-2', 'AC-2(1)', 'AC-10', 'AU-2']);
+  });
+});
+
+describe('deriveSupplyChainSummary (fallback without GET /supply-chain)', () => {
+  const img = (id: string, current: boolean | null | undefined, signed: boolean) =>
+    ({ id, ref: id, current, provenance: { signature: { signed, verified: false }, update: { currentTag: '1', updateAvailable: !signed } } }) as unknown as import('@/api/types').ImageSummary;
+
+  it('counts only images in the latest done scan (stale ones excluded)', () => {
+    const s = deriveSupplyChainSummary([img('a', true, true), img('b', true, false), img('old', false, false), img('new', undefined, false)], [], 50);
+    expect(s).toMatchObject({ unique: 3, signed: 1, withUpdates: 2, stale: 1, score: 50 });
+  });
+
+  it('treats unknown currency (before any scan) as current', () => {
+    expect(isCurrentImage({ current: null })).toBe(true);
+    expect(isCurrentImage({})).toBe(true);
+    expect(isCurrentImage({ current: false })).toBe(false);
   });
 });

@@ -42,6 +42,23 @@ async def latest_done_scan(session: AsyncSession) -> Scan | None:
     )).scalar_one_or_none()
 
 
+async def current_image_ids(session: AsyncSession, scan: Scan | None = None) -> set[int] | None:
+    """Unique images in the inventory of `scan` (default: the latest done scan), i.e. the
+    images deployed in the cluster at that scan; the same set as the scan's image count.
+    Images seen only in older scans are *stale*. None when no scan has completed."""
+    scan = scan or await latest_done_scan(session)
+    if scan is None:
+        return None
+    rows = await session.execute(
+        select(ContainerRow.image_fk).where(ContainerRow.scan_id == scan.id, ContainerRow.image_fk.isnot(None))
+        .distinct())
+    return {int(i) for (i,) in rows}
+
+
+def scanner_succeeded(img: Image) -> bool:
+    return any((r or {}).get("status") == "ok" for r in (img.scanners or {}).values())
+
+
 def scan_dict(s: Scan) -> dict[str, Any]:
     return {
         "id": s.id,

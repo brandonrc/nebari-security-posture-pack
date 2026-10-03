@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +15,7 @@ from ..provenance.models import HelmReleaseRow, ImageProvenance
 from ..provenance.report import report_scans
 from ..provenance.scoring import cluster_supply_chain_score
 from ..scoring import grade
-from ..views import iso
+from ..views import current_image_ids, iso
 
 router = APIRouter(tags=["supply-chain"])
 
@@ -39,14 +39,18 @@ async def latest_provenance_scan(session: AsyncSession) -> Scan | None:
     return scans[0] if scans else None
 
 
-async def supply_chain_summary(session: AsyncSession, include_lists: bool = False) -> dict[str, Any]:
+async def supply_chain_summary(session: AsyncSession, include_lists: bool = False,
+                               include_stale: bool = False) -> dict[str, Any]:
+    """Aggregates over the provenance scan's images. By default only images in the latest
+    done scan's inventory count (`views.current_image_ids`), so the numbers match the scan's
+    image count; `include_stale` adds images that are no longer deployed."""
     settings = await app_settings.load(session)
     ps = settings.provenance
     scan = await latest_provenance_scan(session)
     out: dict[str, Any] = {
         "enabled": ps.enabled, "signed": 0, "verified": 0, "withSbom": 0, "withProvenance": 0, "withUpdates": 0,
         "unique": 0, "helmReleases": 0, "helmWithUpdates": 0, "errors": 0, "score": None, "grade": "?",
-        "scanId": None, "checkedAt": None,
+        "scanId": None, "checkedAt": None, "includeStale": include_stale, "stale": 0,
         "verificationConfigured": bool(ps.verify_signatures and (ps.cosign_public_key or (
             ps.cosign_certificate_identity_regexp and ps.cosign_certificate_oidc_issuer_regexp))),
         "checks": {"signatures": ps.verify_signatures, "sbom": ps.check_sbom, "provenance": ps.check_provenance,
@@ -60,6 +64,10 @@ async def supply_chain_summary(session: AsyncSession, include_lists: bool = Fals
         select(ImageProvenance, Image).join(Image, Image.id == ImageProvenance.image_id)
         .where(ImageProvenance.scan_id == scan.id).order_by(Image.ref)
     )).all())
+    current = None if include_stale else await current_image_ids(session)
+    if current is not None:
+        out["stale"] = sum(1 for _, img in rows if img.id not in current)
+        rows = [(p, img) for p, img in rows if img.id in current]
     helm = list((await session.execute(select(HelmReleaseRow).where(HelmReleaseRow.scan_id == scan.id))).scalars())
     out["scanId"] = scan.id
     out["checkedAt"] = iso(max((p.checked_at for p, _ in rows), default=None))
@@ -102,8 +110,9 @@ async def supply_chain_summary(session: AsyncSession, include_lists: bool = Fals
 
 
 @router.get("/supply-chain")
-async def supply_chain(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
-    return await supply_chain_summary(session, include_lists=True)
+async def supply_chain(include_stale: bool = Query(False, alias="includeStale"),
+                       session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    return await supply_chain_summary(session, include_lists=True, include_stale=include_stale)
 
 
 @router.get("/helm-releases")

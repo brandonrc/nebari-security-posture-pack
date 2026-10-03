@@ -188,7 +188,8 @@ async def test_02_scan_pipeline(env):
 
     s = (await c.get("/summary")).json()
     assert s["score"] is not None and s["grade"] in "ABCDF"
-    assert s["images"] == {"total": 2, "scanned": 2, "failed": 0}  # busybox job pod not running
+    # the scan's 3 unique images (imagesTotal), incl. the busybox job pod that is not running
+    assert s["images"] == {"total": 3, "scanned": 3, "failed": 0, "running": 2}
     assert s["workloads"] == 3 and s["namespaces"] == 3
     assert len(s["trend"]) == 1 and s["topRisks"][0]["ref"] == "docker.io/library/alpine:3.17.0"
     assert s["counts"]["critical"] == 1 and s["counts"]["high"] == 2
@@ -312,3 +313,26 @@ async def test_04_cancel_and_settings(env):
     async with env["sm"]() as s, s.begin():
         await s.execute(update(ConsensusFindingRow).values(first_seen_at=datetime.now(UTC) - timedelta(days=60)))
     assert (await c.get("/summary")).json()["slaOverdue"] == {"critical": 1, "high": 2, "medium": 0, "low": 0}
+
+
+async def test_05_summary_images_match_latest_scan(env):
+    """/summary.images counts the latest done scan's unique images: an image no longer in
+    the inventory (stale) is not counted, one with no successful scanner is `failed`."""
+    c = env["client"]
+    from posture.db.models import Image
+
+    async with env["sm"]() as s, s.begin():
+        s.add(Image(key="old/stale@sha256:" + "9" * 64, ref="localhost:32000/old:1", registry_host="localhost:32000",
+                    repository="old", tag="1", score=50.0, grade="F", running=False, counts={}, fixable={},
+                    scanners={}, warnings=[], tags=[], namespaces=[]))
+    before = (await c.get("/summary")).json()["images"]
+    assert before == {"total": 3, "scanned": 3, "failed": 0, "running": 2}
+    imgs = (await c.get("/images")).json()
+    assert imgs["total"] == 4 and next(i for i in imgs["items"] if i["ref"] == "localhost:32000/old:1")["current"] is False
+    assert (await c.get("/images", params={"current": "true"})).json()["total"] == 3
+    from sqlalchemy import update
+
+    async with env["sm"]() as s, s.begin():  # busybox: every scanner failed, no score
+        await s.execute(update(Image).where(Image.ref.like("%busybox%")).values(
+            score=None, scanners={"trivy": {"status": "error"}, "grype": {"status": "error"}}))
+    assert (await c.get("/summary")).json()["images"] == {"total": 3, "scanned": 2, "failed": 1, "running": 2}

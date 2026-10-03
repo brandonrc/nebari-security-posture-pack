@@ -191,6 +191,8 @@ export const handlers = [
     }
     if (severity) items = items.filter((i) => (Object.entries(i.counts) as [Severity, number][]).some(([s, n]) => n > 0 && severityRank(s) >= severityRank(severity)));
     if (q) items = items.filter((i) => i.ref.toLowerCase().includes(q) || (i.digest ?? '').includes(q));
+    const current = url.searchParams.get('current');
+    if (current !== null) items = items.filter((i) => (i.current !== false) === (current === 'true'));
     items = sortImages(items, sort, order);
     return HttpResponse.json({ items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, pageSize });
   }),

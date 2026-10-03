@@ -118,6 +118,9 @@ The rest of our API does too. Theirs only needs any authenticated user.
 
 Native endpoints: `GET /api/v1/supply-chain` returns counts, score/grade, check toggles
 and lists (`unsigned`, `unverified`, `outdated`, `withoutSbom`, `withoutProvenance`).
+Counts and lists cover only images in the latest done scan's inventory (the scan's image
+count); `stale` says how many were left out and `?includeStale=true` adds them back.
+`GET /api/v1/images` carries `current` (false = stale) and accepts `?current=true|false`.
 `GET /api/v1/helm-releases?namespace=` returns their `HelmRecord` plus `revision`,
 `lastDeployed`, `chartSource` and `scanId`. `/api/v1/summary` gains `supplyChainScore`
 and `supplyChain`. `ImageSummary.provenance` carries `{checkedAt, signature, sbom,

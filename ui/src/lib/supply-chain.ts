@@ -1,4 +1,4 @@
-import type { Grade, ImageProvenance, SupplyChainDeduction, UpdateInfo, UpdateLevel } from '@/api/types';
+import type { Grade, HelmRelease, ImageProvenance, ImageSummary, SupplyChainDeduction, SupplyChainSummary, UpdateInfo, UpdateLevel } from '@/api/types';
 import { gradeForScore } from './scoring';
 
 /**
@@ -113,4 +113,34 @@ export function clusterScore(vuln: number | null | undefined, posture: number | 
 export function percent(n: number | null | undefined, of: number | null | undefined): number | null {
   if (n === null || n === undefined || !of) return null;
   return Math.round((n / of) * 1000) / 10;
+}
+
+/**
+ * Image is deployed as of the latest done scan. Stale images (`current: false`, e.g. old
+ * tags no longer running) are left out of supply-chain counts and lists, like the API's
+ * `GET /supply-chain` default; unknown (`null`/absent, before any scan) counts as current.
+ */
+export function isCurrentImage(i: Pick<ImageSummary, 'current'>): boolean {
+  return i.current !== false;
+}
+
+/** Fallback when `GET /supply-chain` isn't available: derive the summary from current images + releases. */
+export function deriveSupplyChainSummary(all: ImageSummary[], releases: HelmRelease[], score: number | null | undefined): SupplyChainSummary {
+  const images = all.filter(isCurrentImage);
+  const p = images.map((i) => i.provenance);
+  const s = score ?? null;
+  return {
+    signed: p.filter((x) => x?.signature?.signed).length,
+    verified: p.filter((x) => x?.signature?.verified).length,
+    withSbom: p.filter((x) => x?.sbom?.hasSBOM).length,
+    withProvenance: p.filter((x) => x?.provenance?.hasProvenance).length,
+    withUpdates: p.filter((x) => x?.update?.updateAvailable).length,
+    unique: images.length,
+    helmReleases: releases.length,
+    helmWithUpdates: releases.filter((r) => r.update?.updateAvailable).length,
+    score: s,
+    grade: gradeForScore(s),
+    stale: all.length - images.length,
+    includeStale: false,
+  };
 }

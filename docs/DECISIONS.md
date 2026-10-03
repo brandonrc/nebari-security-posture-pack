@@ -142,7 +142,9 @@
     entry below); not deployed yet.
   - The image list and the Supply chain page include 7 images no longer running (old
     `localhost:32000/security-posture-*` tags, no provenance): "74 of 86 images" there vs 79
-    in the scan.
+    in the scan. Overview "Images scored 73/73" counted only images with a Running pod (the 6
+    completed-Job images were missing). Fixed in master (current-image set, see below); not
+    deployed yet.
   - Docker Hub unauthenticated pull limits (see above); `registryAuth.existingSecret` would fix it.
 - Grace hazard: creating or removing a docker network adds/removes a host IP; MicroK8s
   `apiserver-kicker` then regenerates certs and restarts kubelite and containerd, killing every
@@ -157,3 +159,12 @@
   `-py3.12`, ...); real prereleases (rc/beta/dev/...) still follow `skipPrerelease`. Reason:
   upstream's ordering made CI build-number tags (`608111629`) the newest version and suggested
   other image variants, which charged a wrong major-update penalty. Details in PROVENANCE.md.
+- 2026-10-03 (api/ui): one image set for counts: the *current* images are the unique images in
+  the latest done scan's inventory (`views.current_image_ids`, the scan's `imagesTotal` on a full
+  scan), including completed-Job images that have no Running pod; images seen only in older scans
+  are *stale*. `/summary.images` = `{total: current, scanned: with a score, failed: no successful
+  scanner, running: with a Running pod}` (severity counts and top risks stay on Running images, as
+  the vulnerability score does). `/supply-chain` counts and lists default to current images
+  (`?includeStale=true` restores all of the provenance scan's rows; `stale` = left out).
+  `/images` items carry `current` and accept `?current=`; the UI Supply chain page asks for
+  `current=true` and filters client-side too (also in its fallback summary).
