@@ -25,6 +25,11 @@ RELEASE="${RELEASE:-security-posture}"
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 kubectl label namespace "${NAMESPACE}" nebari.dev/managed=true --overwrite
 
+# extraCACerts (values.yaml): the nebari CA that signs artifacts.*.sslip.io.
+kubectl create secret generic nebari-ca -n "${NAMESPACE}" \
+  --from-literal=ca.crt="$(kubectl get secret -n cert-manager nebari-ca-secret -o jsonpath='{.data.ca\.crt}' | base64 -d)" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
 "${HELM}" dependency build chart
 
 "${HELM}" upgrade --install "${RELEASE}" ./chart \

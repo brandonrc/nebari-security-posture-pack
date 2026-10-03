@@ -87,3 +87,49 @@ nebariapp:
 # Generate every compliance report after each completed scan (grace demo).
 reports:
   autoGenerate: [poam, stig-checklist, sar, oscal-ar, inventory, vuln-export]
+
+# The nebari CA (cert-manager ClusterIssuer nebari-ca-issuer -> nebari-ca-secret,
+# CN=nebari-dev-ca) signs artifacts.100-89-230-107.sslip.io. Created by
+# deploy.sh from cert-manager/nebari-ca-secret (key ca.crt only).
+extraCACerts:
+  secretName: nebari-ca
+
+# Supply-chain provenance (DESIGN §12, docs/PROVENANCE.md).
+provenance:
+  enabled: true
+  verifySignatures: true
+  checkSBOM: true
+  checkProvenance: true
+  checkUpdates: true
+  cosign:
+    # Keyless (Fulcio/Rekor): Kubernetes release images. Other keyless or
+    # key-signed images show as signed-but-unverified.
+    certificateIdentityRegexp: '^krel-trust@k8s-releng-prod\.iam\.gserviceaccount\.com$'
+    certificateOidcIssuerRegexp: '^https://accounts\.google\.com$'
+  helmReleases:
+    enabled: true
+  compat:
+    internalService:
+      enabled: true
+      allowedNamespaces:
+        - monitoring
+        - observability
+
+# Control evidence engine (DESIGN §13, docs/CONTROLS.md).
+controlsEngine:
+  enabled: true
+  baseline: moderate
+  # `admin` is the one approved holder of the nebari realm-admin role.
+  adminSubjectsAllowlist: [admin]
+  keycloak:
+    url: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth
+    realm: nebari
+    # Master-realm super-admin credentials; adminRealm "" tries nebari, then master.
+    adminSecret:
+      name: nebari-realm-admin-credentials
+      namespace: keycloak
+  # observability holds the kube-prometheus-stack Alertmanager and the Loki
+  # promtail ships to; monitoring's lgtm-pack has no Alertmanager.
+  lokiUrl: http://loki.observability.svc.cluster.local:3100
+  prometheusUrl: http://kube-prom-stack-kube-prome-prometheus.observability.svc.cluster.local:9090
+  alertmanagerUrl: http://kube-prom-stack-kube-prome-alertmanager.observability.svc.cluster.local:9093
