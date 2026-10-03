@@ -64,6 +64,16 @@ class CommonControlProvider(_Camel):
         return v
 
 
+class StigAsset(_Camel):
+    """STIG checklist ASSET identifiers (CKL HOST_NAME / HOST_IP / HOST_FQDN / HOST_MAC); eMASS asset
+    import and HW/SW reconciliation need real values (compliance review M6)."""
+
+    host_name: str = ""
+    host_ip: str = ""
+    host_fqdn: str = ""
+    host_mac: str = ""
+
+
 class ControlsEngineSettings(_Camel):
     enabled: bool = True  # read-only: env CONTROLS_ENGINE_ENABLED (chart controlsEngine.enabled)
     baseline: Literal["low", "moderate", "high"] = "moderate"
@@ -76,6 +86,7 @@ class ControlsEngineSettings(_Camel):
     # SC-17 / IA-5(2): cert-manager ClusterIssuers that chain to an approved CA (DoD PKI, ECA, the
     # organization's CA). Empty = no CA is approved yet, so cm-issuer-ready fails.
     approved_issuers: list[str] = Field(default_factory=list)
+    stig_asset: StigAsset = Field(default_factory=StigAsset)
     not_applicable: dict[str, str] = Field(default_factory=dict)  # tailoring: control -> justification
     parameters: ControlParameters = Field(default_factory=ControlParameters)
 

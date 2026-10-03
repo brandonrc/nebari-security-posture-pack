@@ -44,7 +44,7 @@ REPORT_TYPES: list[dict[str, Any]] = [
     },
     {
         "type": "stig-checklist",
-        "title": "STIG checklist (Kubernetes STIG + Container Platform SRG)",
+        "title": "STIG checklist (Kubernetes STIG; Container Platform SRG optional)",
         "formats": ["ckl", "cklb"],
         "scopes": SCOPES,
         "options": ["systemName", "includeSystemNamespaces", "includeSrg"],

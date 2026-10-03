@@ -34,7 +34,6 @@ from .engine import (
     PARTIAL,
     PASSING,
     derive_statuses,
-    providers_by_control,
 )
 
 OSCAL_VERSION = "1.1.2"

@@ -23,9 +23,11 @@ from typing import Any
 
 import yaml
 
+from ..logs import get_logger
 from ._common import TOOL_NAME, View, filename, image_label, iso, normalize, sev_rank
 from .registry import GeneratedReport
 
+log = get_logger(__name__)
 MAPPING_PATH = Path(__file__).parent / "data" / "stig_mapping.yaml"
 CKL_STATUS = ("NotAFinding", "Open", "Not_Reviewed", "Not_Applicable")
 CKLB_STATUS = {"NotAFinding": "not_a_finding", "Open": "open", "Not_Reviewed": "not_reviewed",
@@ -87,16 +89,33 @@ def evaluate_rule(rule: dict[str, Any], v: View) -> SimpleNamespace:
         if not evaluated:
             status, details = "Not_Reviewed", f"No workloads in scope were evaluated for checks: {', '.join(checks)}."
         elif failed:
-            status = ev["onFail"]
-            offenders = sorted({r.key for r in failed})
-            lines = sorted({f"- {r.key}" + (f" [{r.container}]" if r.container else "")
-                            + f": {r.check_id}" + (f" ({r.detail})" if r.detail else "")
-                            + (" [system namespace]" if r.system_namespace else "") for r in failed})
-            details = _cap(lines, f"{len(offenders)} workload(s) / {len(failed)} container check(s) failed "
-                                  f"[{', '.join(c for c in checks if any(r.check_id == c for r in failed))}]:")
+            exempt = [r for r in failed if r.system_namespace] if ev.get("exemptNamespaces") else []
+            counted = [r for r in failed if r not in exempt]
+            exempt_lines = sorted({f"- {r.key}" + (f" [{r.container}]" if r.container else "") + f": {r.check_id}"
+                                   for r in exempt})
+            if counted:
+                status = ev["onFail"]
+                offenders = sorted({r.key for r in counted})
+                lines = sorted({f"- {r.key}" + (f" [{r.container}]" if r.container else "")
+                                + f": {r.check_id}" + (f" ({r.detail})" if r.detail else "")
+                                + (" [system namespace]" if r.system_namespace else "") for r in counted})
+                details = _cap(lines, f"{len(offenders)} workload(s) / {len(counted)} container check(s) failed "
+                                      f"[{', '.join(c for c in checks if any(r.check_id == c for r in counted))}]:")
+                if exempt_lines:
+                    details += "\n" + _cap(exempt_lines, "Verify exemption (PSA-exempt system namespaces, not counted):")
+            else:  # M6: only exempt (system) namespaces fail: the reviewer verifies the exemption
+                status = "Not_Reviewed"
+                offenders = sorted({r.key for r in exempt})
+                details = _cap(exempt_lines, "Verify exemption: failures only in namespaces exempted from Pod Security "
+                                             "admission (Kubernetes system namespaces):")
         else:
             status = ev["onPass"]
             details = (f"All {len({r.key for r in evaluated})} evaluated workload(s) passed: {', '.join(checks)}.")
+            if ev.get("requireRestrictedPsa"):
+                ok, why = _psa_restricted_everywhere(v)
+                details += " " + why
+                if not ok:
+                    status = "Not_Reviewed"
     elif method == "inventory":
         nss = set(ev.get("namespaces", []))
         hits = [w for w in v.workloads if w.namespace in nss]
@@ -111,9 +130,20 @@ def evaluate_rule(rule: dict[str, Any], v: View) -> SimpleNamespace:
     elif method == "vulnerabilities":
         sevs = set(ev.get("severities", ["critical", "high"]))
         cutoff = v.now - timedelta(days=int(ev["olderThanDays"])) if ev.get("olderThanDays") else None
-        hits = [f for f in v.open_findings if f.severity in sevs and (f.fixable or not ev.get("fixableOnly"))
-                and (cutoff is None or f.first_seen_at <= cutoff)]
-        if hits:
+        candidates = [f for f in v.open_findings if f.severity in sevs and (f.fixable or not ev.get("fixableOnly"))]
+        undated: list[Any] = []
+        if ev.get("clock") == "fixRelease":  # M6: the clock runs from the update's release
+            undated = [f for f in candidates if f.fix_published_at is None]
+            hits = [f for f in candidates if f.fix_published_at is not None
+                    and (cutoff is None or f.fix_published_at <= cutoff)]
+        else:
+            hits = [f for f in candidates if cutoff is None or f.first_seen_at <= cutoff]
+        if not hits and undated:
+            status = "Not_Reviewed"
+            details = (f"{len(undated)} open fixable finding(s) have no known fix release date, so the "
+                       f"{ev.get('olderThanDays')}-day window cannot be evaluated; review against the vendor "
+                       "advisories (first-seen-by-this-tool is not the release date).")
+        elif hits:
             status = ev["onFail"]
             by_img: dict[Any, list] = {}
             for f in hits:
@@ -126,7 +156,8 @@ def evaluate_rule(rule: dict[str, Any], v: View) -> SimpleNamespace:
                 lines.append(f"- {label}: " + ", ".join(
                     f"{f.vuln_id} {f.package} ({f.severity}{', fix ' + f.fixed_version if f.fixed_version else ''})"
                     for f in fs[:25]) + (f" ... +{len(fs) - 25}" if len(fs) > 25 else ""))
-            age = f" first seen more than {ev['olderThanDays']} days ago" if cutoff else ""
+            age = ((f" with a fix released more than {ev['olderThanDays']} days ago" if ev.get("clock") == "fixRelease"
+                    else f" first seen more than {ev['olderThanDays']} days ago") if cutoff else "")
             details = _cap(lines, f"{len(hits)} open {'fixable ' if ev.get('fixableOnly') else ''}"
                                   f"{'/'.join(sorted(sevs, key=sev_rank, reverse=True))} finding(s){age} "
                                   f"in {len(by_img)} image(s):")
@@ -152,8 +183,33 @@ def evaluate_rule(rule: dict[str, Any], v: View) -> SimpleNamespace:
     return SimpleNamespace(status=status, details=details, comments=comments, offenders=offenders, method=method)
 
 
+def _psa_restricted_everywhere(v: View) -> tuple[bool, str]:
+    """Pod Security Admission `restricted` enforced on every in-scope non-system namespace, from the
+    control evidence run's k8s-pod-security-admission evidence (M6)."""
+    res = next((r for r in v.engine_results if r.get("id") == "k8s-pod-security-admission"), None)
+    if not res:
+        return False, "Pod Security Admission enforcement was not evidenced (no control evidence run): Not_Reviewed."
+    ev = res.get("evidence") or {}
+    levels = {**{ns: None for ns in ev.get("notEnforced") or {}}, **(ev.get("enforced") or {})}
+    scope = {w.namespace for w in v.workloads if not w.system_namespace} or {n for n in levels}
+    weak = sorted(ns for ns in scope if levels.get(ns) != "restricted")
+    if weak:
+        return False, ("Pod Security Admission does not enforce 'restricted' on: " + ", ".join(weak[:20])
+                       + (" ..." if len(weak) > 20 else "") + "; an observed absence is not enforcement: Not_Reviewed.")
+    return True, f"Pod Security Admission enforces 'restricted' on all {len(scope)} in-scope namespace(s)."
+
+
+def asset_warnings(v: View) -> list[str]:
+    """eMASS asset import / HW-SW reconciliation needs real identifiers (M6)."""
+    missing = [n for n, val in (("HOST_NAME", v.system.host_name), ("HOST_IP", v.system.ip_address),
+                                ("HOST_FQDN", v.system.hostname)) if not val]
+    return [f"{', '.join(missing)} not configured (settings controlsEngine.stigAsset); eMASS asset import needs "
+            "real identifiers"] if missing else []
+
+
 def _selected_rules(v: View) -> list[dict[str, Any]]:
-    include_srg = v.options.get("includeSrg", True)
+    # M6: the SRG is assessed only on request (assess the product STIG, not its SRG); then all rules
+    include_srg = bool(v.options.get("includeSrg", False))
     return [r for r in load_mapping()["rules"]
             if include_srg or r["benchmark"] == "kubernetes"]
 
@@ -187,12 +243,13 @@ def _groups(v: View) -> list[tuple[dict, list[tuple[dict, SimpleNamespace]]]]:
 
 
 def _host(v: View) -> str:
-    return v.system.hostname or v.system.cluster_name or v.system.name
+    return v.system.host_name or v.system.hostname or v.system.cluster_name or v.system.name
 
 
 def _target_comment(v: View) -> str:
-    return (f"{v.system.name} - {v.scope_label}. Generated by {TOOL_NAME} from scan {v.scan.id} on "
-            f"{iso(v.generated_at)}. Machine-generated; review Not_Reviewed items manually.")
+    warn = " ".join(f"WARNING: {w}." for w in asset_warnings(v))
+    return (f"{v.system.name} - {v.scope_label}. Generated by {TOOL_NAME} from {v.run_stamp} on "
+            f"{iso(v.generated_at)}. Machine-generated; review Not_Reviewed items manually." + (f" {warn}" if warn else ""))
 
 
 def _stig_ref(b: dict) -> str:
@@ -213,7 +270,7 @@ def _ckl(v: View) -> bytes:
     asset = _sub(root, "ASSET")
     k8s = benchmark("kubernetes")
     for tag, val in [("ROLE", "None"), ("ASSET_TYPE", "Computing"), ("MARKING", v.system.marking),
-                     ("HOST_NAME", _host(v)), ("HOST_IP", v.system.ip_address), ("HOST_MAC", ""),
+                     ("HOST_NAME", _host(v)), ("HOST_IP", v.system.ip_address), ("HOST_MAC", v.system.mac_address),
                      ("HOST_FQDN", v.system.hostname), ("TARGET_COMMENT", _target_comment(v)),
                      ("TECH_AREA", ""), ("TARGET_KEY", k8s.get("referenceIdentifier") or ""),
                      ("WEB_OR_DATABASE", "false"), ("WEB_DB_SITE", ""), ("WEB_DB_INSTANCE", "")]:
@@ -338,7 +395,7 @@ def _cklb(v: View) -> bytes:
             "target_type": "Computing",
             "host_name": _host(v),
             "ip_address": v.system.ip_address,
-            "mac_address": "",
+            "mac_address": v.system.mac_address,
             "fqdn": v.system.hostname,
             "comments": _target_comment(v),
             "role": "None",
@@ -356,6 +413,8 @@ def _cklb(v: View) -> bytes:
 
 def generate(fmt: str, snapshot: Any, options: dict[str, Any]) -> GeneratedReport:
     v = normalize(snapshot, options)
+    for w in asset_warnings(v):
+        log.warning("stig.asset_identifiers_missing", warning=w)
     if fmt == "ckl":
         return GeneratedReport(_ckl(v), filename(v, "stig-checklist", "ckl"), "application/xml")
     return GeneratedReport(_cklb(v), filename(v, "stig-checklist", "cklb"), "application/json")

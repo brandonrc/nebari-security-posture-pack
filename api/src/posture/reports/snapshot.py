@@ -205,7 +205,11 @@ async def build_snapshot(session: AsyncSession, scan_id: int | None, scope: Any 
     snap = ReportSnapshot(
         generated_at=now,
         system=SystemInfo(name=settings.system_name or "Nebari cluster", organization=settings.organization,
-                          cluster_name=settings.system_name),
+                          cluster_name=settings.system_name,
+                          host_name=settings.controls_engine.stig_asset.host_name,
+                          ip_address=settings.controls_engine.stig_asset.host_ip,
+                          hostname=settings.controls_engine.stig_asset.host_fqdn,
+                          mac_address=settings.controls_engine.stig_asset.host_mac),
         scan=ScanInfo(id=scan.id, status=scan.status, trigger=scan.trigger, started_at=scan.started_at,
                       finished_at=scan.finished_at, requested_by=scan.requested_by or "", score=scan.score,
                       grade=scan.grade or "?", vuln_score=scan.vuln_score, posture_score=scan.posture_score),

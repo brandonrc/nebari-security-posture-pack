@@ -480,7 +480,7 @@ def engine_config(env: Any, st: Any) -> EngineConfig:
 async def load_snapshot(session: AsyncSession, st: Any | None = None) -> dict[str, Any]:
     """Pack evidence for `pack-*` / workload assertions, from the DB (read-only)."""
     from .. import app_settings
-    from ..db.models import ConsensusFindingRow, ContainerRow, Image, PostureResultRow, Report, Scan, ScannerStatus
+    from ..db.models import ConsensusFindingRow, ContainerRow, Image, PostureResultRow, Report, ScannerStatus
     from ..routers.summary import compute_sla_overdue
     from ..views import latest_done_scan
 

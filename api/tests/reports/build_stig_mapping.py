@@ -21,13 +21,13 @@ ALL_CHECKS = ["privileged", "host-namespaces", "host-path", "run-as-root", "priv
 EVAL = {
     # ---- Kubernetes STIG ----
     'V-242437': dict(method='posture', checks=['privileged', 'run-as-root', 'privilege-escalation'],
-                     onFail='Open', onPass='Not_Reviewed',
+                     onFail='Open', onPass='Not_Reviewed', exemptNamespaces=True,
                      note='Evidence-based: running privileged/root/escalating pods show the admission policy does not '
                           'enforce least privilege. The STIG check itself inspects the admission configuration, '
                           'which this tool does not read; a clean result still needs manual review.'),
     'V-254800': dict(method='posture', checks=['privileged', 'host-namespaces', 'host-path', 'run-as-root',
                                               'privilege-escalation', 'added-capabilities', 'seccomp-unconfined'],
-                     onFail='Open', onPass='Not_Reviewed',
+                     onFail='Open', onPass='Not_Reviewed', exemptNamespaces=True,
                      note='Pods violating the Pod Security Standards "restricted" profile are running, so Pod Security '
                           'Admission is not enforcing least privilege for those namespaces. The '
                           '--admission-control-config-file flag itself must be verified manually.'),
@@ -35,9 +35,10 @@ EVAL = {
                      note='hostPort declarations are not inventoried; pods sharing the host network namespace are '
                           'listed for the reviewer because any port they bind is a host port.'),
     'V-242383': dict(method='inventory', namespaces=['default', 'kube-public', 'kube-node-lease'],
-                     onFail='Open', onPass='NotAFinding',
+                     onFail='Open', onPass='Not_Reviewed',
                      note='Evaluated from the pod/workload inventory only; non-pod resources (Services other than '
-                          'service/kubernetes, ConfigMaps, ...) in these namespaces are not inventoried.'),
+                          'service/kubernetes, ConfigMaps, ...) in these namespaces are not inventoried, so a clean '
+                          'result is Not_Reviewed: a CAT I is never closed on partial evidence.'),
     'V-242417': dict(method='inventory', namespaces=['kube-system', 'kube-public', 'kube-node-lease'],
                      onFail='Not_Reviewed', onPass='NotAFinding',
                      note='Workloads in Kubernetes system namespaces are listed; the reviewer must decide which are '
@@ -48,10 +49,15 @@ EVAL = {
                           'evaluate. Fixable critical/high image vulnerabilities are listed as supporting IAVM evidence.'),
     # ---- Container Platform SRG ----
     'V-233127': dict(method='posture', checks=['privileged', 'host-namespaces', 'host-path', 'added-capabilities'],
-                     onFail='Open', onPass='NotAFinding'),
+                     onFail='Open', onPass='NotAFinding', requireRestrictedPsa=True,
+                     note='The requirement is that the platform prohibits privileged access: NotAFinding only when Pod '
+                          'Security Admission enforces "restricted" on every in-scope namespace; an observed absence '
+                          'of privileged pods alone is Not_Reviewed.'),
     'V-233163': dict(method='posture', checks=['run-as-root', 'privilege-escalation', 'capabilities-not-dropped',
                                               'seccomp-unconfined', 'automount-sa-token'],
-                     onFail='Open', onPass='NotAFinding'),
+                     onFail='Open', onPass='NotAFinding', requireRestrictedPsa=True,
+                     note='NotAFinding only when Pod Security Admission enforces "restricted" on every in-scope '
+                          'namespace; an observed absence of violations alone is Not_Reviewed.'),
     'V-233074': dict(method='posture', checks=['host-namespaces'], onFail='Not_Reviewed', onPass='Not_Reviewed',
                      note='hostPort declarations are not inventoried; host-network pods are listed for review.'),
     'V-270875': dict(method='posture', checks=['no-resource-limits', 'no-resource-requests'],
@@ -68,12 +74,15 @@ EVAL = {
     'V-233233': dict(method='vulnerabilities', severities=['critical', 'high', 'medium', 'low'], fixableOnly=True,
                      onFail='Open', onPass='NotAFinding'),
     'V-233234': dict(method='vulnerabilities', severities=['critical', 'high', 'medium', 'low'], fixableOnly=True,
-                     olderThanDays=30, onFail='Open', onPass='NotAFinding'),
+                     olderThanDays=30, clock='fixRelease', onFail='Open', onPass='NotAFinding',
+                     note='The 30 days run from the release of the update. Findings without a known fix release date '
+                          'make the rule Not_Reviewed; first-seen-by-this-tool is not used.'),
     'V-233275': dict(method='scanner-coverage', maxAgeDays=7, onFail='Open', onPass='NotAFinding'),
     'V-233273': dict(method='posture', checks=ALL_CHECKS, aggregate=True, onFail='Open', onPass='Not_Reviewed',
                      note='Aggregates every workload posture check; host and control-plane configuration is not evaluated.'),
 }
-SRG_INCLUDE = [k for k in EVAL if k.startswith('V-233') or k.startswith('V-2708')]
+# Every SRG rule is emitted (compliance review M6: a subset checklist inflates the computed compliance);
+# rules without an EVAL entry are Not_Reviewed. The SRG is only added when includeSrg is set.
 
 
 def inner(desc, tag):
@@ -141,8 +150,7 @@ if len(sys.argv) != 4:
     sys.exit(__doc__)
 K8S, SRG, out = sys.argv[1:4]
 kb, kr = parse(K8S, 'kubernetes')
-sb, sr = parse(SRG, 'container-platform-srg', include=set(SRG_INCLUDE))
-sb['subset'] = True
+sb, sr = parse(SRG, 'container-platform-srg')
 missing = set(EVAL) - {r['vulnId'] for r in kr + sr}
 assert not missing, missing
 doc = {
@@ -158,7 +166,7 @@ hdr = """# STIG mapping for nebari-security-posture-pack compliance reports.
 #
 # GENERATED from the official DISA XCCDF benchmarks listed under `generatedFrom`
 # (Kubernetes STIG V2R6, 01 Apr 2026 - all 92 rules; Container Platform SRG V2R4,
-# 28 Oct 2025 - only the rules this tool can produce evidence for). Every rule text,
+# 28 Oct 2025 - all rules, emitted only with includeSrg). Every rule text,
 # severity, Rule ID and CCI below is copied verbatim from the XCCDF (`verified: true`).
 #
 # `evaluation` is ours: how stig.py derives a checklist STATUS for the rule.
@@ -169,6 +177,9 @@ hdr = """# STIG mapping for nebari-security-posture-pack compliance reports.
 #           none             -> always Not_Reviewed (manual / host-level check)
 #   onFail / onPass: CKL status to emit (NotAFinding | Open | Not_Reviewed | Not_Applicable)
 #   aggregate: true  -> catch-all rule; not cited as "the" STIG rule for an individual check
+#   exemptNamespaces: true     -> failures only in PSA-exempt (system) namespaces stay Not_Reviewed ("verify exemption")
+#   requireRestrictedPsa: true -> onPass only when PSA "restricted" is enforced on every in-scope namespace
+#   clock: fixRelease          -> olderThanDays counts from the fix release date; unknown dates -> Not_Reviewed
 # Regenerate with the script referenced in docs/REPORTS.md when DISA publishes a new release.
 """
 with open(out, 'w') as f:

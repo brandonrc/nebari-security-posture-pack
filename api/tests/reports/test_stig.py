@@ -9,7 +9,7 @@ from posture.reports.registry import generate
 from posture.reports.stig import load_mapping, stig_rollup
 
 K8S_RULES = 92
-SRG_RULES = 13
+SRG_RULES = 188  # M6: the whole SRG, only with includeSrg
 
 
 def _ckl(snapshot, opts, **o):
@@ -49,7 +49,8 @@ def test_mapping_integrity():
 
 
 def test_ckl_structure(snapshot, opts):
-    root = _ckl(snapshot, opts)
+    assert len(_ckl(snapshot, opts).findall("STIGS/iSTIG")) == 1  # M6: STIG only by default
+    root = _ckl(snapshot, opts, includeSrg=True)
     assert root.tag == "CHECKLIST"
     assert [c.tag for c in root] == ["ASSET", "STIGS"]
     asset = root.find("ASSET")
@@ -75,14 +76,14 @@ def test_ckl_structure(snapshot, opts):
 
 
 def test_ckl_statuses(snapshot, opts):
-    st = _status(_ckl(snapshot, opts))
+    st = _status(_ckl(snapshot, opts, includeSrg=True))
     assert st["V-242383"][0] == "Open" and "default/Deployment/legacy-proxy" in st["V-242383"][1]
     assert st["V-242417"][0] == "Not_Reviewed" and "coredns" in st["V-242417"][1]
     assert st["V-233127"][0] == "Open" and "privileged" in st["V-233127"][1]
     assert st["V-270876"][0] == "Open"
     assert st["V-254800"][0] == "Open"
     assert st["V-233233"][0] == "Open"   # fixable vulns present
-    assert st["V-233234"][0] == "Open"   # fixable vulns older than 30 days
+    assert st["V-233234"][0] == "Not_Reviewed"  # M6: fix release dates unknown -> no 30-day verdict
     assert st["V-233275"][0] == "NotAFinding"
     assert st["V-242376"][0] == "Not_Reviewed"  # control-plane TLS flag: not evaluated
     assert st["V-242414"][0] == "Not_Reviewed"
@@ -93,13 +94,69 @@ def test_ckl_statuses(snapshot, opts):
     assert counts["Not_Reviewed"] > 80
 
 
+def _psa_engine(levels):
+    enforced = {ns: lvl for ns, lvl in levels.items() if lvl}
+    return {"data": {"run": {"id": 5}, "statuses": [], "results": [
+        {"id": "k8s-pod-security-admission", "status": "pass" if all(levels.values()) else "fail",
+         "evidence": {"enforced": enforced, "notEnforced": {ns: None for ns, lvl in levels.items() if not lvl}}}]}}
+
+
 def test_scoped_checklist_passes(opts):
     snap = make_snapshot(scope={"kind": "workload", "name": "security-posture/StatefulSet/postgres"})
-    st = _status(_ckl(snap, opts))
-    assert st["V-233127"][0] == "NotAFinding"
+    st = _status(_ckl(snap, opts, includeSrg=True))
+    # M6: an observed absence of privileged pods is not enforcement
+    assert st["V-233127"][0] == "Not_Reviewed" and "not evidenced" in st["V-233127"][1]
     assert st["V-270875"][0] == "NotAFinding"
-    assert st["V-242383"][0] == "NotAFinding"
+    assert st["V-242383"][0] == "Not_Reviewed"  # M6: a CAT I is never closed on pod inventory alone
     assert st["V-233029"][0] == "Not_Reviewed"  # pass -> needs manual review of policy content
+    snap = make_snapshot(scope={"kind": "workload", "name": "security-posture/StatefulSet/postgres"},
+                         controls_engine=_psa_engine({"security-posture": "baseline"}))
+    st = _status(_ckl(snap, opts, includeSrg=True))
+    assert st["V-233127"][0] == "Not_Reviewed" and "security-posture" in st["V-233127"][1]
+    snap = make_snapshot(scope={"kind": "workload", "name": "security-posture/StatefulSet/postgres"},
+                         controls_engine=_psa_engine({"security-posture": "restricted"}))
+    st = _status(_ckl(snap, opts, includeSrg=True))
+    assert st["V-233127"][0] == "NotAFinding" and st["V-233163"][0] == "NotAFinding"
+
+
+def test_cat1_privileged_rules_exclude_psa_exempt_namespaces(opts):
+    from conftest import snapshot_data
+
+    data = snapshot_data()
+    sysonly = [dict(r) for r in data["posture_results"] if r["status"] != "fail" or r["namespace"] == "kube-system"]
+    snap = make_snapshot(posture_results=sysonly)
+    st = _status(_ckl(snap, opts))
+    status, details, _ = st["V-254800"]
+    assert any(r["status"] == "fail" and r["check_id"] == "added-capabilities" for r in sysonly)
+    assert status == "Not_Reviewed" and details.startswith("Verify exemption") and "coredns" in details
+    st = _status(_ckl(make_snapshot(), opts))
+    assert st["V-254800"][0] == "Open" and "Verify exemption" in st["V-254800"][1]
+
+
+def test_v233234_uses_the_fix_release_date(opts):
+    from datetime import timedelta
+
+    from conftest import NOW, snapshot_data
+
+    data = snapshot_data()
+    for f in data["findings"]:
+        f["fix_published_at"] = NOW - timedelta(days=5)
+    st = _status(_ckl(make_snapshot(**{"findings": data["findings"]}), opts, includeSrg=True))
+    assert st["V-233234"][0] == "NotAFinding"  # every fix released < 30 days ago
+    data["findings"][0]["fix_published_at"] = NOW - timedelta(days=45)
+    st = _status(_ckl(make_snapshot(**{"findings": data["findings"]}), opts, includeSrg=True))
+    assert st["V-233234"][0] == "Open" and "fix released more than 30 days ago" in st["V-233234"][1]
+
+
+def test_asset_identifier_warning(opts):
+    snap = make_snapshot(system={"name": "grace"})
+    root = _ckl(snap, opts)
+    assert "WARNING: HOST_NAME, HOST_IP, HOST_FQDN not configured" in root.findtext("ASSET/TARGET_COMMENT")
+    snap = make_snapshot(system={"name": "grace", "host_name": "grace", "ip_address": "192.168.42.150",
+                                 "hostname": "grace.lab.example", "mac_address": "aa:bb:cc:dd:ee:ff"})
+    root = _ckl(snap, opts)
+    assert "WARNING" not in root.findtext("ASSET/TARGET_COMMENT")
+    assert root.findtext("ASSET/HOST_NAME") == "grace" and root.findtext("ASSET/HOST_MAC") == "aa:bb:cc:dd:ee:ff"
 
 
 def test_include_srg_false(snapshot, opts):
@@ -108,6 +165,7 @@ def test_include_srg_false(snapshot, opts):
 
 
 def test_cklb_structure(snapshot, opts):
+    opts = {**opts, "includeSrg": True}
     rep = generate("stig-checklist", "cklb", snapshot, opts)
     d = json.loads(rep.content)
     assert {"title", "id", "stigs", "target_data", "cklb_version"} <= set(d)
@@ -138,7 +196,8 @@ def test_cklb_structure(snapshot, opts):
 
 def test_rollup_api_helper(snapshot, opts):
     roll = stig_rollup(snapshot, opts)
-    assert len(roll) == K8S_RULES + SRG_RULES
+    assert len(roll) == K8S_RULES
+    assert len(stig_rollup(snapshot, {**opts, "includeSrg": True})) == K8S_RULES + SRG_RULES
     r = next(x for x in roll if x["vulnId"] == "V-242383")
     assert r["status"] == "Open" and r["offenders"] == ["default/Deployment/legacy-proxy"]
     assert {"vulnId", "ruleId", "title", "cat", "status", "offenders"} <= set(r)

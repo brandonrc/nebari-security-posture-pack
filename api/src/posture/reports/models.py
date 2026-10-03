@@ -22,8 +22,10 @@ class SystemInfo(_M):
     organization: str = ""
     cluster_name: str | None = None
     description: str = ""
-    hostname: str = ""
+    hostname: str = ""  # FQDN (CKL HOST_FQDN)
     ip_address: str = ""
+    host_name: str = ""  # CKL HOST_NAME (short host / asset name)
+    mac_address: str = ""
     poc_name: str = ""
     poc_email: str = ""
     poc_phone: str = ""
@@ -105,6 +107,8 @@ class FindingRecord(_M):
     url: str = ""
     fixable: bool | None = None
     first_seen_at: datetime | None = None
+    fix_published_at: datetime | None = None  # release date of the fixed version, when the scanner knows it
+    published_at: datetime | None = None  # vulnerability publication date
     sla_due_at: datetime | None = None
     controls: list[str] = Field(default_factory=list)
     status: str = "open"

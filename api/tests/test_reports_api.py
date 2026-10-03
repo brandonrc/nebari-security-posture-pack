@@ -234,7 +234,8 @@ async def test_07_compliance_stig_and_check_refs(env):
     assert [(r["vulnId"], r["status"], r["offenders"]) for r in full] == \
         [(r["vulnId"], r["status"], r["offenders"]) for r in rules]
     open_priv = [r for r in rules if r["status"] == "Open" and "privileged" in (r.get("checks") or [])]
-    assert open_priv and any("kube-system" in o for o in open_priv[0]["offenders"])
+    # M6: privileged pods in PSA-exempt system namespaces are "verify exemption", not CAT I offenders
+    assert open_priv and not any(o.startswith("kube-system/") for r in open_priv for o in r["offenders"])
 
     checks = {x["id"]: x for x in (await c.get("/checks")).json()}
     stig = checks["privileged"]["stig"]

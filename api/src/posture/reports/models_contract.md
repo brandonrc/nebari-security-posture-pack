@@ -37,8 +37,8 @@ Reference implementation used by the tests: `api/tests/reports/_snapshot_stub.py
 
 ### SystemInfo
 `name` (str, default `"Nebari cluster"`), `organization` (str, `""`), `cluster_name`
-(str, `None`), `description` (str), `hostname` (str — FQDN used as STIG asset
-host), `ip_address` (str), `poc_name`, `poc_email`, `poc_phone` (str),
+(str, `None`), `description` (str), `hostname` (str — FQDN, CKL HOST_FQDN), `host_name` (str — CKL HOST_NAME),
+`ip_address` (str), `mac_address` (str), `poc_name`, `poc_email`, `poc_phone` (str),
 `classification` (str, `"UNCLASSIFIED"`), `marking` (str, `"CUI"` — CKL `MARKING`),
 `emass_system_id` (str, optional).
 
@@ -110,7 +110,7 @@ default the check's), `system_namespace` (bool), `first_seen_at` (datetime|None)
 `dict` (camelCase keys, as POSTed): `rollupByCve` (bool, POA&M), `systemName` (str,
 overrides `system.name`), `includeSystemNamespaces` (bool, default `True`),
 `poamVariant` (`emass` | `generic` | `emass-legacy`, CSV only, default `emass`),
-`includeSrg` (bool, STIG, default `True`), `now` (datetime, test hook for SLA overdue).
+`includeSrg` (bool, STIG, default `False`: the SRG is emitted in full only on request), `now` (datetime, test hook for SLA overdue).
 
 Accepted aliases / extras: `ImageRecord.base_os` is used when `os` is empty;
 `system_namespace` flags are OR-ed with the namespace name check (a `False` default from

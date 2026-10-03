@@ -303,7 +303,7 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
 
     system = _ns(get(snapshot, "system", {}), {
         "name": "Nebari cluster", "organization": "", "cluster_name": None, "description": "",
-        "hostname": "", "ip_address": "", "poc_name": "", "poc_email": "", "poc_phone": "",
+        "hostname": "", "ip_address": "", "host_name": "", "mac_address": "", "poc_name": "", "poc_email": "", "poc_phone": "",
         "classification": "UNCLASSIFIED", "marking": "CUI", "emass_system_id": "",
     })
     if opts.get("systemName"):
@@ -339,8 +339,9 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
             "image_id": None, "vuln_id": "", "severity": "unknown", "package": "", "installed_version": "",
             "fixed_version": "", "pkg_type": "", "scanners": list, "agreement": None, "per_scanner": dict,
             "cvss": None, "title": "", "description": "", "url": "", "fixable": None, "first_seen_at": None,
-            "controls": list, "status": "open",
-        }), "first_seen_at")
+            "controls": list, "status": "open", "fix_published_at": None, "published_at": None,
+            "kev": None, "kev_due": None,
+        }), "first_seen_at", "fix_published_at", "published_at", "kev_due")
         o.severity = sev(o.severity)
         o.per_scanner = {k: sev(v) for k, v in (o.per_scanner or {}).items()}
         if not o.scanners:
