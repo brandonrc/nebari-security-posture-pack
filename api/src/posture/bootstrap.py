@@ -3,8 +3,8 @@
 Used by the chart's pre-install/pre-upgrade hook Jobs (Argo CD: PreSync) instead of
 Helm `lookup`, which returns nothing under `helm template` / Argo CD and made every
 render rotate the database password (architecture review B1). The Secret is created
-only when it is absent; an existing Secret only gains keys it lacks, values are never
-rewritten. The hook's Role allows `create` on Secrets in the release namespace and
+only when it is absent; an existing Secret only gains keys (and annotations) it lacks,
+values are never rewritten. The hook's Role allows `create` on Secrets in the release namespace and
 `get`/`patch` on exactly the names it manages.
 """
 
@@ -60,10 +60,18 @@ def ensure_secret(api: Any, namespace: str, name: str, keys: list[str], length: 
                 raise
             existing = api.read_namespaced_secret(name, namespace)
     missing = [k for k in keys if k not in (existing.data or {})]
-    if not missing:
+    have = dict(getattr(getattr(existing, "metadata", None), "annotations", None) or {})
+    # e.g. a Secret created by an older chart via Helm `lookup`: make sure it survives
+    # Argo CD pruning / helm uninstall now that the chart no longer renders it
+    add_ann = {k: v for k, v in (annotations or {}).items() if have.get(k) != v}
+    if not missing and not add_ann:
         return "unchanged"
-    api.patch_namespaced_secret(name, namespace, {"data": {
-        k: base64.b64encode(random_value(length).encode()).decode() for k in missing}})
+    patch: dict[str, Any] = {}
+    if missing:
+        patch["data"] = {k: base64.b64encode(random_value(length).encode()).decode() for k in missing}
+    if add_ann:
+        patch["metadata"] = {"annotations": add_ann}
+    api.patch_namespaced_secret(name, namespace, patch)
     return "patched"
 
 

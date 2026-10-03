@@ -16,12 +16,14 @@ class FakeCore:
         self.secrets = {} if existing is None else {"db": existing}
         self.race = race
         self.calls = []
+        self.annotations = {}
 
     def read_namespaced_secret(self, name, ns):
         self.calls.append(("read", name))
         if name not in self.secrets:
             raise ApiException(status=404)
-        return SimpleNamespace(data=dict(self.secrets[name]))
+        return SimpleNamespace(data=dict(self.secrets[name]),
+                               metadata=SimpleNamespace(annotations=dict(self.annotations)))
 
     def create_namespaced_secret(self, ns, body):
         self.calls.append(("create", body["metadata"]["name"]))
@@ -32,7 +34,8 @@ class FakeCore:
 
     def patch_namespaced_secret(self, name, ns, body):
         self.calls.append(("patch", name))
-        self.secrets[name].update(body["data"])
+        self.secrets[name].update(body.get("data", {}))
+        self.annotations.update(body.get("metadata", {}).get("annotations", {}))
 
 
 def test_creates_when_missing():
@@ -70,3 +73,11 @@ def test_other_errors_propagate():
 
     with pytest.raises(ApiException):
         bootstrap.ensure_secret(Forbidden(), "ns", "db", ["password"])
+
+
+def test_existing_secret_gains_keep_annotations_once():
+    api = FakeCore(existing={"password": "a"})
+    ann = {"helm.sh/resource-policy": "keep", "argocd.argoproj.io/sync-options": "Prune=false"}
+    assert bootstrap.ensure_secret(api, "ns", "db", ["password"], annotations=ann) == "patched"
+    assert api.annotations == ann and api.secrets["db"] == {"password": "a"}
+    assert bootstrap.ensure_secret(api, "ns", "db", ["password"], annotations=ann) == "unchanged"
