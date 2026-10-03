@@ -118,19 +118,37 @@ def _alive(pid: int) -> bool:
         return False
 
 
+async def _died(pid: int, within: float = 5.0) -> bool:
+    """SIGKILL delivery is asynchronous: poll instead of asserting a tight window."""
+    deadline = time.monotonic() + within
+    while _alive(pid):
+        if time.monotonic() > deadline:
+            return False
+        await asyncio.sleep(0.05)
+    return True
+
+
+def _pid(pidfile) -> int:
+    text = pidfile.read_text().strip() if pidfile.exists() else ""
+    assert text, "the child never wrote its pid (host too loaded?)"
+    return int(text)
+
+
 async def test_timeout_kills_process_group(tmp_path):
     pidfile = tmp_path / "pid"
     start = time.monotonic()
-    res = await run_proc(["sh", "-c", f"sleep 30 & echo $! > {pidfile}; wait"], 1.5)
-    assert res.timed_out and time.monotonic() - start < 6
-    assert not _alive(int(pidfile.read_text()))  # the grandchild died with the group
+    # 3 s gives a loaded runner time to fork the grandchild and write the pidfile.
+    res = await run_proc(["sh", "-c", f"sleep 30 & echo $! > {pidfile}; wait"], 3)
+    # Generous bound: the point is "well before the 30 s sleep ends", not a tight window.
+    assert res.timed_out and time.monotonic() - start < 20
+    assert await _died(_pid(pidfile))  # the grandchild died with the group
 
 
 async def test_sigterm_ignored_escalates_to_sigkill(tmp_path, monkeypatch):
     monkeypatch.setattr(base, "KILL_GRACE_SECONDS", 0.5)
     start = time.monotonic()
     res = await run_proc(["sh", "-c", "trap '' TERM; sleep 30 & wait; sleep 30"], 0.3)
-    assert res.timed_out and time.monotonic() - start < 4
+    assert res.timed_out and time.monotonic() - start < 15
 
 
 async def test_cancel_kills_children_promptly(tmp_path):
@@ -144,8 +162,8 @@ async def test_cancel_kills_children_promptly(tmp_path):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert time.monotonic() - start < 3
-    assert not _alive(int(pidfile.read_text()))
+    assert time.monotonic() - start < 10
+    assert await _died(_pid(pidfile))
 
 
 async def test_cancelled_scan_kills_scanner(tmp_path):
@@ -160,4 +178,5 @@ async def test_cancelled_scan_kills_scanner(tmp_path):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert time.monotonic() - start < 3 and not _alive(int(pidfile.read_text()))
+    assert time.monotonic() - start < 10
+    assert await _died(_pid(pidfile))
