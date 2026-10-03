@@ -97,7 +97,7 @@ async def main(rev: str) -> None:
     await measure("/vulnerabilities q=lib12", vulns(q="lib12"))
     await measure("/vulnerabilities sort=imagesAffected", vulns(sort="imagesAffected"))
     await measure("/vulnerabilities keyset (nextCursor of page 1)", vulns(cursor=first["nextCursor"]))
-    await measure(f"/images/{{id}} page=1 pageSize=50", new_image(page=1))
+    await measure("/images/{id} page=1 pageSize=50", new_image(page=1))
     await measure("/images/{id} no page (first 500, truncated)", new_image())
     await measure("/images/{id} page=1 q=lib1 fixable", new_image(page=1, q="lib1", fixable=True))
     print("--- before (Python grouping / unpaginated)")
