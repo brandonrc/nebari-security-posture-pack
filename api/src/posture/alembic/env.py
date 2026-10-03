@@ -8,8 +8,11 @@ from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from posture.config import Settings
+# Every module that declares tables on Base.metadata must be imported here, or
+# autogenerate / `alembic check` silently ignores its tables (tests/test_migrations.py).
+import posture.controls_engine.models  # noqa: F401  (DESIGN §13 tables)
+import posture.provenance.models  # noqa: F401  (DESIGN §12 tables)
 from posture.db.models import Base
-import posture.controls_engine.models  # noqa: E402,F401  (DESIGN §13 tables)
 
 target_metadata = Base.metadata
 
