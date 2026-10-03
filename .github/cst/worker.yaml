@@ -1,0 +1,55 @@
+# container-structure-test for the worker image (api/Dockerfile.worker): non-root, pinned scanners.
+# Keep the versions in step with the ARGs in Dockerfile.worker (and tests/fixtures/README.md).
+schemaVersion: 2.0.0
+metadataTest:
+  user: "10001:10001"
+  exposedPorts: ["9000"]
+  volumes: ["/cache"]
+  envVars:
+    - { key: CACHE_DIR, value: /cache }
+    - { key: GRYPE_DB_AUTO_UPDATE, value: "false" }
+    - { key: WORKER_HEALTH_PORT, value: "9000" }
+  cmd: ["python", "-m", "posture.worker"]
+commandTests:
+  - name: runs as the unprivileged posture user
+    command: id
+    expectedOutput: ["uid=10001\\(posture\\) gid=10001\\(posture\\)"]
+  - name: trivy pinned
+    command: trivy
+    args: ["--version"]
+    expectedOutput: ["Version: 0\\.75\\.0"]
+  - name: grype pinned
+    command: grype
+    args: ["version"]
+    expectedOutput: ["Version:\\s+0\\.120\\.0"]
+  - name: clairctl present
+    command: sh
+    args: ["-c", "clairctl --version 2>&1"]
+    expectedOutput: ["4\\.9\\.0"]
+  - name: cosign pinned
+    command: sh
+    args: ["-c", "cosign version 2>&1"]
+    expectedOutput: ["v3\\.1\\.3"]
+  - name: skopeo present
+    command: skopeo
+    args: ["--version"]
+    expectedOutput: ["skopeo version"]
+  - name: the worker module imports
+    command: python
+    args: ["-c", "import posture.worker; print('ok')"]
+    expectedOutput: ["ok"]
+fileExistenceTests:
+  - name: cache volume owned by the runtime user
+    path: /cache
+    shouldExist: true
+    uid: 10001
+    gid: 10001
+  # (owner is the tarball's uid 1001, not root; mode 0755 keeps them read-only for uid 10001)
+  - name: scanner binaries are not writable by the runtime user
+    path: /usr/local/bin/trivy
+    shouldExist: true
+    permissions: "-rwxr-xr-x"
+  - name: grype binary mode
+    path: /usr/local/bin/grype
+    shouldExist: true
+    permissions: "-rwxr-xr-x"

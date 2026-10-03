@@ -1,0 +1,42 @@
+# Dependency updates (quality review m3). Minor/patch bumps are grouped per ecosystem to keep the
+# PR count manageable; majors come one PR each. Scanner binary versions (TRIVY_/GRYPE_/CLAIRCTL_/
+# COSIGN_VERSION ARGs in api/Dockerfile.worker) are not covered by Dependabot: bump them by hand
+# together with the parser fixtures (api/tests/fixtures/README.md) and .github/cst/worker.yaml.
+version: 2
+updates:
+  - package-ecosystem: uv            # api/pyproject.toml + api/uv.lock (the images install from the lock)
+    directory: /api
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 10
+    groups:
+      python-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+    ignore:
+      # must match the mcr.microsoft.com/playwright:v1.63.0-noble CI image; bump both together
+      - dependency-name: "@playwright/test"
+
+  - package-ecosystem: docker        # python:3.12-slim-bookworm, node:22-alpine, nginx-unprivileged
+    directories: [/api, /ui]
+    schedule: { interval: weekly, day: monday }
+    groups:
+      base-images:
+        update-types: [minor, patch]
+
+  - package-ecosystem: helm          # chart/Chart.yaml dependencies (nebari-app)
+    directory: /chart
+    schedule: { interval: weekly, day: monday }
+
+  - package-ecosystem: github-actions  # SHA-pinned actions in .github/workflows
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions:
+        update-types: [minor, patch]

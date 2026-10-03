@@ -1,0 +1,31 @@
+# container-structure-test for the API image (api/Dockerfile.api). Contract: api/README.md.
+schemaVersion: 2.0.0
+metadataTest:
+  user: "10001:10001"
+  exposedPorts: ["8000"]
+  workdir: ""
+  envVars:
+    - { key: HOME, value: /tmp }
+    - { key: PYTHONDONTWRITEBYTECODE, value: "1" }
+  cmd: ["uvicorn", "posture.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--no-server-header"]
+commandTests:
+  - name: runs as the unprivileged posture user
+    command: id
+    expectedOutput: ["uid=10001\\(posture\\) gid=10001\\(posture\\)"]
+  - name: the posture package and its report dependencies import
+    command: python
+    args: ["-c", "import posture.main, weasyprint, openpyxl, asyncpg; print('ok')"]
+    expectedOutput: ["ok"]
+  - name: dependencies come from uv.lock (pinned fastapi)
+    command: python
+    args: ["-c", "import fastapi; print(fastapi.__version__)"]
+    expectedOutput: ["^0\\.\\d+\\.\\d+"]
+fileExistenceTests:
+  - name: reports directory owned by the runtime user
+    path: /data/reports
+    shouldExist: true
+    uid: 10001
+    gid: 10001
+  - name: no package manager caches or build tools in the venv
+    path: /opt/venv/bin/uv
+    shouldExist: false

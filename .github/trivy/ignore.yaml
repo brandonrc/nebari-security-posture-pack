@@ -1,0 +1,24 @@
+# Reviewed exceptions for the CRITICAL+fixable gate in image-scan.yaml. Every entry expires: when
+# it does, the gate fails again until the image is rebuilt on a fixed base/binary or the entry is
+# re-reviewed. Keep this list short. (HIGH findings are reported via SARIF but do not gate.)
+vulnerabilities:
+  # worker: clairctl 4.9.0 is the upstream release binary (Go 1.24.10, pgx 5.7.6); fixed only by a
+  # newer clairctl release. clairctl is a CLI client in the worker: it does not use pgx's server-side
+  # paths. Bump CLAIRCTL_VERSION in api/Dockerfile.worker when quay/clair ships a rebuilt release.
+  - id: CVE-2025-68121
+    paths: ["usr/local/bin/clairctl"]
+    statement: upstream clairctl 4.9.0 binary (Go stdlib 1.24.10); awaiting a clair release
+    expired_at: 2026-11-15
+  - id: CVE-2026-33815
+    paths: ["usr/local/bin/clairctl"]
+    statement: pgx in the upstream clairctl binary; client-only use, no database connection
+    expired_at: 2026-11-15
+  - id: CVE-2026-33816
+    paths: ["usr/local/bin/clairctl"]
+    statement: pgx in the upstream clairctl binary; client-only use, no database connection
+    expired_at: 2026-11-15
+  # ui: nginxinc/nginx-unprivileged:1.27-alpine ships alpine 3.21.3 with openssl 3.3.3; fixed by
+  # moving ui/Dockerfile to a current nginx-unprivileged tag (or `apk upgrade` in the image).
+  - id: CVE-2026-31789
+    statement: openssl in the nginx-unprivileged 1.27-alpine base; fix is a base-image bump
+    expired_at: 2026-11-15

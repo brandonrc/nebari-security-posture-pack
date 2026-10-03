@@ -1,0 +1,116 @@
+name: Image scan
+
+# Builds the pack's three images (buildx, GitHub Actions cache), scans them with Trivy and runs
+# container-structure-test against the image contract (non-root uid, ports, pinned scanners).
+# - SARIF with every HIGH/CRITICAL finding goes to code scanning (not on fork PRs).
+# - Gate: CRITICAL with a fix available fails the job, minus the reviewed, expiring exceptions in
+#   .github/trivy/ignore.yaml.
+# Publishing stays in build-images.yaml (nebari-dev reusable workflow); this workflow never pushes.
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "api/**"
+      - "ui/**"
+      - ".github/workflows/image-scan.yaml"
+      - ".github/cst/**"
+      - ".github/trivy/**"
+  pull_request:
+    paths:
+      - "api/**"
+      - "ui/**"
+      - ".github/workflows/image-scan.yaml"
+      - ".github/cst/**"
+      - ".github/trivy/**"
+  schedule:
+    - cron: "17 5 * * 1" # weekly: new CVEs in unchanged images
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-scan-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TRIVY_VERSION: v0.75.0
+  CST_VERSION: v1.22.1
+
+jobs:
+  image:
+    name: image (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            context: api
+            dockerfile: api/Dockerfile.api
+          - image: worker
+            context: api
+            dockerfile: api/Dockerfile.worker
+          - image: ui
+            context: ui
+            dockerfile: ui/Dockerfile
+    env:
+      IMAGE: local/security-posture-${{ matrix.image }}:ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (cached)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          tags: ${{ env.IMAGE }}
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: container-structure-test
+        run: |
+          curl -sSfLo cst "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-amd64"
+          chmod +x cst
+          ./cst test --image "$IMAGE" --config ".github/cst/${{ matrix.image }}.yaml"
+      - name: Trivy report (SARIF, HIGH+CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: ${{ env.IMAGE }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy-${{ matrix.image }}.sarif
+          limit-severities-for-sarif: true
+          exit-code: "0"
+      - name: Upload SARIF to code scanning
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: image-${{ matrix.image }}
+      - name: Trivy gate (CRITICAL with a fix available)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: ${{ env.IMAGE }}
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .github/trivy/ignore.yaml
+          format: table
+          exit-code: "1"
+          skip-setup-trivy: true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: trivy-${{ matrix.image }}
+          path: trivy-${{ matrix.image }}.sarif
+          retention-days: 14

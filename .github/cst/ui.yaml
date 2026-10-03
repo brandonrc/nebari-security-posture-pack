@@ -1,0 +1,35 @@
+# container-structure-test for the UI image (ui/Dockerfile). Contract: ui/README.md.
+schemaVersion: 2.0.0
+metadataTest:
+  user: "101"
+  exposedPorts: ["8080"]
+  envVars:
+    - { key: NGINX_PORT, value: "8080" }
+    - { key: NGINX_ENVSUBST_OUTPUT_DIR, value: /tmp/nginx/conf.d }
+commandTests:
+  - name: runs as the unprivileged nginx user
+    command: id
+    expectedOutput: ["uid=101\\(nginx\\)"]
+  - name: nginx config renders and is valid (through the image's own entrypoint)
+    command: /docker-entrypoint.sh
+    args: ["nginx", "-t"]
+    expectedError: ["test is successful"]
+fileExistenceTests:
+  - name: SPA entrypoint
+    path: /usr/share/nginx/html/index.html
+    shouldExist: true
+  - name: runtime config is world-readable (the chart mounts its own over it)
+    path: /usr/share/nginx/html/config.json
+    shouldExist: true
+  - name: html is not writable by the runtime user
+    path: /usr/share/nginx/html
+    shouldExist: true
+    uid: 0
+  - name: entrypoint hook
+    path: /docker-entrypoint.d/05-security-posture.envsh
+    shouldExist: true
+    permissions: "-rwxr-xr-x"
+fileContentTests:
+  - name: security headers snippet
+    path: /etc/nginx/snippets/security-headers.conf
+    expectedContents: ["X-Content-Type-Options"]
