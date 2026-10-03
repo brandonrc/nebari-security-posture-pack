@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import app_settings
 from ..db.models import ConsensusFindingRow, Image
 from ..db.session import get_session
+from ..reports.cells import safe_cell
 from ..severity import severity_rank
 from ..views import finding_dict, image_summary, iso, utcnow
 from .checks import list_checks
@@ -62,7 +63,7 @@ async def export(format: str = "json", session: AsyncSession = Depends(get_sessi
     w.writeheader()
     for img in data["images"]:
         for f in img["findings"]:
-            w.writerow({
+            w.writerow({k: safe_cell(v) for k, v in {
                 "imageId": img["id"], "imageRef": img["ref"], "digest": img["digest"], "running": img["running"],
                 "namespaces": " ".join(img["namespaces"]), "imageScore": img["score"], "imageGrade": img["grade"],
                 **{k: f.get(k) for k in ("vulnId", "severity", "package", "installedVersion", "fixedVersion",
@@ -71,6 +72,6 @@ async def export(format: str = "json", session: AsyncSession = Depends(get_sessi
                 "scanners": " ".join(f["scanners"]), "controls": " ".join(f["controls"]),
                 "trivy": f["perScanner"].get("trivy", ""), "grype": f["perScanner"].get("grype", ""),
                 "clair": f["perScanner"].get("clair", ""),
-            })
+            }.items()})  # formula-injection safe (security review M5)
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="security-posture-{stamp}.csv"'})

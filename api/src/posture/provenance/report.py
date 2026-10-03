@@ -226,6 +226,11 @@ def _b(v: Any) -> str:
 
 
 def csv_escape(s: str) -> str:
+    """Their CSV quoting, plus formula-injection neutralisation (security review M5): image
+    and workload names are attacker-influenced, so a leading = + - @ tab CR gets a `'`."""
+    from ..reports.cells import safe_cell
+
+    s = safe_cell(s)
     if any(ch in s for ch in ',"\n'):
         return '"' + s.replace('"', '""') + '"'
     return s

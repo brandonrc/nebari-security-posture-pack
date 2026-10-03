@@ -107,3 +107,20 @@ def test_admission_helpers():
     now_, later = order_for_admission([1, 2, 3, 4], {1: 30 * gb, 2: None, 3: 1 * gb, 4: 25 * gb}, 20 * gb)
     assert now_ == [2, 3] and later == [4, 1]
     assert order_for_admission([1, 2], {1: 30 * gb}, 0) == ([1, 2], [])
+
+
+def test_report_child_env_is_minimal(monkeypatch):
+    from posture.report_worker import child_env
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db/x")
+    monkeypatch.setenv("REPORTS_DIR", "/data/reports")
+    monkeypatch.setenv("OIDC_ISSUERS", "https://kc")
+    monkeypatch.setenv("CONTROLS_KEYCLOAK_CLIENT_SECRET", "s3")
+    monkeypatch.setenv("DB_PASSWORD", "pw")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "k")
+    monkeypatch.setenv("RANDOM_UNRELATED", "x")
+    env = child_env()
+    assert env["DATABASE_URL"].endswith("@db/x") and env["REPORTS_DIR"] == "/data/reports" and env["PATH"]
+    for k in ("OIDC_ISSUERS", "CONTROLS_KEYCLOAK_CLIENT_SECRET", "DB_PASSWORD", "AWS_SECRET_ACCESS_KEY",
+              "RANDOM_UNRELATED"):
+        assert k not in env

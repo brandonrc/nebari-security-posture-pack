@@ -233,27 +233,34 @@ async def prune(sm: async_sessionmaker[AsyncSession], report_type: str | None = 
     finished = ("done", "failed")
     async with sm() as s, s.begin():
         rows = (await s.execute(
-            select(Report.id, Report.type, Report.size_bytes, Report.path)
+            select(Report.id, Report.type, Report.size_bytes, Report.path, Report.format, Report.scan_id,
+                   Report.created_by)
             .where(Report.status.in_(finished)).order_by(Report.created_at.desc(), Report.id.desc())
         )).all()
-        doomed: dict[uuid.UUID, str | None] = {}
+        doomed: dict[uuid.UUID, tuple[Any, str]] = {}
         per_type: dict[str, int] = {}
-        for rid, rtype, _, path in rows:
-            per_type[rtype] = per_type.get(rtype, 0) + 1
-            if (report_type is None or rtype == report_type) and per_type[rtype] > max(keep, 0):
-                doomed[rid] = path
+        for row in rows:
+            per_type[row.type] = per_type.get(row.type, 0) + 1
+            if (report_type is None or row.type == report_type) and per_type[row.type] > max(keep, 0):
+                doomed[row.id] = (row, f"retention: more than {keep} {row.type} reports")
         if cap and cap > 0:
             total = 0
-            for n, (rid, _, size, path) in enumerate(rows):
-                if rid in doomed:
+            for n, row in enumerate(rows):
+                if row.id in doomed:
                     continue
-                total += size or 0
+                total += row.size_bytes or 0
                 if total > cap and n > 0:
-                    doomed[rid] = path
+                    doomed[row.id] = (row, f"retention: reports over {cap} bytes")
         if doomed:
             await s.execute(delete(Report).where(Report.id.in_(list(doomed))))
-    for p in doomed.values():
-        _unlink(p)
+    root = reports_dir().resolve()
+    for rid, (row, reason) in doomed.items():
+        path = Path(row.path).resolve() if row.path else None
+        if path is not None and path.is_relative_to(root):  # never unlink outside REPORTS_DIR
+            _unlink(str(path))
+        # deletions of ATO evidence are attributed, like DELETE /reports/{id} (security review L7)
+        log.info("report.deleted", report_id=str(rid), type=row.type, format=row.format, scan_id=row.scan_id,
+                 created_by=row.created_by, user="retention", reason=reason, size=row.size_bytes)
     if doomed:
         log.info("report.pruned", deleted=len(doomed), keep_per_type=keep, max_total_bytes=cap)
     return len(doomed)

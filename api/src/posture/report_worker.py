@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import signal
 import socket
 import sys
@@ -48,6 +49,25 @@ log = get_logger("posture.report_worker")
 
 def now() -> datetime:
     return datetime.now(UTC)
+
+
+_CHILD_EXTRA = ("PYTHONPATH", "PYTHONHOME", "FONTCONFIG_PATH", "FONTCONFIG_FILE", "XDG_CACHE_HOME",
+                "XDG_DATA_DIRS")
+_CHILD_DENY = re.compile(r"^(OIDC_|CONTROLS_KEYCLOAK_|PROVENANCE_COMPAT_TOKEN)|PASSWORD|SECRET|PRIVATE_KEY",
+                         re.IGNORECASE)
+
+
+def child_env() -> dict[str, str]:
+    """Environment of the per-report child: the scanner subprocess allowlist
+    (scanners.base.subprocess_env) plus the settings a generator reads (DATABASE_URL,
+    REPORTS_DIR, LOG_LEVEL, ...) and Python / fontconfig paths. Credentials the child does not
+    need (OIDC, Keycloak, compat token, *PASSWORD*/*SECRET*) never reach it."""
+    from .scanners.base import subprocess_env
+
+    fields = {k.upper() for k in Settings.model_fields}
+    extra = {k: v for k, v in os.environ.items()
+             if (k.upper() in fields or k in _CHILD_EXTRA) and not _CHILD_DENY.search(k)}
+    return subprocess_env(extra)
 
 
 class ReportWorker:
@@ -118,7 +138,7 @@ class ReportWorker:
     # ------------------------------------------------------------- generation
     async def _generate_child(self, rid: uuid.UUID) -> str:
         argv = [sys.executable, "-m", "posture.report_worker", "--generate", str(rid), "--worker-id", self.worker_id]
-        proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL,
+        proc = await asyncio.create_subprocess_exec(*argv, env=child_env(), stdin=asyncio.subprocess.DEVNULL,
                                                     stdout=asyncio.subprocess.DEVNULL,
                                                     stderr=asyncio.subprocess.PIPE)
         try:
