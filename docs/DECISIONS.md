@@ -175,3 +175,45 @@
   292-control catalog view). Every tile (Compliance and the Overview controls tile) now shows the
   baseline numbers with the baseline name in the label; catalog numbers are in a tooltip. Clicking
   a status tile also filters the catalog table to the baseline so its row count matches.
+- 2026-10-03 (security review fixes, api/worker code side; chart wiring is a separate change):
+  - **Auth (H1, L4):** `AUTH_MODE=oidc` with empty `OIDC_ISSUERS` refuses to start; tokens must
+    have `aud` containing or `azp` equal to one of `OIDC_CLIENT_IDS` ∪ `OIDC_AUDIENCES` (chart:
+    `OIDC_CLIENT_IDS=<namespace>-<fullname>`, the NebariApp operator's client id; both empty =
+    warning, no check). `AUTH_MODE=disabled` needs `POSTURE_DEV=1`. JWKS failures are 401; the
+    JWKS lock no longer spans the fetch (single flight, stale-while-revalidate).
+  - **Mirror (C2):** scan `…@<digest>` from `skopeo copy --digestfile`; reuse a cached copy only
+    when its manifest digest equals the source digest or is one of the source index's platform
+    manifests; images expose `mirrorDigestVerified`. The mirror stays an availability trust anchor.
+  - **Compat listener (H2):** bearer token from `PROVENANCE_COMPAT_TOKEN_FILE` (chart mounts a
+    Secret at `/etc/posture/compat/token`) or `PROVENANCE_COMPAT_TOKEN`; no token = refuse to
+    start unless `PROVENANCE_COMPAT_ALLOW_ANONYMOUS=true`. Grafana's Infinity datasource must send
+    `Authorization: Bearer <token>`. List/latest cached per scan, list capped at 50.
+  - **Registry client (H3):** streamed caps (manifest 4 MiB, tags 8 MiB, blobs 16 MiB, token 1 MiB),
+    manual redirects refused to private/loopback/link-local addresses (except configured insecure
+    in-cluster registries), realm host = registry host / parent domain / `auth.docker.io` /
+    `PROVENANCE_REGISTRY_AUTH_REALMS`. DNS-rebinding between check and connect is not prevented;
+    the worker egress NetworkPolicy remains the backstop.
+  - **Subprocesses (M2, M3):** OCI reference grammar on parse, `safe_ref_arg` before exec, `--`
+    before the image argument (trivy, grype, clairctl, cosign, skopeo; checked against the worker
+    image binaries), allowlisted env, stdin `/dev/null`, process-group SIGTERM→SIGKILL (10 s) on
+    timeout and cancellation, scanner JSON streamed to `CACHE_DIR/tmp` and parsed from the file.
+    There is no Python wrapper for the Go provenance collector in this tree (`provenance/collector.py`
+    does not exist), so the go-maintainer §4 cancellation item has nothing to fix here yet; any
+    future wrapper must use `scanners.base.run_proc`.
+  - **Helm (M1):** decompressed release payload cap `PROVENANCE_HELM_MAX_RELEASE_BYTES` (16 MiB).
+  - **Keycloak (M4):** `KEYCLOAK_CLIENT_ID` + `KEYCLOAK_CLIENT_SECRET`/`_FILE` (view-only
+    `client_credentials` client) preferred, admin Secret password grant as fallback, `master` only
+    with `KEYCLOAK_ALLOW_MASTER_FALLBACK=true`.
+  - **CSV/XLSX (M5):** `reports.cells.safe_cell` prefixes `'` to `= + - @ \t \r` cells in POA&M,
+    inventory and vuln-export. `routers/export.py` and the compat `export_csv` should adopt it.
+  - **CSRF + headers (M6):** cookie-carrying unsafe `/api/v1` requests need `Sec-Fetch-Site`
+    same-origin/none or a matching `Origin`. nginx adds `frame-ancestors 'none'` CSP, XFO DENY,
+    nosniff, Referrer-Policy, Permissions-Policy, COOP; no script/style CSP until checked in a browser.
+  - **Trust settings (L5):** `PROVENANCE_TRUST_SETTINGS_LOCKED=true` (chart default) makes the cosign
+    key / identity / issuer env-only; `PUT /settings` answers 403. **Report deletion (L7)** is
+    logged with the admin's username; report files outside `REPORTS_DIR` are never read or unlinked.
+  - Env the chart must set: api `OIDC_ISSUERS` (required), `OIDC_CLIENT_IDS`,
+    `PROVENANCE_COMPAT_TOKEN_FILE` (+ Secret mount) when the internal Service is on,
+    `PROVENANCE_TRUST_SETTINGS_LOCKED=true` (api + worker); worker optional
+    `KEYCLOAK_CLIENT_ID`/`KEYCLOAK_CLIENT_SECRET` (secretKeyRef), `KEYCLOAK_ALLOW_MASTER_FALLBACK`,
+    `PROVENANCE_REGISTRY_AUTH_REALMS`, `PROVENANCE_HELM_MAX_RELEASE_BYTES`. Never set `POSTURE_DEV`.

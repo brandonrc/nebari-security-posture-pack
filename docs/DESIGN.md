@@ -101,12 +101,33 @@ Values: `adminGroups: ["admin"]` feeds all three layers (`auth.groups`, Security
 rule, `ADMIN_GROUPS` env). Group matching strips a leading `/` (NIC realm mapper emits
 `/group`, grace's operator mapper emits `group`).
 
-### RBAC (ClusterRole bound to `<fullname>` ServiceAccount, used by api + worker)
-- `get/list/watch`: pods, namespaces, nodes, replicasets, deployments, statefulsets,
-  daemonsets, jobs, cronjobs, `nebariapps.reconcilers.nebari.dev`.
-- NO secrets access cluster-wide (imagePullSecrets unsupported in v0.1; documented).
-  Optional `registries[]` in values with `existingSecret` for private registry creds,
-  mounted into worker as a docker-config `auth.json`.
+### RBAC: one ServiceAccount per privilege level (security review C1)
+The earlier single ServiceAccount shared by api + worker (and its "no Secrets access" claim) is
+gone: with `provenance.helmReleases.enabled` that SA could read every Secret in the cluster.
+The chart now renders (see `chart/templates/rbac.yaml`):
+
+| ServiceAccount | pods | access |
+|---|---|---|
+| `<fullname>-api` | api, ui | no RBAC, `automountServiceAccountToken: false` (the api never calls the Kubernetes API) |
+| `<fullname>-scanner` | scan worker (inventory + CVE scanners) | `get/list/watch` pods, namespaces, nodes, replicasets, deployments, statefulsets, daemonsets, jobs, cronjobs, serviceaccounts, networkpolicies, `nebariapps.reconcilers.nebari.dev`. **No Secrets.** |
+| `<fullname>-controls` | privileged worker (provenance, controls engine, reports) | the controls ClusterRole (read-only platform objects), `get` on the one Keycloak admin Secret (namespaced Role), and **only** with `provenance.helmReleases.enabled` + an explicit acknowledgement value: `get/list` on all Secrets for Helm release discovery (RBAC cannot filter by label) |
+
+`worker.splitPrivileged=false` runs a single worker with `<fullname>-controls`, which then also
+gets the inventory ClusterRole. Untrusted image content is parsed by the scanner subprocesses
+(trivy, grype, clairctl, skopeo, cosign): they run with an allowlisted environment (no
+`DATABASE_URL`/`DB_PASSWORD`/OIDC/Keycloak secrets), stdin closed, in their own process group,
+and are killed (SIGTERM, then SIGKILL) on timeout or scan cancellation. imagePullSecrets are
+still not discovered (private registries use `registries[].existingSecret` / `REGISTRY_AUTH_FILE`).
+The controls engine prefers a dedicated view-only Keycloak client (`KEYCLOAK_CLIENT_ID` /
+`KEYCLOAK_CLIENT_SECRET`, realm-management `view-realm`, `view-users`, `view-events`) over the
+realm admin Secret, and never falls back to the `master` realm unless
+`KEYCLOAK_ALLOW_MASTER_FALLBACK=true`.
+
+**The mirror registry is a trust anchor.** Scanners pull the mirrored copy by digest
+(`…@sha256:` from `skopeo copy --digestfile`), and a cached copy is reused only after its manifest
+digest is checked against the source digest (`mirrorDigestVerified` on images), so pushing
+content under a mirror tag cannot change scan results. Anyone who can write to the mirror can
+still deny service (delete copies); restrict writes to the worker (auth or NetworkPolicy).
 
 ### NetworkPolicy
 `api` accepts ingress only from `ui` and `worker` pods; `postgres` only from
@@ -160,14 +181,22 @@ unless `force`.
 ## 5. API (FastAPI, prefix `/api/v1`, JSON, camelCase fields)
 
 Auth middleware: token from `Authorization: Bearer` or cookie `NebariIdToken` (or any
-cookie starting with `IdToken`). Verify signature via JWKS at `OIDC_JWKS_URL`, `exp`,
-and `iss` ∈ `OIDC_ISSUERS` (comma list; both internal and external Keycloak issuers).
+cookie starting with `IdToken`). Verify signature via JWKS at `OIDC_JWKS_URL` (asymmetric
+algorithms only; a JWK's own `alg` must match the header), `exp`, `nbf`, and `iss` ∈
+`OIDC_ISSUERS` (comma list; both internal and external Keycloak issuers). `OIDC_ISSUERS` is
+**required** with `AUTH_MODE=oidc`: the API refuses to start without it. The token must also be
+meant for this app: `aud` contains, or `azp` equals, one of `OIDC_CLIENT_IDS` (the chart passes
+the operator client id `<namespace>-<fullname>`) ∪ `OIDC_AUDIENCES`; with both empty the check
+is skipped and a warning is logged at startup. JWKS fetch/parse failures answer 401.
+State-changing `/api/v1` requests that carry cookies must be same-origin (`Sec-Fetch-Site`
+same-origin/none, or an `Origin` matching the host), else 403 (CSRF).
 Groups claim `groups` (strip leading `/`); require intersection with `ADMIN_GROUPS`
 else 403 `{detail:"admin group required"}`. 401 when no/invalid token. `/health` and
-`/ready` are unauthenticated. `AUTH_MODE=disabled` bypasses (dev only; logs warning).
+`/ready` are unauthenticated. `AUTH_MODE=disabled` bypasses (dev only; the API refuses to start
+unless `POSTURE_DEV=1`).
 
 Env vars (api & worker): `DATABASE_URL`, `AUTH_MODE` (`oidc`|`disabled`),
-`OIDC_JWKS_URL`, `OIDC_ISSUERS`, `ADMIN_GROUPS`, `TRIVY_SERVER_URL`, `CLAIR_URL`,
+`OIDC_JWKS_URL`, `OIDC_ISSUERS`, `OIDC_CLIENT_IDS`, `OIDC_AUDIENCES`, `ADMIN_GROUPS`, `TRIVY_SERVER_URL`, `CLAIR_URL`,
 `MIRROR_ENABLED`, `MIRROR_REGISTRY`, `MIRROR_INSECURE`, `SCAN_PARALLELISM`,
 `SCAN_TIMEOUT_SECONDS`, `SCAN_INTERVAL_HOURS`, `RESCAN_AFTER_HOURS`,
 `EXCLUDED_NAMESPACES`, `CACHE_DIR`, `LOG_LEVEL`.
@@ -362,9 +391,12 @@ Results stored per image per scan (`image_provenance` table) and surfaced on `Im
 and `ImageDetail`. SBOM attestations, when present, are downloaded and fed to grype as `sbom:` input
 (faster; `provenance.useSbomForGrype`, default false).
 
-### Compatibility API (served by our API, no auth difference from the rest: admin-gated; a value
-`provenance.compat.internalService` additionally exposes `/api/reports/*` on a ClusterIP Service without
-auth for Grafana Infinity, exactly like their `-web-internal` Service)
+### Compatibility API (served by our API: admin-gated like the rest on the main listener; a value
+`provenance.compat.internalService` additionally exposes `/api/reports/*` and `/api/export` on a ClusterIP
+Service for Grafana Infinity, like their `-web-internal` Service, but behind a static bearer token from a
+Secret (`PROVENANCE_COMPAT_TOKEN_FILE`; Grafana sends it as a header). Without a token the api refuses to
+start unless `PROVENANCE_COMPAT_ALLOW_ANONYMOUS=true`. The report list (newest 50) and the latest report
+are cached and invalidated per scan.)
 - `GET /api/reports` → `[{filename, generatedAt, sizeBytes}]`
 - `GET /api/reports/latest`, `GET /api/reports/{filename}` → their report JSON **verbatim schema**
   (`metadata{generatedAt,collectorVersion,clusterName,namespacesScanned}`, `images[]`, `helmReleases[]`,

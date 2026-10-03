@@ -106,7 +106,14 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `PROVENANCE_HELM_CHART_REPOS` | empty | worker | `https://…` index.yaml repos / `oci://host/path` prefixes for chart update checks |
 | `PROVENANCE_RECHECK_HOURS` | `24` | both | reuse a digest's signature/SBOM/provenance results |
 | `PROVENANCE_CONCURRENCY` / `PROVENANCE_REGISTRY_TIMEOUT` | `8` / `30` | worker | registry concurrency / per-request timeout (s) |
-| `PROVENANCE_COMPAT_INTERNAL_PORT` | unset | api | second, unauthenticated listener serving only `/api/reports*`, `/api/export`, `/healthz` (Grafana) |
+| `PROVENANCE_COMPAT_INTERNAL_PORT` | unset | api | second listener serving only `/api/reports*`, `/api/export`, `/healthz` (Grafana); its read endpoints need `Authorization: Bearer <token>` |
+| `PROVENANCE_COMPAT_TOKEN_FILE` / `PROVENANCE_COMPAT_TOKEN` | unset | api | bearer token for the internal listener (file = mounted Secret, re-read on change). With the port set and no token the API refuses to start |
+| `PROVENANCE_COMPAT_ALLOW_ANONYMOUS` | `false` | api | `true` serves the internal listener without a token (old behaviour; explicit opt-out) |
+| `PROVENANCE_TRUST_SETTINGS_LOCKED` | `false` (chart: `true`) | api | cosign key / keyless identity + issuer come only from `PROVENANCE_COSIGN_*`; `PUT /settings` answers 403 when asked to change them |
+| `PROVENANCE_REGISTRY_AUTH_REALMS` | empty | worker | extra token-realm hosts the registry client may call (default: the registry host, its parent domain, `auth.docker.io`) |
+| `PROVENANCE_HELM_MAX_RELEASE_BYTES` | `16777216` | worker | decompressed Helm release payload cap (larger releases are reported as corrupt) |
+| `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` (or `KEYCLOAK_CLIENT_SECRET_FILE`) | unset | worker | controls engine: dedicated view-only client (`client_credentials`); when set the Keycloak admin Secret is not read |
+| `KEYCLOAK_ALLOW_MASTER_FALLBACK` | `false` | worker | controls engine: with no pinned admin realm, also try the admin login against `master` |
 | `COSIGN_BIN` | `cosign` | worker | cosign binary (pinned v3.1.3 in the worker image; TUF cache `TUF_ROOT=/cache/sigstore`) |
 
 ## Module map (`src/posture/`)
@@ -124,8 +131,8 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `migrate.py` | `python -m posture.migrate` |
 | `inventory.py` / `inventory_model.py` | K8s API inventory: pods (containers/init/ephemeral), owner chain (RS→Deployment, Job→CronJob), NebariApp mapping, securityContext snapshot, NetworkPolicies |
 | `images.py` | image ref parsing, `imageID` normalization (`docker-pullable://`, bare `sha256:`), unique image key, rewrite map, mirror target |
-| `mirror.py` | skopeo copy to `<mirror>/posture-mirror/<registry>/<repo>:sha256-<hex>` with fallback to the original ref |
-| `scanners/` | `trivy.py` (`trivy image --server`), `grype.py` (local DB on PVC), `clair.py` (`clairctl report --out json`, generated clairctl config) → `ScanResult` |
+| `mirror.py` | skopeo copy (`--digestfile`) to `<mirror>/posture-mirror/<registry>/<repo>:sha256-<hex>`; scanners pull `…@<copied digest>`; a cached copy is reused only when its digest matches the source (`mirrorDigestVerified`); fallback to the original ref |
+| `scanners/` | `trivy.py` (`trivy image --server`), `grype.py` (local DB on PVC), `clair.py` (`clairctl report --out json`, generated clairctl config) → `ScanResult`; `base.run_proc`: allowlisted env, stdin `/dev/null`, own process group (SIGTERM, SIGKILL after 10 s on timeout or cancel), JSON streamed to `CACHE_DIR/tmp` and parsed from the file |
 | `correlate.py` / `analysis.py` | consensus per `(vulnId, package)`, agreement, max severity, per-image score |
 | `scoring.py` | SCORING.md formulas (pure) |
 | `posture_checks.py` | the 16 SCORING.md checks (pure), kube-system ×0.5 |
