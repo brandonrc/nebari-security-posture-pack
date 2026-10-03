@@ -55,6 +55,7 @@ FAIL = {
     # kubernetes
     "k8s-pod-security-admission": lambda w: k(w, "/api/v1/namespaces").append(ns("legacy")),
     "k8s-default-deny-ingress": lambda w: _set(w["k8s"], "/apis/networking.k8s.io/v1/networkpolicies", []),
+    "k8s-default-deny-egress": lambda w: k(w, "/apis/networking.k8s.io/v1/networkpolicies").pop(2),
     "k8s-cluster-admin-bindings": lambda w: w["config"].update(admin_subjects=[]),
     "k8s-default-sa-automount": lambda w: k(w, "/api/v1/serviceaccounts")[0].pop("automountServiceAccountToken"),
     "k8s-no-anonymous-access": lambda w: k(w, "/apis/rbac.authorization.k8s.io/v1/rolebindings").append(
@@ -75,6 +76,8 @@ FAIL = {
         "activeTargets": [{"labels": {"job": "kubelet"}, "health": "down"}]}})),
     "mon-alert-receivers": lambda w: _set(w["http"], f"{AM}/api/v2/status",
                                           (200, {"config": {"original": "receivers:\n- name: 'null'\n"}})),
+    "log-pipeline-alerting": lambda w: _set(w["http"], f"{PROM}/api/v1/rules", (200, {"data": {"groups": [
+        {"name": "node", "rules": [{"type": "alerting", "name": "NodeFilesystemAlmostFull"}]}]}})),
     # registry
     "reg-access-restricted": lambda w: (_set(w["http"], f"{REG}/v2/", (200, {})),
                                         _set(w["k8s"], "/api/v1/services", [svc(
@@ -97,6 +100,7 @@ UNKNOWN = {
     "log-retention": {"mutate": lambda w: w["http"].pop(f"{LOKI}/config")},
     "mon-prometheus-scraping": {"mutate": lambda w: w["http"].pop(f"{PROM}/api/v1/targets")},
     "mon-alert-receivers": {"mutate": lambda w: w["http"].pop(f"{AM}/api/v2/status")},
+    "log-pipeline-alerting": {"mutate": lambda w: w["http"].pop(f"{PROM}/api/v1/rules")},
     "reg-access-restricted": {"mutate": lambda w: w["http"].pop(f"{REG}/v2/")},
     "pack-scan-recent": {"mutate": lambda w: _set(w, "snapshot", None)},  # evaluation error -> unknown
     "pack-inventory-current": {"mutate": lambda w: _set(w, "snapshot", {"lastDoneScan": 5})},
@@ -237,15 +241,35 @@ async def test_loki_retention_disabled_is_unbounded_and_discovery():
     assert out.status == "fail" and "no Loki" in out.detail
 
 
-async def test_registry_cluster_internal_anonymous_passes():
+async def test_registry_cluster_internal_anonymous_fails():
+    """Looks compliant but isn't (M4): a ClusterIP-only anonymous registry lets any pod push images."""
     w = good_world()
     w["http"][f"{REG}/v2/"] = (200, {})
     out = await run_one(get_assertion("reg-access-restricted"), make_ctx(w), 5)
-    assert out.status == "pass" and "cluster-internal" in out.detail
+    assert out.status == "fail" and "cluster-internal but accepts unauthenticated" in out.detail
     w["k8s"]["/apis/gateway.networking.k8s.io/v1/httproutes"].append(
         {"metadata": {"namespace": "container-registry", "name": "reg"},
          "spec": {"rules": [{"backendRefs": [{"name": "registry"}]}]}})
-    assert (await run_one(get_assertion("reg-access-restricted"), make_ctx(w), 5)).status == "fail"
+    out = await run_one(get_assertion("reg-access-restricted"), make_ctx(w), 5)
+    assert out.status == "fail" and "exposed outside the cluster" in out.detail
+
+
+async def test_alert_receivers_without_security_rules_fail():
+    """Looks compliant but isn't (M4): a receiver with no security alert rule alerts nobody about attacks."""
+    w = good_world()
+    w["http"][f"{PROM}/api/v1/rules"] = (200, {"data": {"groups": [
+        {"name": "node", "rules": [{"type": "alerting", "name": "NodeFilesystemAlmostFull"}]}]}})
+    out = await run_one(get_assertion("mon-alert-receivers"), make_ctx(w), 5)
+    assert out.status == "fail" and "security-relevant" in out.detail
+
+
+async def test_login_events_must_store_login_and_logout_types():
+    w = good_world()
+    w["keycloak"]["/events/config"]["enabledEventTypes"] = ["UPDATE_PROFILE"]
+    out = await run_one(get_assertion("kc-login-events"), make_ctx(w), 5)
+    assert out.status == "fail" and "LOGIN, LOGIN_ERROR, LOGOUT" in out.detail
+    w["keycloak"]["/events/config"]["enabledEventTypes"] = []  # empty = every type is stored
+    assert (await run_one(get_assertion("kc-login-events"), make_ctx(w), 5)).status == "pass"
 
 
 async def test_mfa_not_applicable_without_admin_group():

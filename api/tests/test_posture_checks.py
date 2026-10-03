@@ -24,7 +24,9 @@ def test_catalogue_matches_scoring_md():
                    "added-capabilities", "capabilities-not-dropped", "writable-rootfs", "no-resource-limits",
                    "no-resource-requests", "mutable-tag", "no-liveness-probe", "no-readiness-probe",
                    "automount-sa-token", "seccomp-unconfined", "no-netpol"}
-    assert all(c.controls for c in CHECKS)
+    # probes are operational hygiene (compliance review M4): no control, no POA&M row
+    assert all(c.controls for c in CHECKS if c.id not in ("no-liveness-probe", "no-readiness-probe"))
+    assert not any(c.controls for c in CHECKS if c.id in ("no-liveness-probe", "no-readiness-probe"))
     assert CHECKS_BY_ID["privileged"].severity == "critical"
 
 

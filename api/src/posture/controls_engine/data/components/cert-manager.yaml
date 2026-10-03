@@ -8,18 +8,26 @@ description: >-
   renew certificates before expiry.
 implemented-requirements:
   - control: SC-12
-    statement: Certificate keys are generated and rotated automatically by cert-manager from a Ready ClusterIssuer.
+    statement: >-
+      Certificate keys are generated and rotated by cert-manager from a Ready ClusterIssuer; the
+      engine checks that the issuers are Ready and every Certificate is Ready and not near expiry.
     assertions: [cm-issuer-ready, cm-certificates-valid]
     responsibility: shared
     customer: Establish key-management procedures for keys and certificates not issued by cert-manager (application signing keys, database keys) and approve the issuing CA.
     assigned: rest
-  - control: SC-12(1)
-    statement: Certificates are renewed before expiry so that keys remain available to the services that need them.
-    assertions: [cm-certificates-valid]
-    responsibility: provider
   - control: SC-17
-    statement: Public key certificates are issued by an approved certificate authority configured as a ClusterIssuer.
+    statement: >-
+      Certificates are issued by ClusterIssuers; the engine checks that every issuer chains to a CA
+      on the approved-CA allowlist (controlsEngine.approvedIssuers), never a self-signed issuer.
+    assertions: [cm-issuer-ready, cm-certificates-valid]
+    responsibility: shared
+    customer: Configure a ClusterIssuer that chains to an approved CA (DoD PKI / ECA or the organization's CA), list it in controlsEngine.approvedIssuers and approve the trust anchors (SC-17 b).
+    assigned: rest
+  - control: IA-5(2)
+    statement: >-
+      Certificates presented by platform services chain to an approved trust anchor configured as
+      a cert-manager ClusterIssuer.
     assertions: [cm-issuer-ready]
     responsibility: shared
-    customer: Configure a ClusterIssuer that chains to an approved CA (DoD PKI / ECA or the organization's CA) and record its approval.
+    customer: Enforce private-key protection and identity mapping for any PKI-based authenticators of the program (IA-5(2) a) and revocation checking (IA-5(2) b.2).
     assigned: rest

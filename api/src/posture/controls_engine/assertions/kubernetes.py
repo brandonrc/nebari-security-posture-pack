@@ -56,7 +56,8 @@ def is_default_deny_ingress(np: dict[str, Any]) -> bool:
 
 
 @assertion(id="k8s-default-deny-ingress", title="Each app namespace has a default-deny ingress NetworkPolicy",
-           controls=["SC-7", "SC-7(5)"], objectives=["sc-7_obj.a-4", "sc-7.5_obj-1", "sc-7.5_obj-2"], component=C, severity="high")
+           controls=["SC-7", "SC-7(5)"],
+           objectives=["sc-7_obj.a-4", "sc-7.5_obj-1", "sc-7.5_obj-2"], component=C, severity="high")
 async def default_deny(ctx: EngineContext) -> Result:
     """Every non-system namespace with pods has a NetworkPolicy selecting all pods (`podSelector: {}`)
     for Ingress, so traffic not explicitly allowed is denied."""
@@ -78,6 +79,37 @@ async def default_deny(ctx: EngineContext) -> Result:
     return passed(f"all {len(with_pods)} application namespace(s) have default-deny ingress", **ev)
 
 
+def is_default_deny_egress(np: dict[str, Any]) -> bool:
+    spec = np.get("spec") or {}
+    sel = spec.get("podSelector") or {}
+    if sel.get("matchLabels") or sel.get("matchExpressions"):
+        return False
+    return "Egress" in (spec.get("policyTypes") or [])
+
+
+@assertion(id="k8s-default-deny-egress", title="Each app namespace has a default-deny egress NetworkPolicy",
+           controls=["SC-7(5)"], objectives=["sc-7.5_obj-1"], component=C, severity="medium")
+async def default_deny_egress(ctx: EngineContext) -> Result:
+    """Every non-system namespace with pods has a NetworkPolicy selecting all pods for Egress
+    (SC-7(5) is deny by default for outbound traffic as well)."""
+    app_ns = {n["metadata"]["name"] for n in await ctx.app_namespaces()}
+    with_pods = sorted(app_ns & _active_pod_namespaces(await ctx.pods()))
+    nps = await ctx.k8s_list("/apis/networking.k8s.io/v1/networkpolicies")
+    deny: dict[str, list[str]] = {}
+    for np in nps:
+        if is_default_deny_egress(np):
+            deny.setdefault(np["metadata"]["namespace"], []).append(np["metadata"]["name"])
+    missing = [ns for ns in with_pods if ns not in deny]
+    ev = {"namespacesWithPods": len(with_pods), "defaultDeny": {ns: deny[ns] for ns in with_pods if ns in deny},
+          "missing": missing}
+    if not with_pods:
+        return not_applicable("no application namespaces with pods", **ev)
+    if missing:
+        return failed(f"{len(missing)} of {len(with_pods)} namespace(s) without default-deny egress: "
+                      + ", ".join(missing[:12]) + ("…" if len(missing) > 12 else ""), **ev)
+    return passed(f"all {len(with_pods)} application namespace(s) have default-deny egress", **ev)
+
+
 def subject_label(s: dict[str, Any]) -> str:
     if s.get("kind") == "ServiceAccount":
         return f"ServiceAccount:{s.get('namespace', '')}/{s.get('name')}"
@@ -96,7 +128,8 @@ def is_system_subject(s: dict[str, Any]) -> bool:
 
 
 @assertion(id="k8s-cluster-admin-bindings", title="cluster-admin bound only to system or approved subjects",
-           controls=["AC-6(1)"], objectives=["ac-6.1_obj.a"], component=C, severity="critical")
+           controls=["AC-6(1)", "AC-6(5)"],
+           objectives=["ac-6.1_obj.a", "ac-6.5_obj"], component=C, severity="critical")
 async def cluster_admin(ctx: EngineContext) -> Result:
     """ClusterRoleBindings to `cluster-admin` have only `system:*` users/groups or subjects listed in
     `controlsEngine.adminSubjects` (`User:alice`, `Group:ops`, `ServiceAccount:ns/name`)."""
@@ -119,7 +152,8 @@ async def cluster_admin(ctx: EngineContext) -> Result:
 
 
 @assertion(id="k8s-default-sa-automount", title="Default ServiceAccounts do not automount API tokens",
-           controls=["AC-6(10)"], objectives=["ac-6.10_obj"], component=C, severity="medium")
+           controls=["AC-6", "CM-7"],
+           objectives=["ac-6_obj", "cm-7_obj.a"], component=C, severity="medium")
 async def default_sa(ctx: EngineContext) -> Result:
     """The `default` ServiceAccount of every non-system namespace sets `automountServiceAccountToken: false`."""
     app_ns = {n["metadata"]["name"] for n in await ctx.app_namespaces()}
@@ -165,7 +199,8 @@ def _minor(version: str) -> int | None:
     return int(m.group(2)) if m and m.group(1) == "1" else None
 
 
-@assertion(id="k8s-supported-version", title="Kubernetes version is still supported upstream", controls=["SI-2"], objectives=["si-2_obj.c-1"],
+@assertion(id="k8s-supported-version", title="Kubernetes version is still supported upstream", controls=["SA-22", "SI-2"],
+           objectives=["sa-22_obj.a", "si-2_obj.c-1"],
            component=C, severity="high")
 async def supported_version(ctx: EngineContext) -> Result:
     """API server and every kubelet run a Kubernetes minor version before its upstream end-of-life date."""

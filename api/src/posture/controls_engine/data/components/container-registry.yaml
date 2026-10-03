@@ -4,18 +4,20 @@ title: Container registry
 type: service
 purpose: Stores the container images deployed to the cluster (and the scan mirror).
 description: >-
-  The in-cluster OCI registry stores platform and application images. Write access must require
-  authentication or the registry must be reachable from inside the cluster only.
+  The in-cluster OCI registry stores platform and application images. Pushing images must require
+  authentication: an anonymous registry lets any compromised pod replace images.
 implemented-requirements:
-  - control: CM-14
-    statement: Only authenticated or cluster-internal clients can push images, so deployed components come from controlled sources.
+  - control: AC-3
+    statement: The registry's API requires authentication (checked with a read-only `GET /v2/` probe).
     assertions: [reg-access-restricted]
     responsibility: shared
-    customer: Restrict who may push images and review the registry account list.
+    customer: Define who may push and pull images and review the registry accounts.
     assigned: rest
-  - control: SR-4
-    statement: Image provenance is preserved by restricting who can write to the registry.
+  - control: CM-5
+    statement: >-
+      Changes to deployed images are restricted to authenticated registry clients (logical access
+      restriction for change, CM-5 objective 6).
     assertions: [reg-access-restricted]
     responsibility: shared
-    customer: Document the provenance of images built or imported by the program.
+    customer: Define, document and approve the access restrictions for changes (CM-5 objectives 1-5), including the CI identities allowed to push.
     assigned: rest

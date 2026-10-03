@@ -194,8 +194,11 @@ async def test_run_assertions_all_pass_in_good_world():
     by = {r.control: r for r in rows}
     for c in ("AC-7", "AC-12", "RA-5(2)", "SC-23", "IA-2(1)", "SC-8", "SC-7(5)"):  # every objective evidenced
         assert by[c].status == "passing", c
-    for c in ("AC-2", "RA-5", "CM-8", "AU-2"):  # platform part passes, the rest is assigned to the program
+    for c in ("CM-8", "AU-12", "AC-6(1)"):  # platform part passes, the rest is assigned to the program
         assert by[c].status == "hybrid", c
+    for c in ("AC-2", "SC-8(1)"):  # evidence ceiling (compliance review M4 "partial")
+        assert by[c].status == "partial" and "capped at partial" in by[c].detail, c
+    assert by["RA-5"].status == "partial" and "1 of 9 objective(s)" in by["RA-5"].detail
 
 
 def test_engine_config_from_settings():

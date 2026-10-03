@@ -131,7 +131,7 @@ async def test_02_scan_with_provenance(env):
     assert web["sbom"] == {"hasSBOM": True, "format": "spdx"}
     assert web["provenance"] == {"hasProvenance": True, "predicateType": "https://slsa.dev/provenance/v0.2"}
     assert web["update"]["latestInMajor"] == "1.1.0" and web["score"] == 85.0 and web["grade"] == "B"
-    assert web["findings"] == ["update-available"] and web["controls"] == ["SI-2"]
+    assert web["findings"] == ["update-available"] and web["controls"] == []  # informational unless end of life (M4)
     alpine = imgs["docker.io/library/alpine:3.17.0"]["provenance"]
     assert alpine["signature"] == {"signed": False, "verified": False}
     assert alpine["update"] == {"currentTag": "3.17.0", "latestInMajor": "3.20.3", "newestAvailable": "4.0.0",

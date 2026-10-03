@@ -9,6 +9,7 @@ from ..context import EngineContext
 from ..model import Result, assertion, failed, passed
 
 C = "keycloak"
+REQUIRED_EVENT_TYPES = ("LOGIN", "LOGIN_ERROR", "LOGOUT")
 
 
 def _subject_allowed(name: str, allow: list[str], kinds: tuple[str, ...] = ("user", "keycloak")) -> bool:
@@ -109,7 +110,8 @@ async def admin_mfa(ctx: EngineContext) -> Result:
 
 
 @assertion(id="kc-session-timeouts", title="SSO session idle and maximum lifetimes within policy",
-           controls=["AC-11", "AC-12"], objectives=["ac-11_obj.a", "ac-12_obj"], component=C, severity="medium")
+           controls=["AC-12", "SC-10"],
+           objectives=["ac-12_obj", "sc-10_obj"], component=C, severity="medium")
 async def session_timeouts(ctx: EngineContext) -> Result:
     """`ssoSessionIdleTimeout` and `ssoSessionMaxLifespan` are set and <= the policy values."""
     r = await ctx.realm()
@@ -148,18 +150,26 @@ async def registration(ctx: EngineContext) -> Result:
     return passed("self-registration is disabled", registrationAllowed=False)
 
 
-@assertion(id="kc-login-events", title="Login events are recorded with retention", controls=["AU-2", "AU-12"], objectives=["au-2_obj.c-2", "au-12_obj.a"],
+@assertion(id="kc-login-events", title="Login events are recorded with retention", controls=["AU-12", "AU-11"],
+           objectives=["au-12_obj.a", "au-11_obj"],
            component=C, severity="medium")
 async def login_events(ctx: EngineContext) -> Result:
-    """Events config: `eventsEnabled` with an expiration (stored-event retention)."""
+    """Events config: `eventsEnabled` with an expiration (stored-event retention), and the stored
+    event types include successful and failed logins and logouts (`enabledEventTypes` empty = all)."""
     cfg = await ctx.kc_get("/events/config")
     ev = {k: cfg.get(k) for k in ("eventsEnabled", "eventsExpiration", "eventsListeners")}
-    ev["enabledEventTypes"] = len(cfg.get("enabledEventTypes") or [])
+    types = list(cfg.get("enabledEventTypes") or [])
+    ev["enabledEventTypes"] = types or "all"
+    ev["requiredEventTypes"] = list(REQUIRED_EVENT_TYPES)
     if not cfg.get("eventsEnabled"):
         return failed("login events are not stored (eventsEnabled=false)", **ev)
+    missing = [t for t in REQUIRED_EVENT_TYPES if types and t not in types]
+    if missing:
+        return failed("stored event types omit " + ", ".join(missing), **ev)
     if not cfg.get("eventsExpiration"):
         return failed("login events are stored without a retention period (eventsExpiration unset)", **ev)
-    return passed(f"login events stored for {int(cfg['eventsExpiration']) // 86400} day(s)", **ev)
+    return passed(f"login/logout events ({'all types' if not types else ', '.join(REQUIRED_EVENT_TYPES)}) stored "
+                  f"for {int(cfg['eventsExpiration']) // 86400} day(s)", **ev)
 
 
 @assertion(id="kc-admin-events", title="Admin events are recorded with details", controls=["AU-2", "AU-3", "AU-12"], objectives=["au-2_obj.c-2", "au-3_obj", "au-12_obj.c"],

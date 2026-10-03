@@ -34,12 +34,14 @@ def _backing_service(services: list[dict[str, Any]], host: str, port: int | None
     return None
 
 
-@assertion(id="reg-access-restricted", title="Container registry requires auth or is cluster-internal only",
-           controls=["CM-14", "SR-4"], objectives=["cm-14_obj-1", "sr-4_obj-3"], component=C, severity="high")
+@assertion(id="reg-access-restricted", title="Container registry requires authentication",
+           controls=["AC-3", "CM-5"],
+           objectives=["ac-3_obj", "cm-5_obj-6"], component=C, severity="high")
 async def registry_access(ctx: EngineContext) -> Result:
-    """The registry's `/v2/` endpoint demands authentication (401), or it is reachable only inside
-    the cluster: its Service is ClusterIP (no NodePort/LoadBalancer/externalIPs) and no HTTPRoute
-    exposes it through the gateway. Read-only probe; nothing is pushed."""
+    """The registry's `/v2/` endpoint demands authentication (HTTP 401). An anonymous registry fails
+    even when it is cluster-internal: any compromised pod could push (AC-3 / CM-5 access restrictions
+    for change, compliance review M4). Exposure outside the cluster is reported as well. Read-only
+    probe; nothing is pushed."""
     ref = ctx.config.registry_url
     if not ref:
         return not_applicable("no in-cluster registry configured (controlsEngine.registryUrl / MIRROR_REGISTRY)")
@@ -79,4 +81,5 @@ async def registry_access(ctx: EngineContext) -> Result:
     if exposures:
         return failed(f"anonymous registry {ev['service']} is exposed outside the cluster: " + "; ".join(exposures),
                       **ev)
-    return passed(f"anonymous registry {ev['service']} is cluster-internal only (ClusterIP, no route)", **ev)
+    return failed(f"anonymous registry {ev['service']} is cluster-internal but accepts unauthenticated access: any "
+                  "pod can push images (require authentication for push)", **ev)

@@ -144,7 +144,8 @@ async def _tls_probe(host: str, port: int, max_version: ssl.TLSVersion | None, t
 
 
 @assertion(id="gw-tls-min-version", title="Gateway TLS minimum version is 1.2 or later",
-           controls=["SC-8(1)", "SC-13"], objectives=["sc-8.1_obj", "sc-13_obj.b"], component=GW, severity="high")
+           controls=["SC-8(1)"],
+           objectives=["sc-8.1_obj"], component=GW, severity="high")
 async def tls_min_version(ctx: EngineContext) -> Result:
     """ClientTrafficPolicy `tls.minVersion` >= 1.2 for every Gateway; without a policy the Envoy
     Gateway default (1.2) applies and is confirmed by a live handshake probe (TLS 1.1 must be refused)."""

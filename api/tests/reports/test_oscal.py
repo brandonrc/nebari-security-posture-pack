@@ -50,9 +50,11 @@ def test_content(snapshot, opts):
     assert len(res["observations"]) == n_findings + len(failing)
     assert len(res["risks"]) == len({f.vuln_id for f in snapshot.findings}) + len(failing)
     by_target = {f["target"]["target-id"]: f for f in res["findings"]}
-    assert by_target["ra-5_smt"]["target"]["status"]["state"] == "not-satisfied"
-    assert by_target["si-2.2_smt"]["related-risks"]
-    assert "ac-6.10_smt" in by_target
+    assert by_target["si-2_smt"]["target"]["status"]["state"] == "not-satisfied"
+    assert by_target["si-2_smt"]["related-risks"]
+    # M4: findings are SI-2 flaws, not RA-5 / SI-2(2) weaknesses; AC-6(10) is no longer tagged
+    assert "ra-5_smt" not in by_target and "si-2.2_smt" not in by_target and "ac-6.10_smt" not in by_target
+    assert "sc-39_smt" in by_target
     risk = next(r for r in res["risks"] if r["title"].startswith("CVE-2024-6387"))
     assert risk["deadline"].startswith("2026-09-06")  # first seen 2026-08-22 + 15 days
     obs_ids = {o["uuid"] for o in res["observations"]}

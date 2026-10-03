@@ -79,7 +79,8 @@ async def _loki_namespaces(ctx: EngineContext, url: str) -> tuple[set[str] | Non
 
 
 @assertion(id="log-ingest-all-namespaces", title="Logs from every namespace reach Loki",
-           controls=["AU-2", "AU-6", "AU-12"], objectives=["au-2_obj.c-2", "au-6_obj.a", "au-12_obj.c"], component=LOKI, severity="high")
+           controls=["AU-12"],
+           objectives=["au-12_obj.c"], component=LOKI, severity="high")
 async def log_ingest(ctx: EngineContext) -> Result:
     """Every namespace with running pods has log streams in Loki within the last
     `controlsEngine.logWindowMinutes` (default 10) minutes (union over discovered Loki instances)."""
@@ -157,7 +158,8 @@ async def log_retention(ctx: EngineContext) -> Result:
 
 
 @assertion(id="mon-prometheus-scraping", title="Prometheus is scraping platform targets",
-           controls=["AU-6", "SI-4"], objectives=["au-6_obj.a", "si-4_obj.c.1"], component=PROM, severity="medium")
+           controls=["SI-4", "CA-7"],
+           objectives=["si-4_obj.c.1", "ca-7_obj.d"], component=PROM, severity="medium")
 async def prometheus_scraping(ctx: EngineContext) -> Result:
     """A Prometheus instance has active scrape targets that are up (`/api/v1/targets`)."""
     urls = await prometheus_urls(ctx)
@@ -191,6 +193,56 @@ async def prometheus_scraping(ctx: EngineContext) -> Result:
                   + (f" ({down} down)" if down else ""), **ev)
 
 
+SECURITY_RULE = re.compile(r"secur|auth|login|logon|brute|intrus|anomal|unauthori[sz]|privileg|falco|tetragon|audit|"
+                           r"attack|malware|exploit|suspicious|cert(ificate)?expir|kev|cve", re.I)
+LOG_PIPELINE_RULE = re.compile(r"(loki|promtail|alloy|fluent|vector|logging|log[-_ ]?pipeline)", re.I)
+LOG_FAILURE_RULE = re.compile(r"(fail|error|drop|discard|down|absent|unhealthy|lag|reject|backpressure|request)", re.I)
+
+
+async def alert_rules(ctx: EngineContext) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Alerting rules loaded in Prometheus (`/api/v1/rules?type=alert`): [{name, group, labels}]."""
+    async def fetch() -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        rules, errors = [], []
+        for u in await prometheus_urls(ctx):
+            try:
+                r = await ctx.http_get(f"{u}/api/v1/rules", params={"type": "alert"})
+                if r.status_code != 200:
+                    raise ValueError(f"HTTP {r.status_code}")
+                for g in ((r.json() or {}).get("data") or {}).get("groups") or []:
+                    for rule in g.get("rules") or []:
+                        if rule.get("type", "alerting") == "alerting":
+                            rules.append({"name": rule.get("name"), "group": g.get("name"),
+                                          "labels": rule.get("labels") or {}})
+            except (httpx.HTTPError, ValueError) as e:
+                errors.append({"url": u, "error": _err(e)})
+        return rules, errors
+
+    return await ctx.memo("prometheus:alert-rules", fetch)
+
+
+def _rule_text(r: dict[str, Any]) -> str:
+    return " ".join([str(r.get("name") or ""), str(r.get("group") or ""),
+                     *(f"{k}={v}" for k, v in (r.get("labels") or {}).items())])
+
+
+@assertion(id="log-pipeline-alerting", title="Log pipeline failures raise an alert",
+           controls=["AU-5"], objectives=["au-5_obj.a"], component=LOKI, severity="medium")
+async def log_pipeline_alerting(ctx: EngineContext) -> Result:
+    """Prometheus has at least one alerting rule for a failure of the log pipeline (Loki / Promtail /
+    Alloy errors, dropped or rejected entries), so a stop in audit logging reaches someone (AU-5 a)."""
+    if not await prometheus_urls(ctx):
+        return failed("no Prometheus service found: log pipeline failures cannot alert")
+    rules, errors = await alert_rules(ctx)
+    if not rules and errors:
+        return unknown("Prometheus rules unreachable: " + "; ".join(e["error"] for e in errors), errors=errors)
+    hits = [r for r in rules if LOG_PIPELINE_RULE.search(_rule_text(r)) and LOG_FAILURE_RULE.search(_rule_text(r))]
+    ev = {"alertRules": len(rules), "logPipelineRules": [r["name"] for r in hits][:50], "errors": errors}
+    if not hits:
+        return failed(f"none of {len(rules)} alerting rule(s) covers a log pipeline failure", **ev)
+    return passed(f"{len(hits)} alerting rule(s) for log pipeline failures: " + ", ".join(ev["logPipelineRules"][:5]),
+                  **ev)
+
+
 def receivers_with_integrations(config_yaml: str) -> tuple[list[str], list[str]]:
     cfg = yaml.safe_load(config_yaml or "") or {}
     active, empty = [], []
@@ -200,11 +252,14 @@ def receivers_with_integrations(config_yaml: str) -> tuple[list[str], list[str]]
     return active, empty
 
 
-@assertion(id="mon-alert-receivers", title="Alertmanager notifies at least one receiver",
-           controls=["SI-4(5)", "IR-6"], objectives=["si-4.5_obj", "ir-6_obj.b"], component=PROM, severity="high")
+@assertion(id="mon-alert-receivers", title="Security alert rules notify a receiver",
+           controls=["SI-4(5)", "IR-6(1)"],
+           objectives=["si-4.5_obj", "ir-6.1_obj"], component=PROM, severity="high")
 async def alert_receivers(ctx: EngineContext) -> Result:
     """Alertmanager's loaded configuration has at least one receiver with an integration
-    (email/slack/webhook/pagerduty/...), i.e. alerts reach a person."""
+    (email/slack/webhook/pagerduty/...) and Prometheus has at least one security-relevant alerting
+    rule (authentication, intrusion, privilege, audit, runtime detection...). A receiver without
+    security alert rules does not alert anyone about attacks (SI-4(5), compliance review M4)."""
     urls = await alertmanager_urls(ctx)
     if not urls:
         return failed("no Alertmanager service found (set controlsEngine.alertmanagerUrl)")
@@ -222,8 +277,16 @@ async def alert_receivers(ctx: EngineContext) -> Result:
     if not rows:
         return unknown("Alertmanager unreachable: " + "; ".join(e["error"] for e in errors), errors=errors)
     good = [r for r in rows if r["receivers"]]
-    ev = {"instances": rows, "errors": errors}
+    ev: dict[str, Any] = {"instances": rows, "errors": errors}
     if not good:
         return failed("Alertmanager has no receiver with a notification integration (only: "
                       + ", ".join(sorted({n for r in rows for n in r["emptyReceivers"] if n})) + ")", **ev)
-    return passed("alert receivers: " + ", ".join(n for r in good for n in r["receivers"]), **ev)
+    receivers = ", ".join(n for r in good for n in r["receivers"])
+    rules, rule_errors = await alert_rules(ctx) if await prometheus_urls(ctx) else ([], [])
+    security = [r["name"] for r in rules if SECURITY_RULE.search(_rule_text(r))]
+    ev.update(alertRules=len(rules), securityRules=security[:50], ruleErrors=rule_errors)
+    if not rules and rule_errors:
+        return unknown(f"receivers {receivers}; Prometheus alert rules unreachable", **ev)
+    if not security:
+        return failed(f"receivers {receivers}, but none of {len(rules)} alerting rule(s) is security-relevant", **ev)
+    return passed(f"receivers {receivers}; {len(security)} security alert rule(s): " + ", ".join(security[:5]), **ev)

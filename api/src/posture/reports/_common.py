@@ -12,6 +12,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from types import SimpleNamespace
 from typing import Any, Iterable
 
@@ -23,60 +24,68 @@ SCANNERS = ("trivy", "grype", "clair")
 SCANNER_TITLES = {"trivy": "Trivy", "grype": "Grype", "clair": "Clair"}
 TOOL_NAME = "Nebari Security Posture Pack"
 
-# NIST 800-53 tagging per DESIGN.md §11 (fallback when the snapshot carries no `controls`).
-CHECK_CONTROLS: dict[str, list[str]] = {
-    "privileged": ["AC-6", "CM-7"],
-    "run-as-root": ["AC-6", "CM-7"],
-    "privilege-escalation": ["AC-6", "CM-7"],
-    "added-capabilities": ["AC-6", "CM-7"],
-    "capabilities-not-dropped": ["AC-6", "CM-7"],
-    "host-namespaces": ["SC-7", "CM-7"],
-    "host-path": ["SC-7", "CM-7"],
-    "no-resource-limits": ["SC-6"],
-    "no-resource-requests": ["SC-6"],
-    "mutable-tag": ["CM-2", "CM-14"],
-    "no-liveness-probe": ["SI-13"],
-    "no-readiness-probe": ["SI-13"],
-    "automount-sa-token": ["AC-6(10)", "IA-5"],
-    "seccomp-unconfined": ["CM-6", "SI-16"],
-    "no-netpol": ["SC-7", "AC-4"],
-    "writable-rootfs": ["CM-6", "CM-7"],
-}
+# NIST 800-53 tagging per DESIGN.md §11: data/controls.yaml is the only source (compliance review
+# M4 removed the duplicated table that used to live here).
+def _controls_yaml() -> dict[str, Any]:
+    from ..controls import load_controls
 
-CONTROL_TITLES = {
-    "AC-4": "Information Flow Enforcement",
-    "AC-6": "Least Privilege",
-    "AC-6(10)": "Least Privilege | Prohibit Non-privileged Users from Executing Privileged Functions",
-    "CM-2": "Baseline Configuration",
-    "CM-6": "Configuration Settings",
-    "CM-7": "Least Functionality",
-    "CM-14": "Signed Components",
-    "IA-5": "Authenticator Management",
-    "RA-5": "Vulnerability Monitoring and Scanning",
-    "SC-6": "Resource Availability",
-    "SC-7": "Boundary Protection",
-    "SI-2": "Flaw Remediation",
-    "SI-2(2)": "Flaw Remediation | Automated Flaw Remediation Status",
-    "SI-13": "Predictable Failure Prevention",
-    "SI-16": "Memory Protection",
-}
+    return load_controls()
 
-def _load_controls_yaml() -> None:
-    """Prefer the shared data/controls.yaml (owned by the API) over the fallbacks above."""
+
+CHECK_CONTROLS: dict[str, list[str]] = {str(k): list(v or []) for k, v in
+                                        (_controls_yaml().get("checks") or {}).items()}
+CONTROL_TITLES: dict[str, str] = {str(k): str(v) for k, v in (_controls_yaml().get("titles") or {}).items()}
+
+
+def control_title(control: str) -> str:
+    """Title from controls.yaml, else the vendored NIST catalog."""
+    if control in CONTROL_TITLES:
+        return CONTROL_TITLES[control]
+    try:
+        from ..controls_engine.catalog import get_catalog
+
+        return get_catalog().title(control) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_CCI_RE = re.compile(r"^\s*([A-Z]{2}-\d+)(?:\s*\((\d+)\))?")
+
+
+@lru_cache(maxsize=1)
+def _cci_map() -> dict[str, list[str]]:
+    import json
     from pathlib import Path
 
-    path = Path(__file__).parent / "data" / "controls.yaml"
-    try:
-        import yaml
-
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:  # missing file / yaml: keep built-in fallbacks
-        return
-    CONTROL_TITLES.update({str(k): str(v) for k, v in (data.get("titles") or {}).items()})
-    CHECK_CONTROLS.update({str(k): list(v) for k, v in (data.get("checks") or {}).items() if v})
+    return json.loads((Path(__file__).parent / "data" / "cci_rev5.json").read_text(encoding="utf-8"))["cci"]
 
 
-_load_controls_yaml()
+def cci_controls(ccis: Iterable[str]) -> list[str]:
+    """DISA CCI -> NIST SP 800-53 rev5 controls (label form) from the vendored DISA CCI list (N1):
+    `CCI-002233` -> `AC-6(8)`, `CCI-002605` -> `SI-2` (part c)."""
+    out: list[str] = []
+    for cci in ccis:
+        for ref in _cci_map().get(cci, []):
+            m = _CCI_RE.match(ref)
+            if m:
+                label = m.group(1) + (f"({int(m.group(2))})" if m.group(2) else "")
+                if label not in out:
+                    out.append(label)
+    return out
+
+
+def in_baseline(control: str, baseline: str) -> bool:
+    """Membership of a control in the selected baseline / profile (vendored NIST + extra profiles)."""
+    from ..controls_engine.catalog import get_catalog
+
+    c = get_catalog().get(control)
+    return bool(c and c.in_baseline(baseline))
+
+
+def check_controls(check_id: str) -> list[str]:
+    """Controls of a posture check; [] = operational hygiene only (no control, no POA&M row)."""
+    return list(CHECK_CONTROLS.get(check_id, []))
+
 
 CHECK_DEFAULTS: dict[str, tuple[str, str]] = {
     # id: (severity, title) - SCORING.md table, used when the snapshot omits `checks`.
@@ -254,7 +263,7 @@ class View:
         if c is None:
             s, t = CHECK_DEFAULTS.get(check_id, ("medium", check_id))
             c = SimpleNamespace(id=check_id, title=t, severity=s, category="", description="",
-                                remediation="", controls=CHECK_CONTROLS.get(check_id, ["CM-6"]),
+                                remediation="", controls=check_controls(check_id),
                                 passed=0, failed=0)
             self.checks_by_id[check_id] = c
         return c
@@ -339,7 +348,9 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
         if o.fixable is None:
             o.fixable = bool(o.fixed_version)
         if not o.controls:
-            o.controls = ["RA-5", "SI-2"] + (["SI-2(2)"] if o.fixable else [])
+            from ..controls import vuln_controls
+
+            o.controls = vuln_controls(bool(o.fixable))
         o.first_seen_at = o.first_seen_at or scan.started_at or gen
         findings.append(o)
 
@@ -355,7 +366,7 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
               for c in _list(snapshot, "checks")]
     for c in checks:
         c.severity = sev(c.severity)
-        c.controls = list(c.controls) or CHECK_CONTROLS.get(c.id, ["CM-6"])
+        c.controls = list(c.controls) if c.id not in CHECK_CONTROLS else check_controls(c.id)
         c.title = c.title or CHECK_DEFAULTS.get(c.id, ("", c.id))[1]
 
     results = [_dt_fields(_ns(r, {"check_id": "", "status": "pass", "namespace": "", "kind": "", "name": "",

@@ -1,58 +1,66 @@
-# NIST SP 800-53 rev5 control tagging (DESIGN §11). Consumed by posture.controls.
-version: 1
+# NIST SP 800-53 rev5 control tagging (DESIGN §11), the single source for the API, the UI and
+# every report generator (posture.controls; reports/_common.py reads it too).
+# Corrected per the compliance review (docs/reviews/compliance-sme.md M4): every tag is a control a
+# DISA CCI / the rev5 control text supports; tags outside the system's baseline are dropped from
+# the POA&M (eMASS only imports items against controls in the system's control set).
+# An empty list = operational hygiene only: no control, no POA&M row.
+version: 2
 titles:
-  RA-5: Vulnerability Monitoring and Scanning
-  SI-2: Flaw Remediation
-  SI-2(2): Flaw Remediation | Automated Flaw Remediation Status
-  AC-6: Least Privilege
-  AC-6(10): Least Privilege | Prohibit Non-privileged Users from Executing Privileged Functions
-  CM-7: Least Functionality
-  SC-7: Boundary Protection
-  SC-6: Resource Availability
-  CM-2: Baseline Configuration
-  CM-14: Signed Components
-  SI-13: Predictable Failure Prevention
-  IA-5: Authenticator Management
-  CM-6: Configuration Settings
-  SI-16: Memory Protection
   AC-4: Information Flow Enforcement
+  AC-6: Least Privilege
+  AC-6(8): Least Privilege | Privilege Levels for Code Execution
+  CM-2: Baseline Configuration
+  CM-3: Configuration Change Control
+  CM-6: Configuration Settings
+  CM-7: Least Functionality
+  CM-8: System Component Inventory
+  CM-14: Signed Components
+  RA-5: Vulnerability Monitoring and Scanning
+  SA-4: Acquisition Process
+  SA-10: Developer Configuration Management
+  SA-22: Unsupported System Components
+  SC-5: Denial-of-service Protection
+  SC-7: Boundary Protection
+  SC-39: Process Isolation
+  SI-2: Flaw Remediation
+  SI-7: Software, Firmware, and Information Integrity
   SR-3: Supply Chain Controls and Processes
   SR-4: Provenance
-  SA-10: Developer Configuration Management
-  SA-8(3): Security and Privacy Engineering Principles | Modular Design
-  CM-3: Configuration Change Control
-  CM-8: System Component Inventory
   SR-11: Component Authenticity
+# A CVE is an SI-2 flaw (SI-2(c) when past its SLA, see scanObjectives). RA-5 is the scanning
+# control: findings are evidence that it works, not a weakness against it.
 vulnerabilities:
-  default: [RA-5, SI-2]
-  fixable: [RA-5, SI-2, SI-2(2)]
+  default: [SI-2]
+  fixable: [SI-2]
 checks:
-  privileged: [AC-6, CM-7]
-  host-namespaces: [SC-7, CM-7]
-  host-path: [SC-7, CM-7]
-  run-as-root: [AC-6, CM-7]
-  privilege-escalation: [AC-6, CM-7]
-  added-capabilities: [AC-6, CM-7]
-  capabilities-not-dropped: [AC-6, CM-7]
-  writable-rootfs: [CM-6, CM-7]
-  no-resource-limits: [SC-6]
-  no-resource-requests: [SC-6]
-  mutable-tag: [CM-2, CM-14]
-  no-liveness-probe: [SI-13]
-  no-readiness-probe: [SI-13]
-  automount-sa-token: [AC-6(10), IA-5]
-  seccomp-unconfined: [CM-6, SI-16]
-  no-netpol: [SC-7, AC-4]
+  privileged: [AC-6, CM-7, SC-39]
+  run-as-root: [AC-6, CM-7, SC-39, AC-6(8)]
+  privilege-escalation: [AC-6, CM-7, SC-39, AC-6(8)]
+  added-capabilities: [AC-6, CM-7, SC-39]
+  capabilities-not-dropped: [AC-6, CM-7, SC-39]
+  host-namespaces: [SC-39, AC-6, CM-7]
+  host-path: [SC-39, AC-6, CM-7]
+  writable-rootfs: [CM-6, CM-7, SI-7]
+  no-resource-limits: [SC-5]
+  no-resource-requests: [SC-5]
+  mutable-tag: [CM-2, SI-7]
+  no-liveness-probe: []
+  no-readiness-probe: []
+  automount-sa-token: [AC-6, CM-7]
+  seccomp-unconfined: [CM-6, CM-7, SC-39]
+  no-netpol: [AC-4, SC-7]
 # Supply-chain provenance findings (DESIGN §12), keyed by provenance.scoring finding ids.
+# CM-14 only where signatures are actually checked; an available update is informational unless
+# the component is end of life (SA-22).
 provenance:
   unsigned: [CM-14, SR-4, SR-11]
   unverified: [CM-14, SR-11]
-  no-sbom: [SR-4, SA-8(3), CM-8]
+  no-sbom: [SR-4, CM-8, SA-4]
   no-provenance: [SR-3, SR-4, SA-10]
-  update-available: [SI-2]
-  major-update-available: [SI-2]
-  mutable-tag: [CM-2, CM-14]
-  helm-release-behind: [SI-2, CM-3]
+  update-available: []
+  major-update-available: []
+  mutable-tag: [CM-2, SI-7]
+  helm-release-behind: [SI-2]
 # Scan evidence in the control status derivation (compliance review M3): a failing posture check
 # or an open / overdue finding counts as failing evidence against these SP 800-53A objectives of
 # each mapped control (a control not listed here: every objective).
@@ -60,10 +68,8 @@ scanObjectives:
   findings:
     open:
       SI-2: [si-2_obj.a-3]
-      RA-5: [ra-5_obj.d]
     overdue:
       SI-2: [si-2_obj.c-1]
-      RA-5: [ra-5_obj.d]
   posture:
     AC-4: [ac-4_obj]
     AC-6: [ac-6_obj]
@@ -71,4 +77,7 @@ scanObjectives:
     CM-2: [cm-2_obj.a-2]
     CM-6: [cm-6_obj.b]
     CM-7: [cm-7_obj.a]
+    SC-5: [sc-5_obj.a]
     SC-7: [sc-7_obj.a-4]
+    SC-39: [sc-39_obj]
+    SI-7: [si-7_obj.a-1]

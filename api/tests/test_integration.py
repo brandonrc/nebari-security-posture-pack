@@ -168,7 +168,7 @@ async def test_01_empty_state_shapes(env):
     assert (await c.get("/export?format=csv")).status_code == 200
     assert (await c.get("/export?format=json")).json()["images"] == []
     ctl0 = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
-    assert ctl0["RA-5"]["findingStatus"] == "not_assessed" and ctl0["RA-5"]["status"] == "not-assessed"
+    assert ctl0["SI-2"]["findingStatus"] == "not_assessed" and ctl0["SI-2"]["status"] == "not-assessed"
     assert (await c.get("/images/123")).status_code == 404
     assert (await c.get("/me")).json()["isAdmin"] is True
     assert (await c.get("/openapi.json")).status_code == 200
@@ -216,7 +216,7 @@ async def test_02_scan_pipeline(env):
     f = next(x for x in detail["findings"] if x["vulnId"] == "CVE-2024-6119")
     assert f["scanners"] == ["trivy", "grype", "clair"] and f["agreement"] == 1.0 and f["fixable"]
     assert f["perScanner"] == {"trivy": "high", "grype": "high", "clair": "high"}
-    assert f["controls"] == ["RA-5", "SI-2", "SI-2(2)"] and f["slaDueAt"]
+    assert f["controls"] == ["SI-2"] and f["slaDueAt"]
     only_grype = next(x for x in detail["findings"] if x["vulnId"] == "CVE-2022-48174")
     assert only_grype["scanners"] == ["grype"] and round(only_grype["agreement"], 2) == 0.33
     assert {u["namespace"] for u in detail["usedBy"]} == {"app", "kube-system"}
@@ -242,7 +242,7 @@ async def test_02_scan_pipeline(env):
     assert nss["app"]["managed"] is True and nss["app"]["pack"] == "Web App" and nss["app"]["images"] == 2
 
     checks = {x["id"]: x for x in (await c.get("/checks")).json()}
-    assert checks["privileged"]["failed"] == 1 and checks["privileged"]["controls"] == ["AC-6", "CM-7"]
+    assert checks["privileged"]["failed"] == 1 and checks["privileged"]["controls"] == ["AC-6", "CM-7", "SC-39"]
     priv = (await c.get("/checks/privileged")).json()
     fail = next(r for r in priv["results"] if r["status"] == "fail")
     assert fail["namespace"] == "kube-system" and fail["systemNamespace"] and fail["weight"] == 5.0
@@ -252,7 +252,7 @@ async def test_02_scan_pipeline(env):
     assert "attachment" in exp.headers["content-disposition"] and len(rows) == 4
     assert (await c.get("/export")).json()["summary"]["score"] == s["score"]
     ctl = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
-    assert ctl["RA-5"]["findingsOpen"] == 4 and ctl["SI-2(2)"]["findingsOpen"] == 3 and ctl["AC-6"]["findingStatus"] == "open"
+    assert ctl["SI-2"]["findingsOpen"] == 4 and ctl["SI-2(2)"]["findingsOpen"] == 0 and ctl["AC-6"]["findingStatus"] == "open"
 
     scanners = (await c.get("/scanners")).json()
     assert all(x["version"] for x in scanners) and all(x["lastRunAt"] for x in scanners)

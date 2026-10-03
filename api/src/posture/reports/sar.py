@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from ._common import (CONTROL_TITLES, SCANNER_TITLES, SEVERITIES, SYSTEM_NAMESPACES, TOOL_NAME, View, filename,
+from ._common import (control_title, SCANNER_TITLES, SEVERITIES, SYSTEM_NAMESPACES, TOOL_NAME, View, filename,
                       image_label, normalize, sev_rank)
 from .registry import GeneratedReport, ReportDependencyMissing
 
@@ -119,12 +119,12 @@ def context(v: View) -> dict[str, Any]:
     controls: dict[str, SimpleNamespace] = {}
     for f in v.open_findings:
         for c in f.controls:
-            controls.setdefault(c, SimpleNamespace(id=c, title=CONTROL_TITLES.get(c, ""), findings=0, checks=0))
+            controls.setdefault(c, SimpleNamespace(id=c, title=control_title(c), findings=0, checks=0))
             controls[c].findings += 1
     for ch in checks:
         if ch.failed:
             for c in ch.controls:
-                controls.setdefault(c, SimpleNamespace(id=c, title=CONTROL_TITLES.get(c, ""), findings=0, checks=0))
+                controls.setdefault(c, SimpleNamespace(id=c, title=control_title(c), findings=0, checks=0))
                 controls[c].checks += 1
 
     stig = stig_summary(v)

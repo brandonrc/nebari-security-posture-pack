@@ -7,27 +7,35 @@ description: >-
   Prometheus scrapes platform and node metrics; Alertmanager routes firing alerts to the
   configured receivers (e-mail, chat, paging).
 implemented-requirements:
-  - control: AU-6
-    statement: Platform metrics are collected continuously for review and analysis.
-    assertions: [mon-prometheus-scraping]
-    responsibility: customer
-    customer: Review and analyze audit records; metrics collection is supporting evidence only.
-    assigned: rest
   - control: SI-4
-    statement: Prometheus scrapes cluster, node and workload targets to monitor the system.
+    statement: >-
+      Prometheus scrapes cluster, node and workload metrics. This is performance telemetry:
+      supporting evidence for monitoring, not attack detection.
     assertions: [mon-prometheus-scraping]
     responsibility: shared
-    customer: Deploy intrusion/attack detection (e.g. runtime detection) and define monitoring objectives; metrics are supporting evidence only.
-    assigned: rest
+    customer: Deploy intrusion / attack detection (e.g. runtime detection) and define the monitoring objectives (SI-4 a-g).
+    ceiling: partial
+    ceilingReason: metrics scraping is supporting evidence only; nothing checks attack detection
   - control: SI-4(5)
-    statement: Alertmanager notifies personnel through at least one configured receiver when alerts fire.
+    statement: >-
+      Alertmanager has at least one receiver with a notification integration and Prometheus has
+      security-relevant alerting rules.
     assertions: [mon-alert-receivers]
     responsibility: shared
-    customer: Define security alert rules and the personnel who receive them.
-    assigned: rest
-  - control: IR-6
-    statement: Security-relevant alerts are routed to a reporting channel through Alertmanager receivers.
+    customer: Define the compromise indicators that must alert and the personnel who receive them.
+    ceiling: partial
+    ceilingReason: rule names are matched heuristically; the indicators of compromise are organization-defined
+  - control: IR-6(1)
+    statement: Security alerts are routed automatically to at least one notification receiver.
     assertions: [mon-alert-receivers]
-    responsibility: customer
-    customer: Report incidents to the designated authorities within the required time.
-    assigned: rest
+    responsibility: shared
+    customer: Report incidents to the designated authorities within the required time (IR-6).
+    ceiling: partial
+    ceilingReason: supporting evidence only; incident reporting is a personnel process
+  - control: CA-7
+    statement: Platform metrics are collected continuously (supporting evidence for continuous monitoring).
+    assertions: [mon-prometheus-scraping]
+    responsibility: shared
+    customer: Own the continuous monitoring strategy, metrics and reporting to the AO (CA-7 a-g).
+    ceiling: partial
+    ceilingReason: continuous monitoring is an organizational program; metrics collection is supporting evidence

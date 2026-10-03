@@ -32,7 +32,8 @@ def _age_h(v: Any) -> float | None:
 
 
 @assertion(id="pack-scan-recent", title="Vulnerability scan completed within 2x the scan interval",
-           controls=["RA-5", "RA-5(2)", "CA-7"], objectives=["ra-5_obj.a-2", "ra-5.2_obj", "ca-7_obj.d"], component=C, severity="high")
+           controls=["RA-5"],
+           objectives=["ra-5_obj.a-2"], component=C, severity="high")
 async def scan_recent(ctx: EngineContext) -> Result:
     """The latest completed scan finished less than 2 x `scanIntervalHours` ago."""
     snap = _snap(ctx)
@@ -49,7 +50,8 @@ async def scan_recent(ctx: EngineContext) -> Result:
 
 
 @assertion(id="pack-scanner-db-fresh", title="Scanner vulnerability databases are current",
-           controls=["RA-5(2)", "SI-5"], objectives=["ra-5.2_obj", "si-5_obj.a"], component=C, severity="medium")
+           controls=["RA-5(2)"],
+           objectives=["ra-5.2_obj"], component=C, severity="medium")
 async def scanner_db_fresh(ctx: EngineContext) -> Result:
     """Every enabled scanner reports a vulnerability DB updated within 72 hours."""
     scanners = [s for s in _snap(ctx).get("scanners") or [] if s.get("enabled", True)]

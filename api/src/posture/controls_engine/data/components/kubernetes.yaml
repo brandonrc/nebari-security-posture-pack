@@ -8,22 +8,24 @@ description: >-
   and NetworkPolicy for pod-to-pod traffic.
 implemented-requirements:
   - control: AC-6
-    statement: Workloads run without privileged mode, host namespaces or added capabilities unless required.
-    assertions: [k8s-workload-least-privilege]
+    statement: >-
+      Non-system workloads run without privileged mode, host namespaces, host paths, added
+      capabilities or privilege escalation, and default ServiceAccounts do not automount API tokens.
+    assertions: [k8s-workload-least-privilege, k8s-default-sa-automount]
     responsibility: shared
     customer: Justify any privileged workload the program deploys and document least-privilege decisions.
     assigned: rest
   - control: AC-6(1)
-    statement: cluster-admin is bound only to system subjects and the approved administrator allowlist.
+    statement: cluster-admin is bound only to upstream system subjects and the approved administrator allowlist.
     assertions: [k8s-cluster-admin-bindings]
     responsibility: shared
     customer: Approve the cluster-admin allowlist and review it periodically.
     assigned: rest
-  - control: AC-6(10)
-    statement: Default ServiceAccounts do not automount API tokens, so pods get no API access unless granted.
-    assertions: [k8s-default-sa-automount]
+  - control: AC-6(5)
+    statement: cluster-admin bindings are restricted to the approved privileged-account allowlist.
+    assertions: [k8s-cluster-admin-bindings]
     responsibility: shared
-    customer: Disable service-account token automount in program namespaces unless required.
+    customer: Approve the privileged-account allowlist and review it periodically.
     assigned: rest
   - control: AC-14
     statement: No RBAC binding grants permissions to `system:anonymous` or `system:unauthenticated` beyond public discovery.
@@ -32,7 +34,7 @@ implemented-requirements:
     customer: Document in the security plan the actions permitted without identification or authentication and their rationale (AC-14 b).
     assigned: rest
   - control: AU-2
-    statement: Kubernetes API server audit logging records API requests.
+    statement: The Kubernetes API server runs with an audit policy (the event types selected for logging).
     assertions: [k8s-api-audit-logging]
     responsibility: shared
     customer: Supply control-plane audit evidence where the API server is not visible (managed / snap control planes).
@@ -51,7 +53,7 @@ implemented-requirements:
     assigned: rest
   - control: CM-7
     statement: Pod Security admission and workload settings restrict containers to least functionality.
-    assertions: [k8s-pod-security-admission, k8s-workload-least-privilege]
+    assertions: [k8s-pod-security-admission, k8s-workload-least-privilege, k8s-default-sa-automount]
     responsibility: shared
     customer: Limit program workloads to required functions, ports and capabilities.
     assigned: rest
@@ -62,13 +64,23 @@ implemented-requirements:
     customer: Define allowed flows for program namespaces (NetworkPolicies) and the external boundary.
     assigned: rest
   - control: SC-7(5)
-    statement: Each application namespace has a default-deny ingress NetworkPolicy; allowed flows are explicit exceptions.
-    assertions: [k8s-default-deny-ingress]
+    statement: >-
+      Each application namespace has default-deny ingress and egress NetworkPolicies; allowed flows
+      are explicit exceptions.
+    assertions: [k8s-default-deny-ingress, k8s-default-deny-egress]
     responsibility: shared
-    customer: Add explicit allow rules for required program flows; extend deny-by-default to egress.
+    customer: Add explicit allow rules for the program's required flows.
+    assigned: rest
+  - control: SA-22
+    statement: >-
+      The API server and every kubelet run a Kubernetes minor version before its upstream
+      end-of-life date.
+    assertions: [k8s-supported-version]
+    responsibility: shared
+    customer: Track the support window of the actual distribution (MicroK8s, RKE2, OpenShift, EKS) and the node OS; provide alternative support where needed (SA-22 b).
     assigned: rest
   - control: SI-2
-    statement: Nodes run a Kubernetes minor version that is still supported upstream (receives security patches).
+    statement: Nodes run a Kubernetes minor version that still receives upstream security patches.
     assertions: [k8s-supported-version]
     responsibility: shared
     customer: Remediate flaws in program images within the SLA.

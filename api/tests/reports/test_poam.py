@@ -12,7 +12,9 @@ N_FINDINGS = sum(len(v[-1]) for v in VULNS)
 
 
 def _failing_checks(snapshot):
-    return {r.check_id for r in snapshot.posture_results if r.status == "fail"}
+    """Failing checks that become POA&M rows: probes carry no control (operational hygiene, M4)."""
+    return {r.check_id for r in snapshot.posture_results if r.status == "fail"} - {"no-liveness-probe",
+                                                                                    "no-readiness-probe"}
 
 
 def _wb(snapshot, opts, **o):
@@ -60,14 +62,14 @@ def test_sla_and_fields(snapshot, opts):
     assert r["Original Detection Date"].date() == detected
     assert r["Scheduled Completion Date"].date() == detected + timedelta(days=15)  # critical SLA
     assert "OVERDUE" in r["Comments"]
-    assert r["Controls"] == "RA-5, SI-2, SI-2(2)"
+    assert r["Controls"] == "SI-2"
     assert r["Original Risk Rating"] == "High"
     assert r["Vendor Dependency"] == "No"
     nofix = next(x for x in rows if x["Weakness Source Identifier"] == "CVE-2023-52425")
     assert nofix["Vendor Dependency"] == "Yes" and nofix["Vendor Dependent Product Name"] == "libexpat1"
-    assert nofix["Controls"] == "RA-5, SI-2"
+    assert nofix["Controls"] == "SI-2"
     priv = next(x for x in rows if x["POAM ID"] == "SP-CFG-privileged")
-    assert priv["Controls"] == "AC-6, CM-7"
+    assert priv["Controls"] == "AC-6, CM-7, SC-39, SC-4"  # SC-4 from the SRG rule's CCI-001090 (N1)
     assert "default/Deployment/legacy-proxy" in priv["Asset Identifier"]
     assert "V-233127" in priv["Weakness Source Identifier"]
     # rows are sorted most severe first
@@ -81,14 +83,14 @@ def test_emass_sheet_values(snapshot, opts):
     r = next(x for x in rows if x["Security Checks"] == "CVE-2024-45490")
     assert r["POA&M Status"] == "Ongoing"
     assert r["POA&M Item ID"] in (None, "")
-    assert r["Controls / APs"] == "RA-5"
+    assert r["Controls / APs"] == "SI-2"
     assert r["Raw Severity"] == "Very High" and r["Severity"] == "Very High"
     assert r["Milestone ID"] == 1 and r["Milestone Status"] == "Pending"
     assert r["POA&M Scheduled Completion Date"] == r["Milestone Scheduled Completion Date"]
     assert "nginx" in r["Devices Affected"]
     assert ws.cell(row=2, column=hdr.index("POA&M Scheduled Completion Date") + 1).number_format == "mm/dd/yyyy"
     cfg = next(x for x in rows if (x["Security Checks"] or "").startswith("no-netpol"))
-    assert cfg["Controls / APs"] == "SC-7"
+    assert cfg["Controls / APs"] == "AC-4"  # primary in-baseline control (M4)
     assert cfg["Identification Source"].startswith("Container Platform Security Requirements Guide")
 
 
@@ -116,3 +118,29 @@ def test_exclude_system_namespaces(snapshot, opts):
     ws = _wb(snapshot, opts, includeSystemNamespaces=False)["POA&M"]
     text = " ".join(str(c.value) for row in ws.iter_rows(min_row=2) for c in row)
     assert "coredns" not in text and "kube-system" not in text
+
+
+def test_poam_remaps_to_the_baseline_and_derives_controls_from_ccis(snapshot, opts):
+    """M4 / N1: rows only carry controls of the selected baseline (eMASS rejects others); items left
+    without one are dropped and counted; STIG-derived items add the controls of their CCIs."""
+    from posture.reports._common import cci_controls, normalize
+    from posture.reports.poam import build_items
+
+    assert cci_controls(["CCI-002233", "CCI-001090", "CCI-002385", "CCI-002605", "CCI-001813", "CCI-003992"]) == [
+        "AC-6(8)", "SC-4", "SC-5", "SI-2", "CM-5(1)", "CM-14"]
+    v = normalize(snapshot, opts)
+    items = build_items(v)
+    ids = {i.poam_id for i in items}
+    assert "SP-CFG-no-liveness-probe" not in ids and "SP-CFG-no-readiness-probe" not in ids  # no control
+    for i in items:
+        assert i.controls and all(c in i.controls for c in i.controls)
+    rar = next(i for i in items if i.poam_id == "SP-CFG-run-as-root")
+    assert "AC-6(8)" not in rar.controls and "AC-6(8)" in rar.controls_outside  # in no baseline
+    priv = next(i for i in items if i.poam_id == "SP-CFG-privileged")
+    assert priv.ccis and set(priv.controls) >= {"AC-6", "CM-7", "SC-39"}
+    assert v.poam_stats["droppedTags"]["AC-6(8)"] >= 1 and v.poam_stats["baseline"] == "moderate"
+    low = normalize(snapshot, {**opts, "baseline": "low"})
+    assert all("AC-4" not in i.controls for i in build_items(low))  # AC-4 is not in LOW
+    wb = _wb(snapshot, opts)
+    info = {r[0].value: r[1].value for r in wb["Info"].iter_rows()}
+    assert info["Control set (baseline)"] == "moderate" and "AC-6(8)" in info["Control tags dropped (outside the baseline)"]

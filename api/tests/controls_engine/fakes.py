@@ -126,8 +126,10 @@ def good_world() -> dict[str, Any]:
         "/version": {"gitVersion": "v1.35.6"},
         "/apis/networking.k8s.io/v1/networkpolicies": [
             {"metadata": {"namespace": "apps", "name": "default-deny"},
-             "spec": {"podSelector": {}, "policyTypes": ["Ingress"]}},
-            {"metadata": {"namespace": "monitoring", "name": "deny"}, "spec": {"podSelector": {}}}],
+             "spec": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]}},
+            {"metadata": {"namespace": "monitoring", "name": "deny"}, "spec": {"podSelector": {}}},
+            {"metadata": {"namespace": "monitoring", "name": "deny-egress"},
+             "spec": {"podSelector": {}, "policyTypes": ["Egress"]}}],
         "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings": [
             {"metadata": {"name": "cluster-admin"}, "roleRef": {"kind": "ClusterRole", "name": "cluster-admin"},
              "subjects": [{"kind": "Group", "name": "system:masters"}]},
@@ -179,7 +181,8 @@ def good_world() -> dict[str, Any]:
              "ssoSessionIdleTimeout": 900, "ssoSessionMaxLifespan": 36000, "rememberMe": False,
              "registrationAllowed": False, "sslRequired": "external"},
         "/events/config": {"eventsEnabled": True, "eventsExpiration": 7776000, "adminEventsEnabled": True,
-                           "adminEventsDetailsEnabled": True, "enabledEventTypes": ["LOGIN"]},
+                           "adminEventsDetailsEnabled": True,
+                           "enabledEventTypes": ["LOGIN", "LOGIN_ERROR", "LOGOUT", "CODE_TO_TOKEN"]},
         "/groups": [{"id": "g1", "name": "admin"}],
         "/groups/g1/members": [{"id": "u1", "username": "alice", "enabled": True}],
         "/users/u1/credentials": [{"type": "password"}, {"type": "otp"}],
@@ -193,6 +196,12 @@ def good_world() -> dict[str, Any]:
         f"{LOKI}/config": (200, "limits_config:\n  retention_period: 2160h\ncompactor:\n  retention_enabled: true\n"),
         f"{PROM}/api/v1/targets": (200, {"data": {"activeTargets": [
             {"labels": {"job": "kubelet"}, "health": "up"}, {"labels": {"job": "node"}, "health": "up"}]}}),
+        f"{PROM}/api/v1/rules": (200, {"data": {"groups": [
+            {"name": "loki", "rules": [{"type": "alerting", "name": "LokiRequestErrors", "labels": {"severity": "critical"}},
+                                       {"type": "alerting", "name": "PromtailRequestsErrors"}]},
+            {"name": "security", "rules": [{"type": "alerting", "name": "KeycloakBruteForceLockouts",
+                                            "labels": {"category": "security"}}]},
+            {"name": "node", "rules": [{"type": "alerting", "name": "NodeFilesystemAlmostFull"}]}]}}),
         f"{AM}/api/v2/status": (200, {"config": {"original": "route:\n  receiver: ops\nreceivers:\n- name: ops\n"
                                                              "  email_configs:\n  - to: ops@example.org\n"}}),
         f"{REG}/v2/": (401, {"errors": []}, {"www-authenticate": 'Basic realm="registry"'}),

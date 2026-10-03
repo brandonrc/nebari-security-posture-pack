@@ -86,7 +86,7 @@ async def test_01_before_any_run(env):
     assert sum(f["total"] for f in fams) == 287 and keys - {"total"} <= set(fams[0])
     ctl = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
     assert ctl["AC-7"]["status"] == "not-assessed" and ctl["AC-7"]["baseline"] == "low" and ctl["AC-7"]["family"] == "AC"
-    assert ctl["RA-5"]["findingStatus"] == "not_assessed" and ctl["AT-2"]["status"] == "not-assessed"
+    assert ctl["SI-2"]["findingStatus"] == "not_assessed" and ctl["AT-2"]["status"] == "not-assessed"
     assert ctl["AT-2"]["responsibility"] == "org" and fr["totals"]["baseline"]["inherited"] == 0
     cat = (await c.get("/compliance/catalog", params={"family": "AC", "baseline": "moderate"})).json()
     assert cat[0]["control"] == "AC-1" and all(x["family"] == "AC" and "moderate" in x["baselines"] for x in cat)
@@ -136,8 +136,8 @@ async def test_04_controls_and_families(env):
     assert ac7["status"] == "failing" and ac7["components"] == ["keycloak"]
     assert {o["id"] for o in ac7["objectives"]} == {"ac-7_obj.a", "ac-7_obj.b"}
     assert ac7["assertions"][0]["id"] == "kc-brute-force-protection" and ac7["assertions"][0]["evidence"]
-    assert ctl["IA-2(1)"]["status"] == "passing" and ctl["RA-5"]["findingsOpen"] > 0
-    assert ctl["AC-2"]["status"] == "hybrid"
+    assert ctl["IA-2(1)"]["status"] == "passing" and ctl["SI-2"]["findingsOpen"] > 0
+    assert ctl["AC-2"]["status"] == "partial" and ctl["CM-8"]["status"] == "hybrid"
     assert ctl["RA-5(2)"]["status"] == "failing"  # scan recent, clair DB stale: the single objective fails
     assert ctl["AC-6"]["findingStatus"] == "open" and ctl["AC-6"]["checksFailed"] >= 1
     # M3: the posture failure is an input of the same derivation

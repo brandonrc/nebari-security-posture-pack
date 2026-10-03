@@ -20,8 +20,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from ._common import (SEVERITIES, TOOL_NAME, View, as_dt, filename, image_label, mdy, normalize, sev, sev_rank,
-                      short_hash)
+from ._common import (SEVERITIES, TOOL_NAME, View, as_dt, cci_controls, filename, image_label, in_baseline, mdy,
+                      normalize, sev, sev_rank, short_hash)
 from .cells import safe_row
 from .registry import GeneratedReport
 
@@ -125,7 +125,7 @@ def _vuln_items(v: View, rollup: bool) -> list[SimpleNamespace]:
         per_txt = ", ".join(f"{s}={per_scanner.get(s, '?')}" for s in scanners)
         agree_txt = f"{len(scanners)}/{n_enabled} scanners ({per_txt})"
         items.append(SimpleNamespace(
-            kind="vulnerability",
+            kind="vulnerability", ccis=[],
             poam_id="SP-" + (f"{f0.vuln_id}-{short_hash(*key)}" if not rollup else f"{f0.vuln_id}"),
             source_id=f0.vuln_id, name=f"{f0.vuln_id} ({', '.join(sorted({p for p, _, _ in pkgs}))})",
             title=title, description="\n".join(desc_parts), controls=controls, severity=severity,
@@ -165,6 +165,8 @@ def _posture_items(v: View) -> list[SimpleNamespace]:
         assets = sorted({r.key + (f" [{r.container}]" if r.container else "") for r in rs})
         stig = rules_for_check(check_id)
         stig_ids = [s["vulnId"] for s in stig]
+        ccis = sorted({c for s in stig for c in s.get("ccis") or []})
+        controls = list(dict.fromkeys([*c.controls, *cci_controls(ccis)]))  # N1: DISA CCI linkage
         details = sorted({r.detail for r in rs if r.detail})
         due = v.sla_due(severity, first_seen)
         overdue = v.overdue(severity, first_seen)
@@ -182,7 +184,7 @@ def _posture_items(v: View) -> list[SimpleNamespace]:
             src_stig = f"{b['title']} :: Version {b['version']}, {b['releaseInfo']}"
         items.append(SimpleNamespace(
             kind="posture", poam_id=f"SP-CFG-{check_id}", source_id=", ".join([check_id] + stig_ids),
-            name=f"Configuration: {c.title}", title=c.title, description=desc, controls=list(c.controls),
+            name=f"Configuration: {c.title}", title=c.title, description=desc, controls=controls, ccis=ccis,
             severity=severity, first_seen=first_seen, due=due, overdue=overdue, assets=assets,
             workloads=sorted({r.key for r in rs}), scanners=[], detector=f"{TOOL_NAME} posture check {check_id}",
             plan=plan, mitigation=plan, fixable=True, vendor_product="", agreement=None, cvss=None, url="",
@@ -214,7 +216,7 @@ def _assertion_items(v: View) -> list[SimpleNamespace]:
         aid = r.get("id", "")
         detail = (r.get("detail") or "").strip()
         items.append(SimpleNamespace(
-            kind="assertion", poam_id=f"SP-CTL-{aid}", source_id=aid, name=f"Platform control: {r.get('title', aid)}",
+            kind="assertion", ccis=[], poam_id=f"SP-CTL-{aid}", source_id=aid, name=f"Platform control: {r.get('title', aid)}",
             title=r.get("title", aid), description=f"{r.get('title', aid)} (assertion {aid}) fails: {detail}",
             controls=list(r.get("controls") or []), severity=severity, first_seen=first_seen, due=due,
             overdue=overdue, assets=[f"component {r.get('component', '')}"], workloads=[], scanners=[],
@@ -231,8 +233,36 @@ def _assertion_items(v: View) -> list[SimpleNamespace]:
     return items
 
 
+def poam_baseline(v: View) -> str:
+    return str(v.options.get("baseline") or v.engine.get("baseline") or v.engine_run.get("baseline")
+               or "moderate").lower()
+
+
+def _to_baseline(v: View, items: list[SimpleNamespace]) -> list[SimpleNamespace]:
+    """eMASS only accepts POA&M items against controls in the system's control set (M4): keep the
+    in-baseline controls (primary first), drop items left without one and count what was dropped."""
+    baseline = poam_baseline(v)
+    kept, dropped_items, dropped_tags = [], [], {}
+    for i in items:
+        inside = [c for c in i.controls if in_baseline(c, baseline)]
+        outside = [c for c in i.controls if c not in inside]
+        for c in outside:
+            dropped_tags[c] = dropped_tags.get(c, 0) + 1
+        if not inside:
+            dropped_items.append(i)
+            continue
+        i.controls, i.controls_outside = inside, outside
+        if outside:
+            i.comments += f" Controls outside the {baseline} baseline not listed: {', '.join(outside)}."
+        kept.append(i)
+    v.poam_stats = {"baseline": baseline, "droppedItems": len(dropped_items),
+                    "droppedItemIds": [i.poam_id for i in dropped_items][:50], "droppedTags": dropped_tags}
+    return kept
+
+
 def build_items(v: View) -> list[SimpleNamespace]:
     items = _vuln_items(v, bool(v.options.get("rollupByCve"))) + _posture_items(v) + _assertion_items(v)
+    items = _to_baseline(v, items)
     items.sort(key=lambda i: (-sev_rank(i.severity), i.kind != "vulnerability", i.due or v.generated_at,
                               i.source_id))
     return items
@@ -264,7 +294,7 @@ def emass_row(i: SimpleNamespace, v: View, as_date: bool) -> list[Any]:
     return [
         "",                                   # POA&M Item ID - assigned by eMASS on import
         _cut(i.description),
-        i.controls[0] if i.controls else "",  # eMASS takes one Control / AP per item
+        i.controls[0] if i.controls else "",  # eMASS takes one Control / AP per item: the primary in-baseline one
         i.source_id,
         "Ongoing",
         d(i.due), "", "",
@@ -389,6 +419,11 @@ def _xlsx(v: View, items: list) -> bytes:
         ("Scan ID", v.scan.id),
         ("Control evidence run", v.engine_run.get("id") or "none attached"),
         ("Generated from", v.run_stamp),
+        ("Control set (baseline)", getattr(v, "poam_stats", {}).get("baseline", "")),
+        ("Items dropped (no control in the baseline)", getattr(v, "poam_stats", {}).get("droppedItems", 0)),
+        ("Control tags dropped (outside the baseline)",
+         ", ".join(f"{c} x{n}" for c, n in sorted(getattr(v, "poam_stats", {}).get("droppedTags", {}).items()))
+         or "none"),
         ("Scan finished", v.scan.finished_at.replace(tzinfo=None) if v.scan.finished_at else ""),
         ("Generated", v.generated_at.replace(tzinfo=None)),
         ("Generated by", TOOL_NAME),

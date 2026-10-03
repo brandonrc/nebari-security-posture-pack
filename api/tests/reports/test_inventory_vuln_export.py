@@ -44,7 +44,7 @@ def test_vuln_json(snapshot, opts):
     assert d["scan"]["id"] == 42 and len(d["findings"]) == sum(len(v[-1]) for v in VULNS)
     f = d["findings"][0]
     assert set(f["perScanner"]) == {"trivy", "grype", "clair"}
-    assert f["controls"][:2] == ["RA-5", "SI-2"]
+    assert f["controls"] == ["SI-2"]  # a CVE is an SI-2 flaw (compliance review M4)
 
 
 def test_cyclonedx_vex(snapshot, opts):

@@ -48,8 +48,8 @@ def test_penalty_ids_and_controls():
     assert ids == ["unsigned", "no-sbom", "no-provenance", "update-available"]
     assert provenance_controls("unsigned")[:2] == ["CM-14", "SR-4"]
     assert provenance_controls("no-provenance") == ["SR-3", "SR-4", "SA-10"]
-    assert provenance_controls("update-available") == ["SI-2"]
-    assert provenance_controls("helm-release-behind") == ["SI-2", "CM-3"]
+    assert provenance_controls("update-available") == []  # informational unless end of life (M4)
+    assert provenance_controls("helm-release-behind") == ["SI-2"]
     assert provenance_controls("nope") == []
 
 

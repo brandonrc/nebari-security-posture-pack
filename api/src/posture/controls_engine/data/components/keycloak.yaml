@@ -11,12 +11,14 @@ description: >-
 implemented-requirements:
   - control: AC-2
     statement: >-
-      Accounts are created by administrators in the Keycloak realm; self-service registration is
-      disabled so no account exists without an administrator action.
+      Self-service registration is disabled in the realm, so accounts are created only by an
+      administrator (evidence for AC-2 e/f only).
     assertions: [kc-self-registration-disabled]
     responsibility: shared
     customer: Define account types, approvals, account managers, reviews, notifications and disablement (AC-2 a-l); the platform only prevents self-registration.
     assigned: rest
+    ceiling: partial
+    ceilingReason: the platform evidences one of the twelve AC-2 parts (no self-registration)
   - control: AC-6(5)
     statement: >-
       The realm `admin` role is held only by the subjects listed in the approved privileged-account
@@ -27,31 +29,30 @@ implemented-requirements:
     assigned: rest
   - control: AC-7
     statement: >-
-      Keycloak brute-force detection temporarily locks an account after the configured number of
-      consecutive failed logon attempts.
+      Keycloak brute-force detection locks an account after the configured number of consecutive
+      failed logons within the configured window, for at least the configured lockout duration (or
+      until an administrator releases it).
     assertions: [kc-brute-force-protection]
     responsibility: provider
-  - control: AC-11
-    statement: >-
-      SSO sessions expire after the configured idle timeout, which forces re-authentication of an
-      inactive session.
-    assertions: [kc-session-timeouts]
-    responsibility: customer
-    customer: Device lock with pattern-hiding display is an endpoint (client device) control.
-    assigned: rest
   - control: AC-12
     statement: >-
       SSO sessions are terminated after the idle timeout and the maximum session lifespan; the
       "remember me" option that would extend sessions is disabled.
     assertions: [kc-session-timeouts, kc-remember-me-disabled]
     responsibility: provider
-  - control: AU-2
+  - control: SC-10
     statement: >-
-      Keycloak records login events (successful and failed authentication, logout, token
-      exchange) and administrative events for the realm.
-    assertions: [kc-login-events, kc-admin-events]
+      SSO sessions (and the gateway sessions that depend on them) end after the configured idle
+      timeout.
+    assertions: [kc-session-timeouts]
     responsibility: shared
-    customer: Select the event types to be logged (AU-2 a-e) and coordinate with the organization's audit function.
+    customer: Terminate network connections of application protocols that do not use the platform SSO session (e.g. database or SSH sessions).
+    assigned: rest
+  - control: AU-2
+    statement: Keycloak records administrative events with their details.
+    assertions: [kc-admin-events]
+    responsibility: shared
+    customer: Decide which events are logged (AU-2 a-e is an organizational selection) and coordinate with the organization's audit function.
     assigned: rest
   - control: AU-3
     statement: Admin events include the full representation of the change (who, what, when, from where).
@@ -59,8 +60,16 @@ implemented-requirements:
     responsibility: shared
     customer: Ensure application audit records contain the AU-3 content for application events.
     assigned: rest
+  - control: AU-11
+    statement: Stored Keycloak events expire after the configured retention period (`eventsExpiration`).
+    assertions: [kc-login-events]
+    responsibility: shared
+    customer: Set the retention ODP and archive identity events off-cluster where the retention exceeds Keycloak's store.
+    assigned: rest
   - control: AU-12
-    statement: Event generation is enabled for the realm with a stored-event retention period.
+    statement: >-
+      Event generation is enabled for the realm and the stored event types include successful and
+      failed logins and logouts.
     assertions: [kc-login-events, kc-admin-events]
     responsibility: shared
     customer: Generate audit records for application-level events.
@@ -72,20 +81,24 @@ implemented-requirements:
     customer: Ensure every application endpoint requires the platform identity (no local accounts) and document exceptions.
     assigned: rest
   - control: IA-2(1)
-    statement: Members of the administrator group are required to use a second factor (OTP or WebAuthn).
+    statement: >-
+      The realm's browser flow requires a second factor (OTP, WebAuthn or X.509) and every member of
+      the administrator group has one enrolled.
     assertions: [kc-admin-mfa]
     responsibility: shared
-    customer: Require MFA for privileged accounts in the authentication flow; for DoD use PKI/CAC (IA-2(12)).
+    customer: For DoD, privileged MFA must use PKI/CAC (IA-2(12), DoDI 8520.03); OTP is generally not acceptable.
     assigned: rest
   - control: IA-5(1)
-    statement: The realm password policy enforces minimum length and complexity for password authenticators.
+    statement: >-
+      The realm password policy enforces the minimum length (organization-defined, 15 for DoD) and a
+      compromised / common password blocklist (`passwordBlacklist`).
     assertions: [kc-password-policy]
     responsibility: shared
-    customer: Approve the password policy ODPs and the compromised-password list; manage any application-local passwords.
+    customer: Approve the password ODPs, maintain the blocklist (IA-5(1) a) and manage any application-local passwords.
     assigned: rest
   - control: SC-8
     statement: The realm requires TLS for external requests (`sslRequired`).
     assertions: [kc-ssl-required]
     responsibility: shared
-    customer: Ensure TLS on internal hops behind the gateway.
+    customer: Ensure TLS on internal hops behind the gateway (Keycloak sees the gateway's private address, so `external` permits plain HTTP inside the cluster).
     assigned: rest

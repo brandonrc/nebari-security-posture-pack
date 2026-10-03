@@ -78,7 +78,7 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     def status(cid):
         return next(p["value"] for p in reqs[cid]["props"] if p["name"] == "implementation-status")
 
-    assert status("ac-7") == "failing" and status("ia-2.1") == "passing" and status("ac-2") == "hybrid"
+    assert status("ac-7") == "failing" and status("ia-2.1") == "passing" and status("cm-8") == "hybrid"
     ac7 = reqs["ac-7"]
     # M2: failing is `planned` only when a POA&M item tracks it
     assert ac7["by-components"][0]["implementation-status"]["state"] == "not-implemented"
@@ -104,7 +104,7 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     assert "leveraged-authorizations" not in ssp["system-implementation"]
     # hybrid controls export the program's residual responsibility (CRM in OSCAL)
     ac2 = reqs["ac-2"]["by-components"][0]
-    assert ac2["implementation-status"]["state"] == "partial"
+    assert status("ac-2") == "partial" and ac2["implementation-status"]["state"] == "partial"
     assert "AC-2 a-l" in ac2["export"]["responsibilities"][0]["description"]
     # deterministic
     again = build_ssp(data, system_name="grace", organization="Quansight", generated_at=datetime(2026, 10, 3, tzinfo=UTC))

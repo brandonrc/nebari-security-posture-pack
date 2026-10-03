@@ -348,6 +348,11 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
                 res.detail += f"; note: {sum(r.status == FAIL for r in results)} platform assertion(s) fail"
         elif evaluated:
             _status_from_objectives(res, evaluated)
+            capped = [req for _, req in declared if req.ceiling == PARTIAL]
+            if capped and res.status in (PASSING, HYBRID):
+                res.status = PARTIAL
+                res.detail = "capped at partial: " + "; ".join(r.ceiling_reason or "evidence is incomplete"
+                                                                for r in capped) + ". " + res.detail
         elif amap.get(label) and not results:
             res.status = NOT_ASSESSED
             res.detail = "assertion(s) not evaluated yet: " + ", ".join(amap[label])

@@ -24,7 +24,7 @@ import re
 import uuid
 from typing import Any
 
-from ._common import (CONTROL_TITLES, SCANNER_TITLES, TOOL_NAME, View, filename, image_label, iso, normalize,
+from ._common import (control_title, SCANNER_TITLES, TOOL_NAME, View, filename, image_label, iso, normalize,
                       sev_rank)
 from .registry import GeneratedReport
 
@@ -246,7 +246,7 @@ def build(v: View) -> dict[str, Any]:
             continue  # partially evidenced: no determination is made
         fnd = {
             "uuid": uid("finding", cid),
-            "title": f"{upper} {CONTROL_TITLES.get(upper, '')}".strip(),
+            "title": f"{upper} {control_title(upper)}".strip(),
             "description": (f"{len(rks)} open risk(s) and {len(obs)} observation(s) map to {upper}"
                             + (f"; control evidence status {es['status']}" if es.get("status") else "") + "."),
             "target": {"type": "statement-id", "target-id": f"{cid}_smt", "status": {"state": state}},

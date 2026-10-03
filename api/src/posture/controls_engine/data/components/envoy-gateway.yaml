@@ -17,17 +17,14 @@ implemented-requirements:
     customer: Protect application-internal traffic behind the gateway (service-to-service, database connections) as required by the system's categorization.
     assigned: rest
   - control: SC-8(1)
-    statement: TLS 1.2 or later protects data in transit between clients and the gateway.
+    statement: >-
+      The gateway refuses TLS versions below 1.2 (ClientTrafficPolicy minVersion or a live handshake
+      probe). Negotiated cipher suites are recorded, not graded.
     assertions: [gw-tls-min-version]
     responsibility: shared
-    customer: Approve the cipher suites and confirm FIPS-validated cryptography where the ODP requires it.
-    assigned: rest
-  - control: SC-13
-    statement: TLS cipher suites and protocol versions are restricted to modern, approved algorithms.
-    assertions: [gw-tls-min-version]
-    responsibility: shared
-    customer: Determine the required type of cryptography (e.g. FIPS 140-validated modules) and verify it is used.
-    assigned: rest
+    customer: Approve the cipher suites against NIST SP 800-52r2 and confirm FIPS 140-validated cryptography where the SC-13 ODP requires it.
+    ceiling: partial
+    ceilingReason: cipher suites are recorded but not graded against NIST SP 800-52r2, and FIPS mode is not checked
   - control: SC-23
     statement: Session authenticity is protected by TLS on every authenticated route (no session cookies over HTTP).
     assertions: [gw-https-listener, gw-http-redirect]

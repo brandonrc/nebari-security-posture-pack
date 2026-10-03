@@ -32,6 +32,10 @@ class Requirement:
     # 800-53A objectives explicitly assigned to the program / organization (described by `customer`);
     # `rest` = every objective of the control this platform does not evidence (M2)
     assigned: tuple[str, ...] = ()
+    # evidence ceiling (compliance review M4 "partial" rows): the platform's evidence can never show
+    # this control as more than `partial`, with the reason (e.g. ciphers recorded but not graded)
+    ceiling: str | None = None
+    ceiling_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,7 +67,8 @@ def parse_component(data: dict) -> Component:
         reqs.append(Requirement(control=to_label(str(r["control"])), statement=str(r.get("statement") or "").strip(),
                                 inherited=inherited, assertions=tuple(r.get("assertions") or ()),
                                 responsibility=resp, customer=str(r.get("customer") or "").strip(),
-                                assigned=_assigned(r.get("assigned"))))
+                                assigned=_assigned(r.get("assigned")), ceiling=r.get("ceiling") or None,
+                                ceiling_reason=str(r.get("ceilingReason") or "").strip()))
     ctype = data.get("type", "software")
     if ctype not in COMPONENT_TYPES:
         raise ValueError(f"component {data.get('id')}: unknown type {ctype!r}")
