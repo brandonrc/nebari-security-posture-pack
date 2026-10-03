@@ -122,9 +122,9 @@ provenance:
       - oci://quay.io/nebari/charts                          # nebari-*-pack, nebari-landing
       - oci://docker.io/envoyproxy                           # gateway-helm (eg)
     # Not listed: no grace release uses a bitnami or metallb chart (MetalLB is
-    # the MicroK8s addon); artifact-keeper, bifrost, checkmaite, dask-gateway-pack
-    # and security-posture are installed from local chart directories and are
-    # not in any of these repos, so they stay "not checked".
+    # the MicroK8s addon). The artifact-keeper, bifrost, checkmaite,
+    # dask-gateway-pack and security-posture charts are not published in any of
+    # these repos, so those releases stay "not checked".
   compat:
     internalService:
       enabled: true
