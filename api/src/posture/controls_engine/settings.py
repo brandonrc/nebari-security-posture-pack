@@ -26,12 +26,50 @@ class ControlParameters(_Camel):
     log_window_minutes: int = Field(10, ge=1, le=1440)  # AU-12 ingest freshness
 
 
+class CommonControlProvider(_Camel):
+    """A named, separately authorized common control provider (CCP) whose controls this system
+    inherits (M1): e.g. the hosting data center's or the organization's CCP package in eMASS.
+    Only controls listed here are ever reported `inherited`."""
+
+    name: str  # CCP system name, e.g. "DISA Enterprise Hosting (eMASS 1234)"
+    controls: list[str] = Field(default_factory=list)  # AC-1, PE-3, ...
+    authorization_ref: str = ""  # eMASS ID / ATO letter reference
+    date_authorized: str = ""  # YYYY-MM-DD of the CCP's ATO (OSCAL leveraged-authorization date-authorized)
+    statement: str = ""  # the CCP's implementation statement for the inherited controls
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("commonControlProviders[].name is required")
+        return v
+
+    @field_validator("controls")
+    @classmethod
+    def _controls(cls, v: list[str]) -> list[str]:
+        return list(dict.fromkeys(to_label(c) for c in v if c and c.strip()))
+
+    @field_validator("date_authorized")
+    @classmethod
+    def _date(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v:
+            from datetime import date
+
+            date.fromisoformat(v)
+        return v
+
+
 class ControlsEngineSettings(_Camel):
     enabled: bool = True  # read-only: env CONTROLS_ENGINE_ENABLED (chart controlsEngine.enabled)
     baseline: Literal["low", "moderate", "high"] = "moderate"
     admin_subjects: list[str] = Field(default_factory=list)  # Keycloak usernames, User:/Group:/ServiceAccount:ns/name
-    inherit_organizational_controls: bool = True
-    organization_statement: str = ""  # SSP text for controls inherited from the organization
+    # M1: organization-level controls with no evidence are reported `org-provided-unverified` (never
+    # counted as implemented) only when this is on; off = `not-assessed`. Neither is `inherited`.
+    inherit_organizational_controls: bool = False
+    organization_statement: str = ""  # SSP text for organization-provided (unverified) controls
+    common_control_providers: list[CommonControlProvider] = Field(default_factory=list)
     not_applicable: dict[str, str] = Field(default_factory=dict)  # tailoring: control -> justification
     parameters: ControlParameters = Field(default_factory=ControlParameters)
 

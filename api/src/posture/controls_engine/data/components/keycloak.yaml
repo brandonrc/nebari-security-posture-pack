@@ -14,46 +14,68 @@ implemented-requirements:
       Accounts are created by administrators in the Keycloak realm; self-service registration is
       disabled so no account exists without an administrator action.
     assertions: [kc-self-registration-disabled]
+    responsibility: shared
+    customer: Define account types, approvals, account managers, reviews, notifications and disablement (AC-2 a-l); the platform only prevents self-registration.
   - control: AC-6(5)
     statement: >-
       The realm `admin` role is held only by the subjects listed in the approved privileged-account
       allowlist (`controlsEngine.adminSubjects`).
     assertions: [kc-admin-role-allowlist]
+    responsibility: shared
+    customer: Approve the privileged-account allowlist and review it periodically.
   - control: AC-7
     statement: >-
       Keycloak brute-force detection temporarily locks an account after the configured number of
       consecutive failed logon attempts.
     assertions: [kc-brute-force-protection]
+    responsibility: provider
   - control: AC-11
     statement: >-
       SSO sessions expire after the configured idle timeout, which forces re-authentication of an
       inactive session.
     assertions: [kc-session-timeouts]
+    responsibility: customer
+    customer: Device lock with pattern-hiding display is an endpoint (client device) control.
   - control: AC-12
     statement: >-
       SSO sessions are terminated after the idle timeout and the maximum session lifespan; the
       "remember me" option that would extend sessions is disabled.
     assertions: [kc-session-timeouts, kc-remember-me-disabled]
+    responsibility: provider
   - control: AU-2
     statement: >-
       Keycloak records login events (successful and failed authentication, logout, token
       exchange) and administrative events for the realm.
     assertions: [kc-login-events, kc-admin-events]
+    responsibility: shared
+    customer: Select the event types to be logged (AU-2 a-e) and coordinate with the organization's audit function.
   - control: AU-3
     statement: Admin events include the full representation of the change (who, what, when, from where).
     assertions: [kc-admin-events]
+    responsibility: shared
+    customer: Ensure application audit records contain the AU-3 content for application events.
   - control: AU-12
     statement: Event generation is enabled for the realm with a stored-event retention period.
     assertions: [kc-login-events, kc-admin-events]
+    responsibility: shared
+    customer: Generate audit records for application-level events.
   - control: IA-2
     statement: Every interactive user of a Nebari application is uniquely identified and authenticated by Keycloak.
     assertions: [app-gateway-auth]
+    responsibility: shared
+    customer: Ensure every application endpoint requires the platform identity (no local accounts) and document exceptions.
   - control: IA-2(1)
     statement: Members of the administrator group are required to use a second factor (OTP or WebAuthn).
     assertions: [kc-admin-mfa]
+    responsibility: shared
+    customer: Require MFA for privileged accounts in the authentication flow; for DoD use PKI/CAC (IA-2(12)).
   - control: IA-5(1)
     statement: The realm password policy enforces minimum length and complexity for password authenticators.
     assertions: [kc-password-policy]
+    responsibility: shared
+    customer: Approve the password policy ODPs and the compromised-password list; manage any application-local passwords.
   - control: SC-8
     statement: The realm requires TLS for external requests (`sslRequired`).
     assertions: [kc-ssl-required]
+    responsibility: shared
+    customer: Ensure TLS on internal hops behind the gateway.

@@ -25,12 +25,15 @@ from .catalog import BASELINES, get_catalog, to_oscal_id
 from .components import Component, load_components, requirements_by_control
 from .engine import (
     DEFAULT_ORG_STATEMENT,
+    HYBRID,
     IMPLEMENTED,
     INHERITED,
     NOT_APPLICABLE,
     NOT_IMPLEMENTED,
+    ORG_PROVIDED,
     PARTIAL,
     derive_statuses,
+    providers_by_control,
 )
 
 OSCAL_VERSION = "1.1.2"
@@ -40,8 +43,9 @@ PROFILE_URL = ("https://raw.githubusercontent.com/usnistgov/oscal-content/main/n
                "NIST_SP-800-53_rev5_{level}-baseline_profile.json")
 CATALOG_URL = ("https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/"
                "NIST_SP-800-53_rev5_catalog.json")
-OSCAL_STATE = {IMPLEMENTED: "implemented", PARTIAL: "partial", NOT_IMPLEMENTED: "planned", INHERITED: "implemented",
-               NOT_APPLICABLE: "not-applicable"}
+# org-provided-unverified and unknown carry no OSCAL state: nothing is asserted for them.
+OSCAL_STATE = {IMPLEMENTED: "implemented", PARTIAL: "partial", HYBRID: "partial", NOT_IMPLEMENTED: "planned",
+               INHERITED: "implemented", NOT_APPLICABLE: "not-applicable"}
 TOOL = "Nebari Security Posture Pack"
 
 
@@ -90,15 +94,16 @@ def build_component_definition(components: dict[str, Component] | None = None, *
         reqs = []
         for req in comp.requirements:
             props = [_prop("assertion", a) for a in req.assertions]
-            if req.inherited:
-                props.append(_prop("control-origination", "inherited"))
+            props.append(_prop("responsibility", req.responsibility))
             r: dict[str, Any] = {"uuid": _uid("compdef", comp.id, req.control), "control-id": to_oscal_id(req.control),
                                  "description": _text(req.statement)}
             if props:
                 r["props"] = props
             titles = [by_id[a].title for a in req.assertions if a in by_id]
             if titles:
-                r["remarks"] = "Continuously verified by: " + "; ".join(titles) + "."
+                r["remarks"] = "Evidence collected by: " + "; ".join(titles) + "."
+            if req.customer:  # CRM: the residual responsibility of a consuming system
+                r["remarks"] = (r.get("remarks", "") + " Customer responsibility: " + req.customer).strip()
             reqs.append(r)
         c: dict[str, Any] = {"uuid": comp.uuid, "type": comp.type, "title": comp.title,
                              "description": _text(comp.description)}
@@ -123,7 +128,7 @@ def build_component_definition(components: dict[str, Component] | None = None, *
 def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari", organization: str = "",
               baseline: str = "moderate", generated_at: datetime | None = None, description: str = "",
               organization_statement: str = "", not_applicable: dict[str, str] | None = None,
-              inherit_organizational: bool = True,
+              inherit_organizational: bool = False, providers: list[Any] | None = None,
               components: dict[str, Component] | None = None) -> dict[str, Any]:
     """`engine_data` = `engine.latest_data()` ({run, results[], statuses[]}) or None (engine never ran)."""
     if baseline not in BASELINES:
@@ -150,9 +155,10 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
                                  "detail": "not evaluated by the latest engine run", "inBaseline": True})
     else:
         statuses = [{"control": r.control, "status": r.status, "components": r.components,
-                     "assertions": r.assertions, "detail": r.detail, "inBaseline": r.in_baseline}
+                     "assertions": r.assertions, "detail": r.detail, "inBaseline": r.in_baseline,
+                     "responsibility": r.responsibility, "provider": r.provider}
                     for r in derive_statuses([], baseline=baseline, components=components, not_applicable=not_applicable,
-                                             inherit_organizational=inherit_organizational)]
+                                             inherit_organizational=inherit_organizational, providers=providers)]
     statuses.sort(key=lambda s: catalog.sort_key(s["control"]))
 
     this_system = _uid(seed, "this-system")
@@ -167,6 +173,29 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
         if comp.purpose:
             c["purpose"] = comp.purpose
         sys_components.append(c)
+
+    # M1: inheritance only from named, authorized common control providers (leveraged authorizations)
+    ccp_list = [p if isinstance(p, dict) else p.model_dump(by_alias=True) for p in providers or []]
+    leveraged, ccp_comp, ccp_parties = [], {}, []
+    for p in ccp_list:
+        name = p.get("name") or "Common control provider"
+        party = _uid(seed, "ccp-party", name)
+        ccp_parties.append({"uuid": party, "type": "organization", "name": name})
+        la_uuid = _uid(seed, "leveraged-authorization", name)
+        la: dict[str, Any] = {"uuid": la_uuid, "title": f"{name} authorization", "party-uuid": party,
+                              "date-authorized": p.get("dateAuthorized") or "1970-01-01"}
+        if p.get("authorizationRef"):
+            la["props"] = [_prop("authorization-reference", p["authorizationRef"])]
+        if not p.get("dateAuthorized"):
+            la["remarks"] = "DRAFT: date-authorized not configured (controlsEngine.commonControlProviders[].dateAuthorized)."
+        leveraged.append(la)
+        ccp_comp[name] = _uid(seed, "ccp-component", name)
+        sys_components.append({
+            "uuid": ccp_comp[name], "type": "system", "title": name,
+            "description": _text(p.get("statement") or f"Common control provider {name}."),
+            "props": [{"name": "leveraged-authorization-uuid", "value": la_uuid},
+                      {"name": "implementation-point", "value": "external"}],
+            "status": {"state": "operational"}})
 
     resources: list[dict[str, Any]] = []
     res_uuid: dict[str, str] = {}
@@ -193,13 +222,24 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
         by_components = []
         declared = reqs.get(label, [])
         claimed = {comp.id for comp, _ in declared}
+        provider = s.get("provider")
+        if status == INHERITED and provider in ccp_comp:
+            p = next(x for x in ccp_list if x.get("name") == provider)
+            by_components.append({
+                "component-uuid": ccp_comp[provider], "uuid": _uid(seed, label, "ccp", provider),
+                "description": _text(p.get("statement") or f"Inherited from {provider}."),
+                "implementation-status": {"state": "implemented"},
+                "inherited": [{"uuid": _uid(seed, label, "inherited", provider),
+                               "description": _text(p.get("statement") or f"Provided by {provider}.")}]})
         for comp, req in declared:
             bc: dict[str, Any] = {"component-uuid": comp.uuid, "uuid": _uid(seed, label, comp.id),
-                                  "description": _text(req.statement)}
-            if req.inherited:
-                bc["props"] = [_prop("control-origination", "inherited")]
-            if state:
+                                  "description": _text(req.statement),
+                                  "props": [_prop("responsibility", req.responsibility)]}
+            if state and status != INHERITED:
                 bc["implementation-status"] = {"state": state}
+            if req.customer:  # CRM: what a consuming system must still do
+                bc["export"] = {"responsibilities": [{"uuid": _uid(seed, label, comp.id, "responsibility"),
+                                                      "description": req.customer}]}
             by_components.append(bc)
         for cid in s.get("components") or []:
             if cid not in claimed and cid in comp_uuid:
@@ -211,14 +251,14 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
                     bc["implementation-status"] = {"state": state}
                 by_components.append(bc)
         if not by_components:
-            desc = org_statement if status == INHERITED else _text(s.get("detail"))
+            desc = org_statement if status == ORG_PROVIDED else _text(s.get("detail"))
             bc = {"component-uuid": this_system, "uuid": _uid(seed, label, "this-system"), "description": desc}
-            if status == INHERITED:
-                bc["props"] = [_prop("control-origination", "inherited")]
             if state:
                 bc["implementation-status"] = {"state": state}
             by_components.append(bc)
         props = [_prop("implementation-status", status)]
+        if s.get("responsibility"):
+            props.append(_prop("responsibility", s["responsibility"]))
         if cat and cat.lowest_baseline:
             props.append(_prop("baseline", cat.lowest_baseline))
         if not s.get("inBaseline", True):
@@ -236,7 +276,7 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
     level = f"fips-199-{baseline}"
     in_b = [s for s in statuses if s.get("inBaseline", True)]
     counts = {k: sum(s["status"] == k for s in in_b) for k in
-              (IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED, INHERITED, NOT_APPLICABLE, "unknown")}
+              (IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED, HYBRID, INHERITED, ORG_PROVIDED, NOT_APPLICABLE, "unknown")}
     doc = {
         "uuid": _uid(seed, "ssp"),
         "metadata": _metadata(f"System Security Plan: {system_name}", organization, generated_at,
@@ -275,6 +315,7 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
                       {"uuid": _uid(seed, "user", "user"), "title": "Platform user",
                        "description": "Authenticated Keycloak users of Nebari applications."}],
             "components": sys_components,
+            **({"leveraged-authorizations": leveraged} if leveraged else {}),
         },
         "control-implementation": {
             "description": f"Implementation of the NIST SP 800-53 rev5 {baseline.upper()} baseline. Statuses are "
@@ -284,6 +325,8 @@ def build_ssp(engine_data: dict[str, Any] | None, *, system_name: str = "Nebari"
             "implemented-requirements": impl,
         },
     }
+    if ccp_parties:
+        doc["metadata"]["parties"].extend(ccp_parties)
     if resources:
         doc["back-matter"] = {"resources": resources}
     return {"system-security-plan": doc}

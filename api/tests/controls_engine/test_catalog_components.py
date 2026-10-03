@@ -35,7 +35,9 @@ def test_components_consistent_with_catalog_and_assertions():
             c = cat.get(req.control)
             assert c is not None and not c.withdrawn, req.control
             assert req.statement
-            assert req.inherited or req.assertions, f"{comp.id} {req.control}: no assertion"
+            assert req.responsibility == "org" or req.assertions, f"{comp.id} {req.control}: no assertion"
+            # CRM (S6): every non-provider requirement says what the consuming program must still do
+            assert req.responsibility == "provider" or req.customer, f"{comp.id} {req.control}: no customer text"
             for a in req.assertions:
                 assert a in ids, f"{comp.id}: unknown assertion {a}"
     for a in ids.values():

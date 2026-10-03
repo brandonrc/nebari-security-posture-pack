@@ -56,8 +56,13 @@ class ControlStatusRow(Base):
     family: Mapped[str] = mapped_column(String(4), nullable=False)
     baseline: Mapped[str | None] = mapped_column(String(16))  # lowest baseline containing the control
     in_baseline: Mapped[bool] = mapped_column(nullable=False, default=False)  # selected baseline of the run
-    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
     components: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
     assertions: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
     detail: Mapped[str | None] = mapped_column(Text)
     score: Mapped[float | None] = mapped_column(Float)  # passed / evaluated assertions
+    # migration 0004 (compliance review M1/M2/M3)
+    responsibility: Mapped[str | None] = mapped_column(String(16))  # provider | shared | customer | org
+    provider: Mapped[str | None] = mapped_column(String(255))  # common control provider (inherited)
+    objectives: Mapped[list[Any] | None] = mapped_column(JSONType)  # [{id, state}] 800-53A objectives
+    inputs: Mapped[dict[str, Any] | None] = mapped_column(JSONType)  # scan evidence used by the derivation

@@ -11,21 +11,34 @@ implemented-requirements:
   - control: RA-5
     statement: All running container images are scanned for vulnerabilities on a schedule and on demand by three scanners.
     assertions: [pack-scan-recent]
+    responsibility: shared
+    customer: Scan components the pack cannot see (nodes, application dependencies outside images, web applications) and analyze results.
   - control: RA-5(2)
     statement: Scanner vulnerability databases are updated automatically and checked for freshness before scans.
     assertions: [pack-scan-recent, pack-scanner-db-fresh]
+    responsibility: provider
   - control: SI-2
     statement: Open findings are tracked against severity-based remediation SLAs; overdue findings are reported.
     assertions: [pack-sla-overdue]
+    responsibility: shared
+    customer: Remediate findings in program images; test updates (SI-2 b) and incorporate flaw remediation into CM (SI-2 d).
   - control: SI-5
     statement: Scanner advisory feeds (NVD, distro, GHSA) are ingested at least every 72 hours.
     assertions: [pack-scanner-db-fresh]
+    responsibility: shared
+    customer: Receive and act on security alerts, advisories and directives (CISA, IAVM).
   - control: CA-5
     statement: A POA&M covering every open finding is generated from the latest scan.
     assertions: [pack-poam-current]
+    responsibility: shared
+    customer: Review, approve and maintain the POA&M; set risk ratings and milestones.
   - control: CA-7
     statement: Scans, posture checks and control assertions run continuously and feed OSCAL assessment results.
     assertions: [pack-scan-recent]
+    responsibility: shared
+    customer: Own the continuous monitoring strategy, metrics and reporting to the AO.
   - control: CM-8
     statement: The component inventory (every container image, digest and workload) is refreshed on each scan.
     assertions: [pack-inventory-current]
+    responsibility: shared
+    customer: Maintain the inventory of components outside the cluster and assign component owners.

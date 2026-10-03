@@ -99,6 +99,16 @@ REPORT_TYPES: list[dict[str, Any]] = [
                        "statements and embedded evidence (DESIGN §13).",
     },
     {
+        "type": "crm",
+        "title": "Customer Responsibility Matrix (draft)",
+        "formats": ["xlsx", "csv"],
+        "scopes": ["cluster"],
+        "options": ["systemName", "baseline"],
+        "description": "Per control of the baseline: responsibility (provided by the platform, shared, customer, "
+                       "organization / common control provider), what the platform provides, the program's residual "
+                       "responsibility and the platform's current evidence status.",
+    },
+    {
         "type": "oscal-component-definition",
         "title": "OSCAL Component Definition",
         "formats": ["json"],
@@ -119,6 +129,7 @@ _MODULES = {
     "vuln-export": "vuln_export",
     "oscal-ssp": "oscal_ssp",
     "oscal-component-definition": "oscal_component",
+    "crm": "crm",
 }
 
 

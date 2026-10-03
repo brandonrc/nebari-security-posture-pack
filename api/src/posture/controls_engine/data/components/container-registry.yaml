@@ -10,6 +10,10 @@ implemented-requirements:
   - control: CM-14
     statement: Only authenticated or cluster-internal clients can push images, so deployed components come from controlled sources.
     assertions: [reg-access-restricted]
+    responsibility: shared
+    customer: Restrict who may push images and review the registry account list.
   - control: SR-4
     statement: Image provenance is preserved by restricting who can write to the registry.
     assertions: [reg-access-restricted]
+    responsibility: shared
+    customer: Document the provenance of images built or imported by the program.

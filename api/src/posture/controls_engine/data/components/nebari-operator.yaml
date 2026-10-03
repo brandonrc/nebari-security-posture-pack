@@ -13,11 +13,17 @@ implemented-requirements:
       Every NebariApp with `auth.enabled` is protected by a gateway SecurityPolicy, or documents an
       equivalent in-application check (annotation `posture.nebari.dev/in-app-auth`).
     assertions: [app-gateway-auth, app-landing-visibility]
+    responsibility: shared
+    customer: Implement application-level authorization and set NebariApp auth.groups for every app.
   - control: AC-22
     statement: >-
       Landing-page entries of authenticated applications are not publicly listed; visibility is
       restricted to the groups allowed to use the application.
     assertions: [app-landing-visibility]
+    responsibility: shared
+    customer: Review content published on the landing page and publicly accessible apps.
   - control: IA-2
     statement: Applications onboarded with `auth.enabled` require an authenticated Keycloak identity.
     assertions: [app-gateway-auth]
+    responsibility: shared
+    customer: Enable auth on every NebariApp; document any app that authenticates in-application.

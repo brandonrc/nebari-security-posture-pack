@@ -78,7 +78,7 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     def status(cid):
         return next(p["value"] for p in reqs[cid]["props"] if p["name"] == "implementation-status")
 
-    assert status("ac-7") == "not-implemented" and status("ia-2.1") == "implemented"
+    assert status("ac-7") == "not-implemented" and status("ia-2.1") == "hybrid"
     ac7 = reqs["ac-7"]
     assert ac7["by-components"][0]["implementation-status"]["state"] == "planned"
     link = ac7["links"][0]
@@ -87,12 +87,18 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
     ev = res[link["href"][1:]]
     payload = json.loads(base64.b64decode(ev["base64"]["value"]))
     assert payload["status"] == "fail" and payload["evidence"]["failureFactor"] == 30
-    # inherited organizational control attributed to this-system with the organization statement
+    # M1: nothing is inherited without a configured provider; org-level controls carry no OSCAL state
     this = next(c["uuid"] for c in ssp["system-implementation"]["components"] if c["type"] == "this-system")
     at2 = reqs["at-2"]["by-components"][0]
-    assert at2["component-uuid"] == this and status("at-2") == "inherited"
+    assert at2["component-uuid"] == this and status("at-2") == "not-implemented"
+    assert not any(status(c) == "inherited" for c in reqs)
     pe3 = reqs["pe-3"]["by-components"][0]
-    assert {"name": "control-origination", "ns": "https://nebari.dev/ns/oscal", "value": "inherited"} in pe3["props"]
+    assert status("pe-3") == "org-provided-unverified" and "implementation-status" not in pe3
+    assert "leveraged-authorizations" not in ssp["system-implementation"]
+    # hybrid controls export the program's residual responsibility (CRM in OSCAL)
+    ia21 = reqs["ia-2.1"]["by-components"][0]
+    assert ia21["implementation-status"]["state"] == "partial"
+    assert "IA-2(12)" in ia21["export"]["responsibilities"][0]["description"]
     # deterministic
     again = build_ssp(data, system_name="grace", organization="Quansight", generated_at=datetime(2026, 10, 3, tzinfo=UTC))
     assert again == doc
@@ -100,7 +106,8 @@ async def test_ssp_validates_and_carries_statuses(ssp_validator):
 
 def test_ssp_without_engine_run_and_other_baselines(ssp_validator):
     for b in ("low", "moderate", "high"):
-        doc = build_ssp(None, system_name="x", baseline=b, organization_statement="Org policy covers it.")
+        doc = build_ssp(None, system_name="x", baseline=b, organization_statement="Org policy covers it.",
+                        inherit_organizational=True)
         assert _errors(ssp_validator, doc) == []
         ssp = doc["system-security-plan"]
         assert "back-matter" not in ssp and "has not run" in ssp["control-implementation"]["description"]
@@ -108,6 +115,23 @@ def test_ssp_without_engine_run_and_other_baselines(ssp_validator):
         assert at1["by-components"][0]["description"] == "Org policy covers it."
     with pytest.raises(ValueError):
         build_ssp(None, baseline="extreme")
+
+
+async def test_ssp_leveraged_authorization_for_inherited_controls(ssp_validator):
+    ccp = {"name": "DC-1 hosting", "controls": ["PE-3", "AT-2"], "authorizationRef": "eMASS 4242",
+           "dateAuthorized": "2026-01-15", "statement": "Badge access and guards."}
+    doc = build_ssp(None, system_name="x", providers=[ccp])
+    assert _errors(ssp_validator, doc) == []
+    ssp = doc["system-security-plan"]
+    la = ssp["system-implementation"]["leveraged-authorizations"][0]
+    assert la["date-authorized"] == "2026-01-15" and la["title"] == "DC-1 hosting authorization"
+    assert any(p["uuid"] == la["party-uuid"] for p in ssp["metadata"]["parties"])
+    reqs = {r["control-id"]: r for r in ssp["control-implementation"]["implemented-requirements"]}
+    bc = reqs["pe-3"]["by-components"][0]
+    assert bc["inherited"][0]["description"] == "Badge access and guards."
+    assert bc["implementation-status"]["state"] == "implemented"
+    ccp_comp = next(c for c in ssp["system-implementation"]["components"] if c["title"] == "DC-1 hosting")
+    assert bc["component-uuid"] == ccp_comp["uuid"]
 
 
 async def test_ssp_rebaselines_a_moderate_run(ssp_validator):

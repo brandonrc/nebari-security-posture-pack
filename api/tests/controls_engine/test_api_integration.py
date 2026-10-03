@@ -79,14 +79,16 @@ async def test_01_before_any_run(env):
     fr = (await c.get("/compliance/families")).json()
     fams = fr["items"]
     assert fr["baseline"] == "moderate" and fr["totals"]["baseline"]["name"] == "moderate"
-    keys = {"total", "implemented", "partial", "notImplemented", "inherited", "notApplicable", "unknown"}
+    keys = {"total", "implemented", "partial", "notImplemented", "hybrid", "inherited", "orgProvided",
+            "notApplicable", "unknown"}
     assert keys <= set(fr["totals"]["baseline"]) and keys == set(fr["totals"]["catalog"])
     assert fr["totals"]["baseline"]["total"] == 287
     assert sum(f["total"] for f in fams) == 287 and {"family", "title", "implemented", "partial", "notImplemented",
                                                      "inherited", "notApplicable", "unknown"} <= set(fams[0])
     ctl = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
     assert ctl["AC-7"]["status"] == "unknown" and ctl["AC-7"]["baseline"] == "low" and ctl["AC-7"]["family"] == "AC"
-    assert ctl["RA-5"]["findingStatus"] == "not_assessed" and ctl["AT-2"]["status"] == "inherited"
+    assert ctl["RA-5"]["findingStatus"] == "not_assessed" and ctl["AT-2"]["status"] == "not-implemented"
+    assert ctl["AT-2"]["responsibility"] == "org" and fr["totals"]["baseline"]["inherited"] == 0
     cat = (await c.get("/compliance/catalog", params={"family": "AC", "baseline": "moderate"})).json()
     assert cat[0]["control"] == "AC-1" and all(x["family"] == "AC" and "moderate" in x["baselines"] for x in cat)
     assert (await c.get("/compliance/catalog", params={"q": "brute"})).status_code == 200
@@ -134,23 +136,27 @@ async def test_04_controls_and_families(env):
     ac7 = ctl["AC-7"]
     assert ac7["status"] == "not-implemented" and ac7["components"] == ["keycloak"]
     assert ac7["assertions"][0]["id"] == "kc-brute-force-protection" and ac7["assertions"][0]["evidence"]
-    assert ctl["IA-2(1)"]["status"] == "implemented" and ctl["RA-5"]["findingsOpen"] > 0
+    assert ctl["IA-2(1)"]["status"] == "hybrid" and ctl["RA-5"]["findingsOpen"] > 0
     assert ctl["RA-5(2)"]["status"] == "partial"  # scan recent, clair DB stale
     assert ctl["AC-6"]["findingStatus"] == "open" and ctl["AC-6"]["checksFailed"] >= 1
-    only = (await c.get("/compliance/controls", params={"status": "implemented", "family": "IA"})).json()
-    assert only and all(x["status"] == "implemented" and x["family"] == "IA" for x in only)
+    only = (await c.get("/compliance/controls", params={"status": "implemented", "family": "AC"})).json()
+    assert only and all(x["status"] == "implemented" and x["family"] == "AC" for x in only)
+    crm = (await c.get("/compliance/crm")).json()
+    assert crm["baseline"] == "moderate" and len(crm["items"]) == 287 and crm["runId"]
+    by = {r["control"]: r for r in crm["items"]}
+    assert by["AC-7"]["responsibility"] == "provider" and by["AC-2"]["customerResponsibility"]
     fr = (await c.get("/compliance/families")).json()
     fams = {f["family"]: f for f in fr["items"]}
     assert fams["AC"]["notImplemented"] >= 1 and sum(f["total"] for f in fams.values()) == 287
     # totals: baseline = sum of the family rows; catalog = every row /compliance/controls lists
     tb, tc = fr["totals"]["baseline"], fr["totals"]["catalog"]
-    for k in ("implemented", "partial", "notImplemented", "inherited", "notApplicable", "unknown"):
+    from posture.controls_engine.engine import ROLLUP_KEYS
+
+    for k in ROLLUP_KEYS.values():
         assert tb[k] == sum(f[k] for f in fams.values()), k
-        assert tc[k] == sum(1 for x in ctl.values() if {"not-implemented": "notImplemented",
-                                                         "not-applicable": "notApplicable"}.get(x["status"], x["status"]) == k), k
+        assert tc[k] == sum(1 for x in ctl.values() if ROLLUP_KEYS.get(x["status"], "unknown") == k), k
     assert tb["total"] == 287 and tc["total"] == len(ctl) and tc["total"] > tb["total"]
-    assert tb["total"] == sum(tb[k] for k in ("implemented", "partial", "notImplemented", "inherited",
-                                               "notApplicable", "unknown"))
+    assert tb["total"] == sum(tb[k] for k in ROLLUP_KEYS.values())
     high = (await c.get("/compliance/families", params={"baseline": "high"})).json()
     assert sum(f["total"] for f in high["items"]) == 370 and high["totals"]["baseline"]["total"] == 370
 

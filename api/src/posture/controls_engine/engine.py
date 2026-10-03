@@ -3,18 +3,25 @@
 Status derivation per control (label form, e.g. `AC-6(10)`):
 
 1. tailored out (`controlsEngine.notApplicable`)            -> not-applicable
-2. mapped assertions not evaluated (engine never ran)       -> unknown
+2. a configured common control provider lists it
+   (`controlsEngine.commonControlProviders[].controls`)     -> inherited (leveraged authorization)
 3. mapped assertions with a pass/fail/unknown result:
-   all pass                                                 -> implemented
+   all pass                                                 -> implemented (hybrid when the
+                                                               responsibility is shared)
    some pass                                                -> partial
    none pass, some fail                                     -> not-implemented
    only unknown                                             -> unknown
-4. every mapped assertion returned not-applicable           -> not-applicable
-5. a component declares the requirement `inherited: true`   -> inherited
-6. organization-level control in the catalog (and
-   `inheritOrganizationalControls`)                         -> inherited (common control)
-7. a component declares it without an assertion             -> unknown (manual evidence needed)
-8. nothing in the platform addresses it                     -> not-implemented
+4. mapped assertions not evaluated (engine never ran)       -> unknown
+5. every mapped assertion returned not-applicable           -> not-applicable
+6. provided outside the platform (component responsibility
+   `org`, e.g. the hosting facility's PE controls)          -> org-provided-unverified
+7. organization-level control in the catalog and
+   `inheritOrganizationalControls` (default off)            -> org-provided-unverified
+8. a component declares it without an assertion             -> unknown (manual evidence needed)
+9. nothing in the platform addresses it                     -> not-implemented
+
+`inherited` is never inferred: it needs a named, authorized provider (M1 of the compliance
+review). `org-provided-unverified` is an unverified assumption and never counts as implemented.
 
 Assertions map to controls both through their own `controls` and through component
 `implemented-requirements[].assertions`.
@@ -43,12 +50,19 @@ log = get_logger(__name__)
 
 IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED = "implemented", "partial", "not-implemented"
 INHERITED, NOT_APPLICABLE, STATUS_UNKNOWN = "inherited", "not-applicable", "unknown"
-CONTROL_STATUSES = (IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED, INHERITED, NOT_APPLICABLE, STATUS_UNKNOWN)
+HYBRID, ORG_PROVIDED = "hybrid", "org-provided-unverified"
+CONTROL_STATUSES = (IMPLEMENTED, PARTIAL, NOT_IMPLEMENTED, HYBRID, INHERITED, ORG_PROVIDED, NOT_APPLICABLE,
+                    STATUS_UNKNOWN)
 ROLLUP_KEYS = {IMPLEMENTED: "implemented", PARTIAL: "partial", NOT_IMPLEMENTED: "notImplemented",
-               INHERITED: "inherited", NOT_APPLICABLE: "notApplicable", STATUS_UNKNOWN: "unknown"}
+               HYBRID: "hybrid", INHERITED: "inherited", ORG_PROVIDED: "orgProvided",
+               NOT_APPLICABLE: "notApplicable", STATUS_UNKNOWN: "unknown"}
 KEEP_RUNS = 100
-DEFAULT_ORG_STATEMENT = ("Provided by the organization as a common control (policy, procedures, personnel, "
-                         "training or physical safeguards) and inherited by this system.")
+DEFAULT_ORG_STATEMENT = ("Expected to be provided by the organization (policy, procedures, personnel, training or "
+                         "physical safeguards). UNVERIFIED: no common control provider or authorization is "
+                         "recorded for this control; document the provider before relying on it.")
+CUSTOMER_DEFAULT = "Not provided by the platform: the program implements and documents this control."
+ORG_DEFAULT = ("Organization-level control: provided by the organization or a common control provider, not by "
+               "the platform.")
 
 
 @dataclass
@@ -83,6 +97,8 @@ class ControlResult:
     assertions: list[str] = field(default_factory=list)
     detail: str = ""
     score: float | None = None
+    responsibility: str = "customer"  # provider | shared | customer | org (CRM, S6)
+    provider: str | None = None  # common control provider name when inherited
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -148,11 +164,35 @@ def assertion_map(components: dict[str, Component], assertions: Iterable[Asserti
     return out
 
 
+def providers_by_control(providers: Iterable[Any] | None) -> dict[str, Any]:
+    """control label -> configured common control provider (settings `commonControlProviders`)."""
+    out: dict[str, Any] = {}
+    for p in providers or []:
+        controls = p.get("controls") if isinstance(p, dict) else getattr(p, "controls", [])
+        for c in controls or []:
+            out.setdefault(to_label(c), p)
+    return out
+
+
+def _pget(p: Any, key: str, attr: str) -> Any:
+    return p.get(key) if isinstance(p, dict) else getattr(p, attr, None)
+
+
+def responsibility_of(label: str, reqs: list[tuple[Component, Any]], cat: Any) -> str:
+    """CRM responsibility of a control: the components' declarations; a mix (or any `shared`)
+    is `shared`; undeclared controls are `org` (organization-level) or `customer`."""
+    resp = {req.responsibility for _, req in reqs}
+    if not resp:
+        return "org" if cat is not None and cat.implementation_level == "organization" else "customer"
+    return resp.pop() if len(resp) == 1 else "shared"
+
+
 def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
                     components: dict[str, Component] | None = None, catalog: Catalog | None = None,
                     assertions: Iterable[Assertion] | None = None,
                     not_applicable: dict[str, str] | None = None,
-                    inherit_organizational: bool = True) -> list[ControlResult]:
+                    inherit_organizational: bool = False,
+                    providers: Iterable[Any] | None = None) -> list[ControlResult]:
     catalog = catalog or get_catalog()
     components = load_components() if components is None else components
     assertions = list(all_assertions() if assertions is None else assertions)
@@ -160,6 +200,7 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
     amap = assertion_map(components, assertions)
     reqs = requirements_by_control(components)
     tailored = {to_label(k): v for k, v in (not_applicable or {}).items()}
+    ccp = providers_by_control(providers)
     comp_of = {a.id: a.component for a in assertions}
 
     scope: dict[str, None] = {}
@@ -174,23 +215,36 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
     for label in scope:
         cat = catalog.get(label)
         ids = [i for i in amap.get(label, []) if i in by_id]
-        comps = list(dict.fromkeys([*(comp.id for comp, _ in reqs.get(label, [])),
+        declared = reqs.get(label, [])
+        comps = list(dict.fromkeys([*(comp.id for comp, _ in declared),
                                     *(comp_of[i] for i in ids if i in comp_of)]))
         res = ControlResult(control=label, id=to_oscal_id(label), title=cat.full_title if cat else label,
                             family=cat.family if cat else label.split("-")[0].upper(),
                             baseline=cat.lowest_baseline if cat else None,
                             in_baseline=bool(cat and cat.in_baseline(baseline)), status=STATUS_UNKNOWN,
-                            components=comps, assertions=ids)
+                            components=comps, assertions=ids, responsibility=responsibility_of(label, declared, cat))
         results = [by_id[i] for i in ids]
         p = sum(r.status == PASS for r in results)
         f = sum(r.status == FAIL for r in results)
         u = sum(r.status == UNKNOWN for r in results)
+        org_declared = [(comp, req) for comp, req in declared if req.responsibility == "org"]
         if label in tailored:
             res.status, res.detail = NOT_APPLICABLE, f"tailored out: {tailored[label] or 'not applicable'}"
+        elif label in ccp:
+            prov = ccp[label]
+            name, ref = _pget(prov, "name", "name"), _pget(prov, "authorizationRef", "authorization_ref")
+            res.status, res.responsibility, res.provider = INHERITED, "org", name
+            res.detail = f"inherited from common control provider {name}" + (f" ({ref})" if ref else "")
+            if f:
+                res.detail += f"; note: {f} platform assertion(s) fail"
         elif p or f or u:
             res.score = round(p / (p + f + u), 3)
             if p and not f and not u:
-                res.status, res.detail = IMPLEMENTED, f"all {p} assertion(s) pass"
+                if res.responsibility == "shared":
+                    res.status = HYBRID
+                    res.detail = f"platform part: all {p} assertion(s) pass; the program's part is not assessed"
+                else:
+                    res.status, res.detail = IMPLEMENTED, f"all {p} assertion(s) pass"
             elif p:
                 res.status, res.detail = PARTIAL, f"{p} pass, {f} fail, {u} unknown"
             elif f:
@@ -203,14 +257,15 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
         elif results:
             res.status, res.detail = NOT_APPLICABLE, "no applicable resources: " + "; ".join(
                 r.detail for r in results if r.detail)[:500]
-        elif any(req.inherited for _, req in reqs.get(label, [])):
-            res.status = INHERITED
-            res.detail = " ".join(f"{comp.title}: {req.statement}" for comp, req in reqs[label] if req.inherited)
+        elif org_declared:
+            res.status = ORG_PROVIDED
+            res.detail = "UNVERIFIED (no common control provider configured): " + " ".join(
+                f"{comp.title}: {req.statement}" for comp, req in org_declared)
         elif cat and cat.implementation_level == "organization" and inherit_organizational:
-            res.status, res.detail = INHERITED, "organization-level control (common control provider)"
-        elif reqs.get(label):
+            res.status, res.detail = ORG_PROVIDED, "organization-level control, assumed organization-provided (unverified)"
+        elif declared:
             res.status = STATUS_UNKNOWN
-            res.detail = "declared by " + ", ".join(c.title for c, _ in reqs[label]) + "; no automated assertion " \
+            res.detail = "declared by " + ", ".join(c.title for c, _ in declared) + "; no automated assertion " \
                          "(manual evidence required)"
         else:
             res.status = NOT_IMPLEMENTED
@@ -397,7 +452,8 @@ async def execute(sm: async_sessionmaker[AsyncSession], env: Any, *, run_id: int
         outcomes = await run_assertions(ctx)
         statuses = derive_statuses(outcomes, baseline=cfg.baseline,
                                    not_applicable=dict(getattr(ce, "not_applicable", None) or {}),
-                                   inherit_organizational=bool(getattr(ce, "inherit_organizational_controls", True)))
+                                   inherit_organizational=bool(getattr(ce, "inherit_organizational_controls", False)),
+                                   providers=list(getattr(ce, "common_control_providers", None) or []))
         summary = summarize(statuses, outcomes, cfg.baseline)
         if ctx.keycloak_error:
             summary["keycloak"] = ctx.keycloak_error
@@ -421,7 +477,7 @@ async def execute(sm: async_sessionmaker[AsyncSession], env: Any, *, run_id: int
             s.add(ControlStatusRow(run_id=run_id, control=c.control, oscal_id=c.id, family=c.family,
                                    baseline=c.baseline, in_baseline=c.in_baseline, status=c.status,
                                    components=c.components, assertions=c.assertions, detail=c.detail[:4000],
-                                   score=c.score))
+                                   score=c.score, responsibility=c.responsibility, provider=c.provider))
         row = await s.get(ControlAssertionRun, run_id)
         row.status, row.finished_at, row.summary = "done", datetime.now(UTC), summary
     await prune(sm)
@@ -487,7 +543,8 @@ async def latest_data(session: AsyncSession) -> dict[str, Any] | None:
         .order_by(ControlAssertionResult.assertion_id))).scalars()]
     statuses = [{"control": c.control, "id": c.oscal_id, "family": c.family, "baseline": c.baseline,
                  "inBaseline": c.in_baseline, "status": c.status, "components": c.components or [],
-                 "assertions": c.assertions or [], "detail": c.detail, "score": c.score}
+                 "assertions": c.assertions or [], "detail": c.detail, "score": c.score,
+                 "responsibility": c.responsibility, "provider": c.provider}
                 for c in (await session.execute(select(ControlStatusRow).where(ControlStatusRow.run_id == run.id)))
                 .scalars()]
     return {"run": run_dict(run), "results": results, "statuses": statuses}

@@ -1,0 +1,31 @@
+id: hosting-environment
+uuid: 5f1c3e8a-6a0e-4d55-9b3e-2f7c1d0a8b64
+title: Hosting facility / cloud provider (leveraged system)
+type: service
+purpose: Physical and environmental protection of the nodes the platform runs on.
+description: >-
+  The data center or cloud service provider that hosts the Kubernetes nodes. Its controls are
+  provided outside this platform; they are inherited only through a configured leveraged
+  authorization (settings controlsEngine.commonControlProviders). Until then they are reported
+  organization-provided (unverified).
+implemented-requirements:
+  - control: PE-2
+    statement: Physical access authorizations for the nodes are provided by the hosting facility or cloud provider.
+    responsibility: org
+    customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+  - control: PE-3
+    statement: Physical access control to the nodes is provided by the hosting facility or cloud provider.
+    responsibility: org
+    customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+  - control: PE-6
+    statement: Physical access monitoring is provided by the hosting facility or cloud provider.
+    responsibility: org
+    customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+  - control: PE-13
+    statement: Fire protection is provided by the hosting facility or cloud provider.
+    responsibility: org
+    customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.
+  - control: PE-14
+    statement: Environmental controls are provided by the hosting facility or cloud provider.
+    responsibility: org
+    customer: Identify the hosting provider's authorization (FedRAMP package / CCP in eMASS) and configure it as a common control provider.

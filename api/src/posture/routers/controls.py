@@ -37,10 +37,12 @@ async def _statuses(session: AsyncSession, baseline: str, st: Any) -> tuple[list
     if data is None:
         ce = st.controls_engine
         rows = engine.derive_statuses([], baseline=baseline, not_applicable=ce.not_applicable,
-                                      inherit_organizational=ce.inherit_organizational_controls)
+                                      inherit_organizational=ce.inherit_organizational_controls,
+                                      providers=ce.common_control_providers)
         return [{"control": r.control, "id": r.id, "family": r.family, "baseline": r.baseline,
                  "inBaseline": r.in_baseline, "status": r.status, "components": r.components, "assertions": [],
-                 "detail": r.detail, "score": None} for r in rows], None
+                 "detail": r.detail, "score": None, "responsibility": r.responsibility,
+                 "provider": r.provider} for r in rows], None
     statuses = data["statuses"]
     present = {s["control"] for s in statuses}
     for s in statuses:
@@ -113,6 +115,7 @@ async def _control_rows(session: AsyncSession, statuses: list[dict[str, Any]], d
             "control": label, "title": (c.full_title if c else None) or cov.get("title") or label,
             "family": s["family"], "baseline": s.get("baseline"), "inBaseline": bool(s.get("inBaseline")),
             "status": s["status"], "detail": s.get("detail"), "score": s.get("score"),
+            "responsibility": s.get("responsibility"), "provider": s.get("provider"),
             "implementationLevel": c.implementation_level if c else None,
             "components": s.get("components") or [],
             "assertions": [{"id": a, "title": results[a]["title"], "status": results[a]["status"],
@@ -138,6 +141,21 @@ async def controls(family: str | None = None, status: str | None = None, baselin
     if status:
         out = [r for r in out if r["status"] == status]
     return out
+
+
+@router.get("/compliance/crm")
+async def crm(baseline: str | None = None, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Draft Customer Responsibility Matrix (compliance review M1 / S6): per baseline control the
+    responsibility (provider | shared | customer | org), platform statement, the program's residual
+    responsibility and the current evidence status."""
+    from ..controls_engine.crm import crm_rows, crm_summary
+
+    st = await app_settings.load(session)
+    b = _baseline(baseline, st.controls_engine.baseline)
+    statuses, data = await _statuses(session, b, st)
+    rows = crm_rows(statuses)
+    return {"baseline": b, "runId": (data or {}).get("run", {}).get("id"), "summary": crm_summary(rows),
+            "items": rows}
 
 
 @router.get("/compliance/assertions")

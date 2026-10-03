@@ -11,6 +11,12 @@ import yaml
 from .catalog import to_label
 
 COMPONENTS_DIR = Path(__file__).parent / "data" / "components"
+# Customer Responsibility Matrix vocabulary (S6): who implements a control (part).
+#   provider - the Nebari platform implements it completely (inheritable once the platform is authorized)
+#   shared   - the platform supplies the mechanism; the program completes it (hybrid)
+#   customer - the program (tenant system) implements it
+#   org      - the organization / an external common control provider (facility, CSP, policy owner)
+RESPONSIBILITIES = ("provider", "shared", "customer", "org")
 COMPONENT_TYPES = ("software", "service", "hardware", "policy", "interconnection", "process", "plan", "guidance",
                    "standard", "validation", "this-system")
 
@@ -19,8 +25,10 @@ COMPONENT_TYPES = ("software", "service", "hardware", "policy", "interconnection
 class Requirement:
     control: str  # label form, AC-6(10)
     statement: str
-    inherited: bool = False
+    inherited: bool = False  # legacy flag: provided outside this platform (implies responsibility `org`)
     assertions: tuple[str, ...] = ()
+    responsibility: str = "provider"
+    customer: str = ""  # residual responsibility of the program (CRM text); required unless `provider`
 
 
 @dataclass(frozen=True)
@@ -37,9 +45,13 @@ class Component:
 def parse_component(data: dict) -> Component:
     reqs = []
     for r in data.get("implemented-requirements") or []:
+        inherited = bool(r.get("inherited", False))
+        resp = str(r.get("responsibility") or ("org" if inherited else "provider"))
+        if resp not in RESPONSIBILITIES:
+            raise ValueError(f"component {data.get('id')} {r.get('control')}: unknown responsibility {resp!r}")
         reqs.append(Requirement(control=to_label(str(r["control"])), statement=str(r.get("statement") or "").strip(),
-                                inherited=bool(r.get("inherited", False)),
-                                assertions=tuple(r.get("assertions") or ())))
+                                inherited=inherited, assertions=tuple(r.get("assertions") or ()),
+                                responsibility=resp, customer=str(r.get("customer") or "").strip()))
     ctype = data.get("type", "software")
     if ctype not in COMPONENT_TYPES:
         raise ValueError(f"component {data.get('id')}: unknown type {ctype!r}")

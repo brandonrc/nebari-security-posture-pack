@@ -10,48 +10,54 @@ implemented-requirements:
   - control: AC-6
     statement: Workloads run without privileged mode, host namespaces or added capabilities unless required.
     assertions: [k8s-workload-least-privilege]
+    responsibility: shared
+    customer: Justify any privileged workload the program deploys and document least-privilege decisions.
   - control: AC-6(1)
     statement: cluster-admin is bound only to system subjects and the approved administrator allowlist.
     assertions: [k8s-cluster-admin-bindings]
+    responsibility: shared
+    customer: Approve the cluster-admin allowlist and review it periodically.
   - control: AC-6(10)
     statement: Default ServiceAccounts do not automount API tokens, so pods get no API access unless granted.
     assertions: [k8s-default-sa-automount]
+    responsibility: shared
+    customer: Disable service-account token automount in program namespaces unless required.
   - control: AC-14
     statement: No RBAC binding grants permissions to `system:anonymous` or `system:unauthenticated` beyond public discovery.
     assertions: [k8s-no-anonymous-access]
+    responsibility: provider
   - control: AU-2
     statement: Kubernetes API server audit logging records API requests.
     assertions: [k8s-api-audit-logging]
+    responsibility: shared
+    customer: Supply control-plane audit evidence where the API server is not visible (managed / snap control planes).
   - control: AU-12
     statement: The API server audit policy generates audit records for API activity.
     assertions: [k8s-api-audit-logging]
+    responsibility: shared
+    customer: Supply control-plane audit evidence where the API server is not visible (managed / snap control planes).
   - control: CM-6
     statement: Namespaces enforce a Pod Security Standard (`pod-security.kubernetes.io/enforce` baseline or restricted).
     assertions: [k8s-pod-security-admission]
+    responsibility: shared
+    customer: Approve configuration settings for program workloads and document deviations.
   - control: CM-7
     statement: Pod Security admission and workload settings restrict containers to least functionality.
     assertions: [k8s-pod-security-admission, k8s-workload-least-privilege]
+    responsibility: shared
+    customer: Limit program workloads to required functions, ports and capabilities.
   - control: SC-7
     statement: NetworkPolicies restrict ingress to application pods.
     assertions: [k8s-default-deny-ingress]
+    responsibility: shared
+    customer: Define allowed flows for program namespaces (NetworkPolicies) and the external boundary.
   - control: SC-7(5)
     statement: Each application namespace has a default-deny ingress NetworkPolicy; allowed flows are explicit exceptions.
     assertions: [k8s-default-deny-ingress]
+    responsibility: shared
+    customer: Add explicit allow rules for required program flows; extend deny-by-default to egress.
   - control: SI-2
     statement: Nodes run a Kubernetes minor version that is still supported upstream (receives security patches).
     assertions: [k8s-supported-version]
-  - control: PE-2
-    statement: Physical access authorizations for the nodes are provided by the hosting facility or cloud provider.
-    inherited: true
-  - control: PE-3
-    statement: Physical access control to the nodes is provided by the hosting facility or cloud provider.
-    inherited: true
-  - control: PE-6
-    statement: Physical access monitoring is provided by the hosting facility or cloud provider.
-    inherited: true
-  - control: PE-13
-    statement: Fire protection is provided by the hosting facility or cloud provider.
-    inherited: true
-  - control: PE-14
-    statement: Environmental controls are provided by the hosting facility or cloud provider.
-    inherited: true
+    responsibility: shared
+    customer: Remediate flaws in program images within the SLA.

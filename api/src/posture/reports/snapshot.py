@@ -202,7 +202,7 @@ async def build_snapshot(session: AsyncSession, scan_id: int | None, scope: Any 
         "workloads": len(workloads), "namespaces": len({w.namespace for w in workloads}),
     }
 
-    return ReportSnapshot(
+    snap = ReportSnapshot(
         generated_at=now,
         system=SystemInfo(name=settings.system_name or "Nebari cluster", organization=settings.organization,
                           cluster_name=settings.system_name),
@@ -212,3 +212,11 @@ async def build_snapshot(session: AsyncSession, scan_id: int | None, scope: Any 
         scope=sc, sla_days=sla, scanners=scanners, images=images, findings=findings, workloads=workloads,
         namespaces=namespaces, checks=checks, posture_results=posture, trend=trend, summary=summary,
     )
+    # M3: every report is generated from the same control evidence run (stamped with its id)
+    try:
+        from ..controls_engine.reporting import attach
+
+        await attach(session, snap, scan_id=scan.id)
+    except Exception:  # noqa: BLE001  (engine tables missing / unreadable: reports still generate)
+        snap.controls_engine = {}
+    return snap

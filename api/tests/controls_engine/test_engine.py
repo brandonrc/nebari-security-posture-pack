@@ -32,7 +32,7 @@ def assertion(aid: str, controls=("AC-7",), component="x") -> Assertion:
 COMPS = {
     "x": Component(id="x", uuid="00000000-0000-4000-8000-000000000001", title="X", type="software", description="d",
                    requirements=(Requirement("AC-7", "lockout", assertions=("a1", "a2")),
-                                 Requirement("PE-3", "facility", inherited=True),
+                                 Requirement("PE-3", "facility", responsibility="org", customer="ccp"),
                                  Requirement("SC-28", "declared only"))),
 }
 
@@ -72,15 +72,46 @@ def test_never_evaluated_is_unknown():
     assert s["SC-8"].status == "unknown"
 
 
-def test_inherited_declared_uncovered():
+def test_org_provided_is_never_inherited_without_a_provider():
+    """M1: `inherited` only with a named common control provider; NIST's implementation-level
+    prop never makes a control inherited, and the org-provided assumption is off by default."""
     s = statuses([outcome("a1", "pass"), outcome("a2", "pass"), outcome("a3", "pass", ("SC-8",))])
-    assert s["PE-3"].status == "inherited" and "facility" in s["PE-3"].detail
+    assert s["PE-3"].status == "org-provided-unverified" and "UNVERIFIED" in s["PE-3"].detail
+    assert s["PE-3"].responsibility == "org"
     assert s["SC-28"].status == "unknown" and "manual evidence" in s["SC-28"].detail
-    # organization-level controls without coverage are inherited (common controls) unless disabled
-    assert s["AT-2"].status == "inherited"
-    assert statuses([], inherit_organizational=False)["AT-2"].status == "not-implemented"
+    # organization-level controls: not inherited, not even org-provided by default
+    assert s["AT-2"].status == "not-implemented" and s["AT-2"].responsibility == "org"
+    assert statuses([], inherit_organizational=True)["AT-2"].status == "org-provided-unverified"
+    assert not any(r.status == "inherited" for r in s.values())
     # system-level control nobody addresses
-    assert s["SC-39"].status == "not-implemented"
+    assert s["SC-39"].status == "not-implemented" and s["SC-39"].responsibility == "customer"
+
+
+def test_inherited_only_from_a_configured_common_control_provider():
+    from posture.controls_engine.settings import CommonControlProvider
+
+    ccp = CommonControlProvider(name="DC-1 hosting (eMASS 4242)", controls=["pe-3", "AT-2"],
+                                authorization_ref="eMASS 4242, ATO 2026-01-15", date_authorized="2026-01-15",
+                                statement="Badge access and guards.")
+    s = statuses([], providers=[ccp])
+    assert s["PE-3"].status == "inherited" and s["PE-3"].provider == "DC-1 hosting (eMASS 4242)"
+    assert "eMASS 4242" in s["PE-3"].detail and s["AT-2"].status == "inherited"
+    assert s["PE-6"].status != "inherited"  # not listed by the provider
+    # dicts (as stored in report snapshots) work too
+    assert statuses([], providers=[{"name": "X", "controls": ["PE-6"]}])["PE-6"].status == "inherited"
+
+
+def test_shared_responsibility_passing_is_hybrid():
+    comps = {"x": Component(id="x", uuid="00000000-0000-4000-8000-000000000001", title="X", type="software",
+                            description="d", requirements=(
+                                Requirement("AC-7", "lockout", assertions=("a1",), responsibility="shared",
+                                            customer="program part"),))}
+    rows = {r.control: r for r in derive_statuses([outcome("a1", "pass")], components=comps,
+                                                  assertions=[assertion("a1")])}
+    assert rows["AC-7"].status == "hybrid" and rows["AC-7"].responsibility == "shared"
+    rows = {r.control: r for r in derive_statuses([outcome("a1", "fail")], components=comps,
+                                                  assertions=[assertion("a1")])}
+    assert rows["AC-7"].status == "not-implemented"
 
 
 def test_scope_baseline_plus_covered_controls():
@@ -99,8 +130,8 @@ def test_rollup_and_summary():
     fam = {f["family"]: f for f in family_rollup(rows)}
     ac = fam["AC"]
     assert ac["title"] == "Access Control" and ac["partial"] >= 1
-    assert ac["total"] == sum(ac[k] for k in ("implemented", "partial", "notImplemented", "inherited",
-                                              "notApplicable", "unknown"))
+    assert ac["total"] == sum(ac[k] for k in ("implemented", "partial", "notImplemented", "hybrid", "inherited",
+                                              "orgProvided", "notApplicable", "unknown"))
     assert sum(f["total"] for f in fam.values()) == len(get_catalog().baseline("moderate"))
     sm = summarize(rows, outs, "moderate")
     assert sm["controls"] == 287 and sm["assertions"] == {"pass": 2, "fail": 1, "unknown": 0, "not-applicable": 0}
@@ -131,8 +162,10 @@ async def test_run_assertions_all_pass_in_good_world():
     assert len(outs) >= 25 and {o.status for o in outs} == {"pass"}
     rows = derive_statuses(outs)
     by = {r.control: r for r in rows}
-    for c in ("AC-7", "IA-2(1)", "SC-8", "SC-7(5)", "RA-5", "CM-8", "AU-2"):
+    for c in ("AC-7", "AC-12", "RA-5(2)"):
         assert by[c].status == "implemented", c
+    for c in ("IA-2(1)", "SC-8", "SC-7(5)", "RA-5", "CM-8", "AU-2"):  # shared responsibility
+        assert by[c].status == "hybrid", c
 
 
 def test_engine_config_from_settings():

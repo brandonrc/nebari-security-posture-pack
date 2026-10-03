@@ -10,12 +10,20 @@ implemented-requirements:
   - control: AU-6
     statement: Platform metrics are collected continuously for review and analysis.
     assertions: [mon-prometheus-scraping]
+    responsibility: customer
+    customer: Review and analyze audit records; metrics collection is supporting evidence only.
   - control: SI-4
     statement: Prometheus scrapes cluster, node and workload targets to monitor the system.
     assertions: [mon-prometheus-scraping]
+    responsibility: shared
+    customer: Deploy intrusion/attack detection (e.g. runtime detection) and define monitoring objectives; metrics are supporting evidence only.
   - control: SI-4(5)
     statement: Alertmanager notifies personnel through at least one configured receiver when alerts fire.
     assertions: [mon-alert-receivers]
+    responsibility: shared
+    customer: Define security alert rules and the personnel who receive them.
   - control: IR-6
     statement: Security-relevant alerts are routed to a reporting channel through Alertmanager receivers.
     assertions: [mon-alert-receivers]
+    responsibility: customer
+    customer: Report incidents to the designated authorities within the required time.

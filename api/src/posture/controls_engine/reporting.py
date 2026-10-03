@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import engine
 
 
-async def attach(session: AsyncSession, snapshot: Any) -> None:
+async def attach(session: AsyncSession, snapshot: Any, scan_id: Any = None) -> None:
     from .. import app_settings
 
     ce = (await app_settings.load(session)).controls_engine
@@ -19,4 +19,5 @@ async def attach(session: AsyncSession, snapshot: Any) -> None:
         "organizationStatement": ce.organization_statement,
         "notApplicable": dict(ce.not_applicable),
         "inheritOrganizationalControls": ce.inherit_organizational_controls,
+        "commonControlProviders": [p.model_dump(by_alias=True) for p in ce.common_control_providers],
     }

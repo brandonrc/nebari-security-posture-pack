@@ -10,9 +10,14 @@ implemented-requirements:
   - control: SC-12
     statement: Certificate keys are generated and rotated automatically by cert-manager from a Ready ClusterIssuer.
     assertions: [cm-issuer-ready, cm-certificates-valid]
+    responsibility: shared
+    customer: Establish key-management procedures for keys and certificates not issued by cert-manager (application signing keys, database keys) and approve the issuing CA.
   - control: SC-12(1)
     statement: Certificates are renewed before expiry so that keys remain available to the services that need them.
     assertions: [cm-certificates-valid]
+    responsibility: provider
   - control: SC-17
     statement: Public key certificates are issued by an approved certificate authority configured as a ClusterIssuer.
     assertions: [cm-issuer-ready]
+    responsibility: shared
+    customer: Configure a ClusterIssuer that chains to an approved CA (DoD PKI / ECA or the organization's CA) and record its approval.
