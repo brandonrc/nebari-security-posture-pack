@@ -22,6 +22,10 @@ dependencies = [
   "openpyxl==3.1.5",
   "jinja2==3.1.6",
   "weasyprint==70.0",
+  # >>> operations / scale: /metrics (posture.metrics), streaming scanner JSON parse
+  "prometheus-client==0.23.1",
+  "ijson==3.4.0",
+  # <<< operations / scale
 ]
 
 [project.optional-dependencies]

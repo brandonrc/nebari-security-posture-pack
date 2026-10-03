@@ -139,6 +139,42 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cluster_name: str = "nebari"
 
+    # >>> operations / scale (docs/reviews/architecture.md, docs/OPERATIONS.md)
+    # report worker (posture.report_worker): one report at a time, leased rows, per-report timeout
+    report_worker_isolation: str = "process"  # process (child per report, killable) | inline
+    report_worker_embedded: bool = True  # scan worker also drains the queue (until a report-worker Deployment runs)
+    report_timeout_seconds: float = 1200
+    report_lease_seconds: float = 120
+    report_max_attempts: int = 2  # leases that expired (worker died) before the row is failed
+    reports_retention_per_type: int | None = None  # default 20; REPORTS_KEEP_PER_TYPE is the old name
+    reports_max_total_bytes: int | None = None  # alias of REPORTS_RETENTION_MAX_TOTAL_BYTES
+    raw_max_gz_bytes: int = 4 * 1024 * 1024  # raw scanner JSON kept per row (gzip); larger -> summary only
+    # scan memory / admission (M2)
+    grype_max_concurrent: int = 2
+    scan_max_image_gb: float = 20  # larger images are scanned last, one at a time
+    # MIRROR_MODE: registry (skopeo copy into MIRROR_REGISTRY; needed by Clair) | local (per-digest
+    # OCI layout under CACHE_DIR/images, scanned in place) | off (scanners pull the original ref)
+    mirror_mode: str = "local"
+    image_cache_max_bytes: int = 20 * 1024**3
+    # pod watcher: targeted scans for new digests (m11)
+    event_scans_enabled: bool = True
+    event_scan_debounce_seconds: float = 60
+
+    @field_validator("reports_max_total_bytes", "image_cache_max_bytes", "raw_max_gz_bytes", mode="before")
+    @classmethod
+    def _ops_quantity(cls, v: object) -> object:
+        """2Gi / 500Mi / 20G or plain bytes (chart values are Kubernetes quantities)."""
+        if isinstance(v, str) and v.strip():
+            t = v.strip()
+            units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "K": 1000, "k": 1000,
+                     "M": 1000**2, "G": 1000**3, "T": 1000**4}
+            for suffix in sorted(units, key=len, reverse=True):
+                if t.endswith(suffix):
+                    return int(float(t[: -len(suffix)]) * units[suffix])
+            return int(float(t))
+        return None if v == "" else v
+    # <<< operations / scale
+
     @field_validator("oidc_issuers", "oidc_audiences", "oidc_client_ids", "admin_groups", "excluded_namespaces", "mirror_rewrite", "reports_auto_generate",
                      "clair_ready_updaters", "provenance_helm_chart_repos",
                      mode="before")
@@ -197,6 +233,30 @@ class Settings(BaseSettings):
                 if src.strip() and dst.strip():
                     out[src.strip()] = dst.strip()
         return out
+
+    # >>> operations / scale (properties)
+    @property
+    def report_keep_per_type(self) -> int:
+        if self.reports_retention_per_type is not None:
+            return self.reports_retention_per_type
+        if "reports_keep_per_type" in self.model_fields_set:
+            return self.reports_keep_per_type
+        return 20
+
+    @property
+    def report_max_total_bytes(self) -> int:
+        if self.reports_max_total_bytes is not None:
+            return self.reports_max_total_bytes
+        return int(self.reports_retention_max_total_bytes or 0)
+
+    @property
+    def effective_mirror_mode(self) -> str:
+        """MIRROR_ENABLED=false (the 0.1 switch) still means off."""
+        mode = (self.mirror_mode or "local").strip().lower()
+        if not self.mirror_enabled:
+            return "off"
+        return mode if mode in ("registry", "local", "off") else "local"
+    # <<< operations / scale (properties)
 
 
 @lru_cache

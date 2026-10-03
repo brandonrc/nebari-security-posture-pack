@@ -13,21 +13,29 @@ Auth on the main listener is the same as the rest of the API (admin group), exce
 `/healthz` (public) and `/api/me` (answers for anonymous callers, like theirs).
 
 `PROVENANCE_COMPAT_INTERNAL_PORT` starts a second listener in the api process that
-serves ONLY the read endpoints (`/api/reports*`, `/api/export`, `/healthz`) WITHOUT auth,
-for Grafana Infinity through the ClusterIP Service `<fullname>-web-internal` (chart
-`provenance.compat.internalService`) - the equivalent of their unauthenticated
-in-cluster `-web` Service. It is never routed by the gateway; a NetworkPolicy limits
-who may reach it.
+serves ONLY the read endpoints (`/api/reports*`, `/api/export`, `/healthz`) for Grafana
+Infinity through the ClusterIP Service `<fullname>-web-internal` (chart
+`provenance.compat.internalService`). It is never routed by the gateway. Security review H2:
+the read endpoints require `Authorization: Bearer <token>` where the token is read from
+`PROVENANCE_COMPAT_TOKEN_FILE` (a mounted Secret; re-read when the file changes) or
+`PROVENANCE_COMPAT_TOKEN`; Grafana's datasource sends it as a header. Without a token the
+listener refuses to start unless `PROVENANCE_COMPAT_ALLOW_ANONYMOUS=true` (the old,
+unauthenticated behaviour of their `-web` Service). `/healthz` stays open for probes.
+
+The report list and the latest report are cached in-process and invalidated when a newer
+scan appears (each scan's summary is built at most once; the list is capped at 50).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +44,10 @@ from ..auth import User, get_authenticator, require_admin
 from ..config import Settings
 from ..db.session import get_session
 from ..logs import get_logger
+from sqlalchemy import select
+
+from ..db.models import Scan
+from ..provenance.models import ImageProvenance
 from ..provenance.report import (
     LATEST_FILENAME,
     export_csv,
@@ -69,28 +81,97 @@ async def _cluster_name(session: AsyncSession) -> str:
     return (await app_settings.load(session)).system_name
 
 
+LIST_LIMIT = 50
+
+
+class ReportCache:
+    """In-process cache (security review H2 DoS): per-scan list entries (a scan's report never
+    changes once it is done), the rendered list bytes and the latest report bytes, keyed by the
+    newest report scan id + cluster name so a new scan invalidates them."""
+
+    def __init__(self, max_entries: int = LIST_LIMIT * 2):
+        self.max_entries = max_entries
+        self.entries: OrderedDict[tuple[int, str], dict[str, Any]] = OrderedDict()
+        self.list_key: tuple[Any, ...] | None = None
+        self.list_bytes: bytes | None = None
+        self.latest_key: tuple[int, str] | None = None
+        self.latest_bytes: bytes | None = None
+        self.lock = asyncio.Lock()
+
+    def clear(self) -> None:
+        self.entries.clear()
+        self.list_key = self.list_bytes = self.latest_key = self.latest_bytes = None
+
+
+CACHE = ReportCache()
+
+
+async def _latest_report_scan_ids(session: AsyncSession, limit: int = LIST_LIMIT) -> list[int]:
+    ids = select(ImageProvenance.scan_id).distinct()
+    return list((await session.execute(
+        select(Scan.id).where(Scan.status == "done", Scan.inventory_complete.is_(True), Scan.id.in_(ids))
+        .order_by(Scan.id.desc()).limit(limit))).scalars())
+
+
+async def _get_scan(session: AsyncSession, scan_id: int) -> Scan | None:
+    return await session.get(Scan, scan_id)
+
+
+async def _entry(session: AsyncSession, scan: Scan, name: str) -> dict[str, Any]:
+    key = (scan.id, name)
+    hit = CACHE.entries.get(key)
+    if hit is not None:
+        CACHE.entries.move_to_end(key)
+        return hit
+    doc = await load_report(session, scan, name)
+    entry: dict[str, Any] = {"filename": report_filename(scan_time(scan)),
+                             "generatedAt": scan_time(scan).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                             "summary": doc["summary"]}
+    if doc["metadata"].get("clusterName"):
+        entry["clusterName"] = doc["metadata"]["clusterName"]
+    CACHE.entries[key] = entry
+    while len(CACHE.entries) > CACHE.max_entries:
+        CACHE.entries.popitem(last=False)
+    return entry
+
+
 async def list_reports(session: AsyncSession) -> Response:
     name = await _cluster_name(session)
-    entries = []
-    for scan in await report_scans(session):
-        doc = await load_report(session, scan, name)
-        entry: dict[str, Any] = {"filename": report_filename(scan_time(scan)),
-                                 "generatedAt": scan_time(scan).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                 "summary": doc["summary"]}
-        if doc["metadata"].get("clusterName"):
-            entry["clusterName"] = doc["metadata"]["clusterName"]
-        entries.append(entry)
-    entries.sort(key=lambda e: e["generatedAt"], reverse=True)
-    return _json(entries, indent=False)
+    ids = await _latest_report_scan_ids(session)
+    key = (tuple(ids), name)
+    async with CACHE.lock:
+        if CACHE.list_key != key or CACHE.list_bytes is None:
+            scans = {s.id: s for s in await report_scans(session, limit=LIST_LIMIT)}
+            entries = [await _entry(session, scans[i], name) for i in ids if i in scans]
+            entries.sort(key=lambda e: e["generatedAt"], reverse=True)
+            CACHE.list_bytes = go_json(entries, indent=False)
+            CACHE.list_key = key
+        body = CACHE.list_bytes
+    return Response(body, media_type="application/json")
 
 
 async def get_report(filename: str, session: AsyncSession) -> Response:
     if _invalid(filename):
         return _text_error("invalid filename", 400)
+    name = await _cluster_name(session)
+    if filename in ("latest", LATEST_FILENAME):
+        ids = await _latest_report_scan_ids(session, limit=1)
+        if not ids:
+            return _text_error("report not found", 404)
+        key = (ids[0], name)
+        async with CACHE.lock:
+            if CACHE.latest_key != key or CACHE.latest_bytes is None:
+                scan = await _get_scan(session, ids[0])
+                if scan is None:
+                    return _text_error("report not found", 404)
+                CACHE.latest_bytes = go_json(await load_report(session, scan, name), indent=True)
+                CACHE.latest_key = key
+            body = CACHE.latest_bytes
+        return Response(body, media_type="application/json")
     scan = await find_scan(session, filename)
     if scan is None:
         return _text_error("report not found", 404)
-    return _json(await load_report(session, scan, await _cluster_name(session)), indent=True)
+    return _json(await load_report(session, scan, name), indent=True)
 
 
 async def export(format: str | None, filename: str | None, session: AsyncSession) -> Response:  # noqa: A002
@@ -201,11 +282,74 @@ def include(app: FastAPI) -> None:
     app.include_router(make_read_router([Depends(require_admin)]))
 
 
-def internal_app() -> FastAPI:
-    """Unauthenticated read-only app for the `-web-internal` Service (Grafana)."""
+class CompatConfigError(RuntimeError):
+    pass
+
+
+def _truthy(v: str | None) -> bool:
+    return (v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+class InternalToken:
+    """Static bearer token for the internal listener: PROVENANCE_COMPAT_TOKEN_FILE (re-read when
+    its mtime changes, so a rotated Secret is picked up) or PROVENANCE_COMPAT_TOKEN."""
+
+    def __init__(self, path: str | None = None, value: str | None = None, allow_anonymous: bool = False):
+        self.path = path or None
+        self.value = (value or "").strip()
+        self.allow_anonymous = allow_anonymous
+        self._mtime: float | None = None
+        self._file_value = ""
+
+    @classmethod
+    def from_env(cls) -> InternalToken:
+        return cls(os.environ.get("PROVENANCE_COMPAT_TOKEN_FILE"), os.environ.get("PROVENANCE_COMPAT_TOKEN"),
+                   _truthy(os.environ.get("PROVENANCE_COMPAT_ALLOW_ANONYMOUS")))
+
+    def current(self) -> str:
+        if self.path:
+            try:
+                mtime = os.stat(self.path).st_mtime
+                if mtime != self._mtime:
+                    with open(self.path, encoding="utf-8") as fh:
+                        self._file_value = fh.read().strip()
+                    self._mtime = mtime
+            except OSError as e:
+                log.warning("provenance.compat_token_unreadable", path=self.path, error=type(e).__name__)
+                self._file_value, self._mtime = "", None
+            return self._file_value
+        return self.value
+
+    def check_config(self) -> None:
+        if not self.current() and not self.allow_anonymous:
+            raise CompatConfigError(
+                "PROVENANCE_COMPAT_INTERNAL_PORT is set but no PROVENANCE_COMPAT_TOKEN_FILE / PROVENANCE_COMPAT_TOKEN "
+                "(or an empty one); set PROVENANCE_COMPAT_ALLOW_ANONYMOUS=true to serve it without auth")
+        if not self.current():
+            log.warning("provenance.compat_internal_anonymous",
+                        detail="PROVENANCE_COMPAT_ALLOW_ANONYMOUS=true: inventory readable by any in-cluster caller")
+
+    def dependency(self) -> Callable[[Request], Any]:
+        async def require_token(request: Request) -> None:
+            expected = self.current()
+            if not expected:
+                if self.allow_anonymous:
+                    return
+                raise HTTPException(503, detail="internal listener token not configured")
+            authz = request.headers.get("authorization") or ""
+            given = authz[7:].strip() if authz.lower().startswith("bearer ") else ""
+            if not given or not hmac.compare_digest(given.encode(), expected.encode()):
+                raise HTTPException(401, detail="bearer token required", headers={"WWW-Authenticate": "Bearer"})
+
+        return require_token
+
+
+def internal_app(token: InternalToken | None = None) -> FastAPI:
+    """Read-only app for the `-web-internal` Service (Grafana), bearer-token protected."""
+    token = token or InternalToken.from_env()
     app = FastAPI(title="provenance-compat (internal)", docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(make_public_router())
-    app.include_router(make_read_router())
+    app.include_router(make_read_router([Depends(token.dependency())]))
     return app
 
 
@@ -226,6 +370,7 @@ async def start_internal(settings: Settings, app_factory: Callable[[], FastAPI] 
     port = settings.provenance_compat_internal_port
     if not port:
         return None
+    InternalToken.from_env().check_config()  # refuse to start an unauthenticated listener by accident
     import uvicorn
 
     server = uvicorn.Server(uvicorn.Config(app_factory(), host="0.0.0.0", port=int(port), log_config=None,
