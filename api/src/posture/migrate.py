@@ -1,4 +1,13 @@
-"""`python -m posture.migrate` -> alembic upgrade head (retries while the DB starts)."""
+"""`python -m posture.migrate` -> alembic upgrade head (retries while the DB starts).
+
+Runs from the chart's pre-upgrade hook Job (`--if-reachable`) and from the api init
+container. alembic/env.py serialises concurrent runs with pg_advisory_lock.
+
+`--if-reachable SECONDS`: when the database cannot be reached within SECONDS, exit 0
+without migrating. The hook Job uses it because Argo CD maps pre-install AND pre-upgrade
+to PreSync, which also runs on a first sync before the bundled Postgres exists; the api
+init container (which waits for the database) migrates in that case.
+"""
 
 from __future__ import annotations
 
@@ -38,5 +47,45 @@ def main(retries: int = 30, delay: float = 2.0) -> int:
     return 1
 
 
+def reachable(timeout: float) -> bool:
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    async def probe() -> bool:
+        deadline = time.monotonic() + timeout
+        while True:
+            eng = create_async_engine(get_settings().database_url, connect_args={"timeout": 5})
+            try:
+                async with eng.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                return True
+            except Exception as e:  # noqa: BLE001
+                if time.monotonic() >= deadline:
+                    log.warning("migrate.db_unreachable", error=str(e)[:300])
+                    return False
+                await asyncio.sleep(3)
+            finally:
+                await eng.dispose()
+
+    return asyncio.run(probe())
+
+
+def cli(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m posture.migrate")
+    parser.add_argument("--if-reachable", type=float, default=None, metavar="SECONDS",
+                        help="skip (exit 0) when the database is unreachable for SECONDS")
+    args = parser.parse_args(argv)
+    if args.if_reachable is not None:
+        setup_logging(get_settings().log_level)
+        if not reachable(args.if_reachable):
+            log.info("migrate.skipped", reason="database unreachable; the api init container migrates")
+            return 0
+    return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())

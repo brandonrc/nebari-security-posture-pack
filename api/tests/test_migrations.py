@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 
 import pytest
 
-pytestmark = pytest.mark.integration
+
 
 
 async def _reset_schema(url: str) -> None:
@@ -42,6 +43,7 @@ def _config(url: str):
     return cfg
 
 
+@pytest.mark.integration
 async def test_alembic_check_no_drift():
     from alembic import command
 
@@ -66,3 +68,36 @@ def test_env_imports_every_models_module():
         if "__tablename__" not in mod.read_text():
             continue
         assert f"import {dotted}" in env or f"from {dotted} import" in env, f"alembic/env.py must import {dotted}"
+
+
+@pytest.mark.integration
+async def test_concurrent_upgrades_serialise():
+    """Hook Job + api init container racing: the advisory lock makes both succeed."""
+    from alembic import command
+
+    url = os.environ["TEST_DATABASE_URL"]
+    await _reset_schema(url)
+    cfg = _config(url)
+    # alembic's context is process-global: race real processes, like the hook Job and init container
+    env = {**os.environ, "DATABASE_URL": url}
+    procs = [await asyncio.create_subprocess_exec(sys.executable, "-m", "posture.migrate", env=env,
+                                                  stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+             for _ in range(3)]
+    outs = [await p.communicate() for p in procs]
+    assert [p.returncode for p in procs] == [0, 0, 0], outs
+    await asyncio.to_thread(command.check, cfg)
+
+
+def test_if_reachable_skips_unreachable_db(monkeypatch):
+    from posture import migrate
+    from posture.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:1/none")
+    get_settings.cache_clear()
+    called = []
+    monkeypatch.setattr(migrate, "main", lambda: called.append(1) or 0)
+    try:
+        assert migrate.cli(["--if-reachable", "0"]) == 0
+        assert called == []
+    finally:
+        get_settings.cache_clear()

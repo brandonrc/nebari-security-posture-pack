@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from alembic import context
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from posture.config import Settings
@@ -35,10 +36,22 @@ def _do_run(connection) -> None:
         context.run_migrations()
 
 
+# Session-level advisory lock held for the whole upgrade: the pre-upgrade hook Job and the
+# api init container (and api replicas) may run `alembic upgrade head` concurrently.
+MIGRATION_LOCK_KEY = 724_100
+
+
 async def run_migrations_online() -> None:
     engine = create_async_engine(_url())
     async with engine.connect() as conn:
-        await conn.run_sync(_do_run)
+        await conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": MIGRATION_LOCK_KEY})
+        await conn.commit()
+        try:
+            await conn.run_sync(_do_run)
+            await conn.commit()
+        finally:
+            await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": MIGRATION_LOCK_KEY})
+            await conn.commit()
     await engine.dispose()
 
 
