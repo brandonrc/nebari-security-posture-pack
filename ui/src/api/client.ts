@@ -1,6 +1,11 @@
 import { getConfig } from '@/config';
 import type {
+  Assertion,
+  AssertionRun,
   CheckDetail,
+  FamilyRollup,
+  HelmRelease,
+  SupplyChainSummary,
   Check,
   ControlCoverage,
   ImageDetail,
@@ -130,6 +135,14 @@ export const api = {
 
   complianceControls: async () =>
     asArray(await request<ControlCoverage[] | { items: ControlCoverage[] }>('GET', '/compliance/controls')),
+  complianceFamilies: async () =>
+    asArray(await request<FamilyRollup[] | { items: FamilyRollup[] }>('GET', '/compliance/families')),
+  assertions: async () => asArray(await request<Assertion[] | { items: Assertion[] }>('GET', '/compliance/assertions')),
+  runAssertions: () => request<AssertionRun | undefined>('POST', '/compliance/assertions/run'),
+
+  supplyChain: () => request<SupplyChainSummary>('GET', '/supply-chain'),
+  helmReleases: async () => asArray(await request<HelmRelease[] | { items: HelmRelease[] }>('GET', '/helm-releases')),
+
   complianceStig: async () => asArray(await request<StigRule[] | { items: StigRule[] }>('GET', '/compliance/stig')),
 
   exportUrl: (format: 'json' | 'csv') => apiUrl('/export', { format }),

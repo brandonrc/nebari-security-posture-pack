@@ -5,6 +5,7 @@ import type { ImageQuery } from '@/api/types';
 import { EmptyState, ErrorAlert, PageHeader } from '@/components/page';
 import { AgreementDots, GradeBadge, ScannerGlyphs, SeverityChips } from '@/components/posture';
 import { SimpleSelect } from '@/components/simple-select';
+import { ProvenanceGlyph, SbomGlyph, SignatureGlyph, UpdateIndicator } from '@/components/supply-chain';
 import { Pager, SearchInput, SkeletonRows, SortableHead, StateRow, Toolbar, useUrlState } from '@/components/table-kit';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,7 +20,7 @@ const SEVERITY_OPTIONS = [
   { value: 'medium', label: 'Medium or worse' },
   { value: 'low', label: 'Low or worse' },
 ];
-const COLS = 8;
+const COLS = 12;
 
 export function ImagesPage() {
   const [state, update] = useUrlState({ namespace: '', grade: '', severity: '', q: '', sort: 'score', order: 'asc', page: '1', pageSize: '50' });
@@ -73,6 +74,10 @@ export function ImagesPage() {
                 <SortableHead label="Findings" field="critical" sort={state.sort} order={state.order} onSort={onSort} />
                 <TableHead className="px-3">Scanners</TableHead>
                 <SortableHead label="Agreement" field="agreement" sort={state.sort} order={state.order} onSort={onSort} />
+                <TableHead className="px-2 text-center" title="Signature (cosign)">Signed</TableHead>
+                <TableHead className="px-2 text-center" title="SBOM attestation">SBOM</TableHead>
+                <TableHead className="px-2 text-center" title="SLSA provenance attestation">Provenance</TableHead>
+                <TableHead className="px-3">Update</TableHead>
                 <TableHead className="px-3">Namespaces</TableHead>
                 <SortableHead label="Workloads" field="workloads" sort={state.sort} order={state.order} onSort={onSort} />
                 <SortableHead label="Last scanned" field="lastScannedAt" sort={state.sort} order={state.order} onSort={onSort} />
@@ -96,7 +101,7 @@ export function ImagesPage() {
               ) : (
                 data?.items.map((image) => (
                   <TableRow key={image.id}>
-                    <TableCell className="max-w-[300px] px-3 py-2">
+                    <TableCell className="max-w-[260px] px-3 py-2">
                       <Link to={`/images/${encodeURIComponent(image.id)}`} className="block truncate font-mono text-xs underline-offset-4 hover:underline" title={image.ref}>
                         {image.ref}
                       </Link>
@@ -117,6 +122,18 @@ export function ImagesPage() {
                     </TableCell>
                     <TableCell className="px-3 py-2">
                       <AgreementDots value={image.agreementIndex} />
+                    </TableCell>
+                    <TableCell className="px-2 py-2 text-center">
+                      <SignatureGlyph provenance={image.provenance} />
+                    </TableCell>
+                    <TableCell className="px-2 py-2 text-center">
+                      <SbomGlyph provenance={image.provenance} />
+                    </TableCell>
+                    <TableCell className="px-2 py-2 text-center">
+                      <ProvenanceGlyph provenance={image.provenance} />
+                    </TableCell>
+                    <TableCell className="px-3 py-2">
+                      <UpdateIndicator update={image.provenance?.update} className="max-w-28" />
                     </TableCell>
                     <TableCell className="px-3 py-2">
                       <span className="flex flex-wrap gap-1">

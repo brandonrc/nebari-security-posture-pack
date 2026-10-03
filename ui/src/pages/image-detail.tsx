@@ -1,6 +1,7 @@
+import type * as React from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { RefreshCw, TriangleAlert } from 'lucide-react';
-import { Link, useParams } from 'react-router';
+import { Download, RefreshCw, TriangleAlert } from 'lucide-react';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '@/api/client';
 import { useImage } from '@/api/queries';
 import type { ImageDetail } from '@/api/types';
@@ -15,8 +16,12 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { toast } from '@/components/ui/toast';
+import { ProvenanceGlyph, SbomGlyph, SignatureGlyph, signatureState, UpdateIndicator } from '@/components/supply-chain';
 import { formatAge, formatDateTime, formatDuration, formatRelative } from '@/lib/format';
 import { totalCount } from '@/lib/scoring';
+import { latestTag, supplyChainScore, updateLevel } from '@/lib/supply-chain';
+import { gradeClass } from '@/lib/severity-styles';
+import { cn } from '@/lib/utils';
 
 function Header({ image }: { image: ImageDetail }) {
   const rescan = useMutation({
@@ -209,7 +214,161 @@ function Posture({ image }: { image: ImageDetail }) {
   );
 }
 
+function SupplyChainTabBadge({ image }: { image: ImageDetail }) {
+  const sc = supplyChainScore(image.provenance, { tag: image.tag });
+  if (!sc) return null;
+  return (
+    <Badge variant="secondary" className={cn('border', gradeClass[sc.grade])} aria-label={`supply-chain grade ${sc.grade}`}>
+      {sc.grade}
+    </Badge>
+  );
+}
+
+function Fact({ label, glyph, children }: { label: string; glyph?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5 rounded-md border border-border bg-background p-3">
+      <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground uppercase tracking-wide">
+        {glyph}
+        {label}
+      </span>
+      <div className="min-w-0 text-sm">{children}</div>
+    </div>
+  );
+}
+
+function SupplyChain({ image }: { image: ImageDetail }) {
+  const p = image.provenance;
+  if (!p) {
+    return (
+      <EmptyState title="No supply-chain data">
+        Signature, SBOM, provenance and update checks haven’t run for this image yet (or are disabled in Settings → Supply chain).
+      </EmptyState>
+    );
+  }
+  const sc = supplyChainScore(p, { tag: image.tag });
+  const sig = p.signature;
+  const level = updateLevel(p.update);
+  return (
+    <div className="flex flex-col gap-5 pt-2 lg:flex-row">
+      <div className="flex shrink-0 flex-col items-center gap-3 lg:w-64">
+        <GradeRing score={sc?.score ?? null} grade={sc?.grade ?? '?'} size={112} stroke={10} />
+        <p className="text-center text-muted-foreground text-xs">
+          Supply-chain score · weighs 15% of the cluster score
+          {p.checkedAt ? <span className="block">checked {formatRelative(p.checkedAt)}</span> : null}
+        </p>
+        <Table aria-label="Supply-chain score deductions" className="text-sm">
+          <TableBody>
+            <TableRow className="hover:bg-transparent">
+              <TableCell className="px-2 py-1.5">Start</TableCell>
+              <TableCell className="px-2 py-1.5 text-right tabular-nums">100</TableCell>
+            </TableRow>
+            {sc?.deductions.length ? (
+              sc.deductions.map((d) => (
+                <TableRow key={d.reason} className="hover:bg-transparent">
+                  <TableCell className="whitespace-normal px-2 py-1.5 text-muted-foreground text-xs">{d.reason}</TableCell>
+                  <TableCell className="px-2 py-1.5 text-right text-destructive-foreground tabular-nums">−{Math.abs(d.points)}</TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={2} className="px-2 py-1.5 text-success-foreground text-xs">No deductions</TableCell>
+              </TableRow>
+            )}
+            <TableRow className="hover:bg-transparent">
+              <TableCell className="px-2 py-1.5 font-medium">Score</TableCell>
+              <TableCell className="px-2 py-1.5 text-right font-medium tabular-nums">{sc ? sc.score.toFixed(0) : '—'}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+      <div className="grid min-w-0 flex-1 content-start gap-3 sm:grid-cols-2">
+        <Fact label="Signature" glyph={<SignatureGlyph provenance={p} />}>
+          {sig ? (
+            <>
+              <span className="font-medium capitalize">{signatureState(p).label}</span>
+              {sig.mode ? <span className="ml-1 text-muted-foreground text-xs">({sig.mode})</span> : null}
+              {sig.error ? <code className="mt-1 block whitespace-pre-wrap break-words text-destructive-foreground text-xs">{sig.error}</code> : null}
+            </>
+          ) : (
+            <span className="text-muted-foreground">Not checked</span>
+          )}
+        </Fact>
+        <Fact label="SBOM" glyph={<SbomGlyph provenance={p} />}>
+          {p.sbom ? (
+            p.sbom.hasSBOM ? (
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">Attached</span>
+                {p.sbom.format ? <Badge variant="outline" className="font-mono">{p.sbom.format}</Badge> : null}
+                {p.sbom.downloadUrl ? (
+                  <Button size="xs" variant="outline" render={<a href={p.sbom.downloadUrl} download />}>
+                    <Download />
+                    Download
+                  </Button>
+                ) : null}
+              </span>
+            ) : (
+              <span className="font-medium">No SBOM attestation</span>
+            )
+          ) : (
+            <span className="text-muted-foreground">Not checked</span>
+          )}
+        </Fact>
+        <Fact label="SLSA provenance" glyph={<ProvenanceGlyph provenance={p} />}>
+          {p.provenance ? (
+            p.provenance.hasProvenance ? (
+              <>
+                <span className="font-medium">Attestation present</span>
+                {p.provenance.predicateType ? <code className="mt-1 block break-all text-muted-foreground text-xs">{p.provenance.predicateType}</code> : null}
+                {p.provenance.builder ? <span className="mt-0.5 block break-all text-muted-foreground text-xs">builder {p.provenance.builder}</span> : null}
+              </>
+            ) : (
+              <span className="font-medium">No provenance attestation</span>
+            )
+          ) : (
+            <span className="text-muted-foreground">Not checked</span>
+          )}
+        </Fact>
+        <Fact label="Updates">
+          {p.update ? (
+            <span className="flex flex-col gap-1">
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="font-mono">{p.update.currentTag}</span>
+                {level ? (
+                  <>
+                    <span className="text-muted-foreground">→</span>
+                    <UpdateIndicator update={p.update} />
+                  </>
+                ) : (
+                  <span className="text-success-foreground text-xs">up to date</span>
+                )}
+              </span>
+              {level ? (
+                <span className={cn('text-xs', level === 'major' ? 'text-destructive-foreground' : 'text-muted-foreground')}>
+                  {level} update{latestTag(p.update) ? ` to ${latestTag(p.update)}` : ''}
+                  {p.update.latestInMajor && p.update.latestInMajor !== latestTag(p.update) ? ` · latest in current major ${p.update.latestInMajor}` : ''}
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">Not checked</span>
+          )}
+        </Fact>
+        {p.mutableTag ? (
+          <Fact label="Tag pinning">
+            <span className="text-warning-foreground">Mutable tag without a digest pin</span>
+          </Fact>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const TABS = ['findings', 'used-by', 'runs', 'posture', 'supply-chain'] as const;
+
 export function ImageDetailPage() {
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get('tab') ?? 'findings';
+  const tab = (TABS as readonly string[]).includes(tabParam) ? tabParam : 'findings';
   const { id = '' } = useParams();
   const { data: image, error, isLoading, refetch } = useImage(id);
   const failedScanners = image ? SCANNERS.filter((s) => image.scanners[s] && image.scanners[s]?.status !== 'ok') : [];
@@ -245,7 +404,20 @@ export function ImageDetailPage() {
           ) : null}
           <Card>
             <CardContent>
-              <Tabs defaultValue="findings">
+              <Tabs
+                value={tab}
+                onValueChange={(v) =>
+                  setParams(
+                    (prev) => {
+                      const next = new URLSearchParams(prev);
+                      if (v === 'findings') next.delete('tab');
+                      else next.set('tab', String(v));
+                      return next;
+                    },
+                    { replace: true },
+                  )
+                }
+              >
                 <TabsList variant="underline" aria-label="Image detail sections">
                   <TabsTab value="findings">
                     Findings <Badge variant="secondary">{image.findings.length}</Badge>
@@ -256,6 +428,10 @@ export function ImageDetailPage() {
                   <TabsTab value="runs">Scanner runs</TabsTab>
                   <TabsTab value="posture">
                     Posture <Badge variant={image.postureFindings.length ? 'destructive' : 'secondary'}>{image.postureFindings.length}</Badge>
+                  </TabsTab>
+                  <TabsTab value="supply-chain">
+                    Supply chain
+                    {image.provenance ? <SupplyChainTabBadge image={image} /> : null}
                   </TabsTab>
                   <TabsIndicator />
                 </TabsList>
@@ -270,6 +446,9 @@ export function ImageDetailPage() {
                 </TabsPanel>
                 <TabsPanel value="posture">
                   <Posture image={image} />
+                </TabsPanel>
+                <TabsPanel value="supply-chain">
+                  <SupplyChain image={image} />
                 </TabsPanel>
               </Tabs>
             </CardContent>

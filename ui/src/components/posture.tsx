@@ -232,15 +232,51 @@ const STATUS_TONE: Record<string, string> = {
   'not-satisfied': 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
   pass: 'border-success-foreground/40 bg-success text-success-foreground',
   fail: 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
+  // §13 control / assertion statuses
+  implemented: 'border-success-foreground/40 bg-success text-success-foreground',
+  partial: 'border-warning-foreground/40 bg-warning text-warning-foreground',
+  'not-implemented': 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
+  inherited: 'border-info-foreground/40 bg-info text-info-foreground',
+  'not-applicable': 'border-border bg-muted text-muted-foreground-strong',
+  unknown: 'border-dashed border-border-strong bg-transparent text-muted-foreground-strong',
+  // Helm release statuses
+  deployed: 'border-success-foreground/40 bg-success text-success-foreground',
+  'pending-upgrade': 'border-info-foreground/40 bg-info text-info-foreground',
+  'pending-install': 'border-info-foreground/40 bg-info text-info-foreground',
+  superseded: 'border-border bg-muted text-muted-foreground-strong',
 };
 
-const STATUS_TEXT: Record<string, string> = { NotAFinding: 'Not a finding', Not_Reviewed: 'Not reviewed', 'not-satisfied': 'Not satisfied' };
+const STATUS_TEXT: Record<string, string> = {
+  NotAFinding: 'Not a finding',
+  Not_Reviewed: 'Not reviewed',
+  'not-satisfied': 'Not satisfied',
+  'not-implemented': 'Not implemented',
+  'not-applicable': 'Not applicable',
+  'pending-upgrade': 'Pending upgrade',
+  'pending-install': 'Pending install',
+};
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   return (
     <Badge variant="secondary" className={cn('border capitalize', STATUS_TONE[status] ?? 'border-border bg-muted text-muted-foreground-strong', className)}>
       {status === 'running' ? <span className="size-1.5 rounded-full bg-current motion-safe:animate-skeleton-pulse" aria-hidden="true" /> : null}
       {STATUS_TEXT[status] ?? status}
+    </Badge>
+  );
+}
+
+const BASELINE_TONE: Record<string, string> = {
+  low: 'border-border-strong bg-background text-foreground',
+  moderate: 'border-info-foreground/40 bg-info text-info-foreground',
+  high: 'border-chart-1/50 bg-transparent text-foreground',
+};
+
+/** NIST baseline chip: lowest baseline a control belongs to (L / M / H). */
+export function BaselineBadge({ baseline }: { baseline: string | null | undefined }) {
+  if (!baseline) return <Badge variant="ghost" className="text-[11px] text-muted-foreground">none</Badge>;
+  return (
+    <Badge variant="secondary" className={cn('border text-[11px] capitalize', BASELINE_TONE[baseline] ?? BASELINE_TONE.low)} title={`In the ${baseline} baseline and above`}>
+      {baseline}
     </Badge>
   );
 }

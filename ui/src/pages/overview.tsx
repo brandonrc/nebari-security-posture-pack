@@ -2,7 +2,11 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, Minus, ServerCrash, ShieldChe
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
-import { useSummary } from '@/api/queries';
+import { useControls, useSettings, useSummary, useSupplyChain } from '@/api/queries';
+import { ROLLUP_SERIES, ROLLUP_STATUS } from '@/components/family-rollup';
+import { baselineCoverage, CONTROL_STATUSES, normalizeControlStatus } from '@/lib/controls';
+import { gradeForScore } from '@/lib/scoring';
+import { clusterWeights, percent } from '@/lib/supply-chain';
 import type { ScannerHealth, Severity, Summary, TrendPoint } from '@/api/types';
 import { CardsSkeleton, ErrorAlert, PageHeader } from '@/components/page';
 import { GradeBadge, GradeRing, PassFailBar, SCANNER_LABEL, SeverityBar, SeverityChips } from '@/components/posture';
@@ -42,6 +46,8 @@ function Stat({ label, children }: { label: string; children: ReactNode }) {
 
 function HeroTile({ summary }: { summary: Summary }) {
   const delta = trendDelta(summary.trend);
+  const hasSc = summary.supplyChainScore !== null && summary.supplyChainScore !== undefined;
+  const w = clusterWeights(hasSc);
   return (
     <Card className="motion-safe:animate-fade-in lg:col-span-2">
       <CardContent className="flex flex-col gap-5 sm:flex-row sm:items-center">
@@ -60,9 +66,10 @@ function HeroTile({ summary }: { summary: Summary }) {
               <ScanControl lastScan={summary.lastScan} />
             </div>
           </div>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm xl:grid-cols-4">
-            <Stat label="Vulnerability (×0.7)">{formatScore(summary.vulnScore)}</Stat>
-            <Stat label="Configuration (×0.3)">{formatScore(summary.postureScore)}</Stat>
+          <dl className={cn('grid grid-cols-2 gap-x-6 gap-y-3 text-sm', hasSc ? 'sm:grid-cols-3 2xl:grid-cols-5' : 'xl:grid-cols-4')}>
+            <Stat label={`Vulnerability (×${w.vuln})`}>{formatScore(summary.vulnScore)}</Stat>
+            <Stat label={`Configuration (×${w.posture})`}>{formatScore(summary.postureScore)}</Stat>
+            {hasSc ? <Stat label={`Supply chain (×${w.supplyChain})`}>{formatScore(summary.supplyChainScore)}</Stat> : null}
             <Stat label="Images scored">
               {summary.images.scanned}/{summary.images.total}
               {summary.images.failed ? <span className="ml-1.5 font-normal text-destructive-foreground text-xs">{summary.images.failed} failed</span> : null}
@@ -133,6 +140,94 @@ function ScannerCard({ scanner }: { scanner: ScannerHealth }) {
         {scanner.lastError ? <span className="line-clamp-2 text-destructive-foreground text-xs" title={scanner.lastError}>{scanner.lastError}</span> : null}
       </CardContent>
     </Card>
+  );
+}
+
+function MiniStat({ label, value, of }: { label: string; value: number; of: number }) {
+  const p = percent(value, of);
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="truncate text-muted-foreground text-xs">{label}</span>
+      <span className="font-medium tabular-nums">{p === null ? '—' : `${p.toFixed(0)}%`}</span>
+      <div className="h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <div className="h-full rounded-full bg-primary" style={{ width: `${p ?? 0}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function SupplyChainTile() {
+  const { data } = useSupplyChain();
+  if (!data) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Supply chain</CardTitle>
+        <CardDescription>
+          {data.unique} images · {data.withUpdates} with updates · {data.helmWithUpdates}/{data.helmReleases} Helm releases behind
+        </CardDescription>
+        <CardAction>
+          <Button variant="ghost" size="sm" render={<Link to="/supply-chain" />}>
+            Details
+            <ArrowRight />
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex items-center gap-5">
+        <GradeRing score={data.score} grade={data.grade ?? gradeForScore(data.score)} size={88} stroke={8} />
+        <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <MiniStat label="Signed" value={data.signed} of={data.unique} />
+          <MiniStat label="Verified" value={data.verified} of={data.unique} />
+          <MiniStat label="SBOM" value={data.withSbom} of={data.unique} />
+          <MiniStat label="Provenance" value={data.withProvenance} of={data.unique} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ControlsTile() {
+  const { data } = useControls();
+  const settings = useSettings();
+  if (!data?.length || !data.some((c) => c.family || c.assertions || c.baseline)) return null;
+  const baseline = settings.data?.controlsEngine?.baseline ?? 'moderate';
+  const cov = baselineCoverage(data, baseline);
+  const counts = Object.fromEntries(CONTROL_STATUSES.map((s) => [s, data.filter((c) => normalizeControlStatus(c.status) === s).length]));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>NIST 800-53 controls</CardTitle>
+        <CardDescription>Implementation proven by live assertions</CardDescription>
+        <CardAction>
+          <Button variant="ghost" size="sm" render={<Link to="/compliance" />}>
+            Controls
+            <ArrowRight />
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <Link to="/compliance" className="w-fit rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Controls implemented ${cov.implemented} of ${cov.total} (${baseline} baseline)`}>
+          <span className="font-semibold text-3xl tabular-nums">{cov.implemented}</span>
+          <span className="text-muted-foreground text-lg tabular-nums">/{cov.total}</span>
+          <span className="ml-2 text-muted-foreground text-sm">controls implemented ({baseline} baseline)</span>
+        </Link>
+        <FamilyRollupBar counts={counts} />
+        <p className="text-muted-foreground text-xs tabular-nums">
+          {counts.partial} partial · {counts['not-implemented']} not implemented · {counts.inherited} inherited · {counts.unknown} unknown
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FamilyRollupBar({ counts }: { counts: Record<string, number> }) {
+  const series = ROLLUP_SERIES.map((s) => ({ ...s, n: counts[ROLLUP_STATUS[s.key]] ?? 0 }));
+  const total = series.reduce((a, s) => a + s.n, 0);
+  if (!total) return null;
+  return (
+    <div className="flex h-2 gap-0.5 overflow-hidden rounded-full" role="img" aria-label={series.map((s) => `${s.n} ${s.label.toLowerCase()}`).join(', ')}>
+      {series.map((s) => (s.n ? <span key={s.key} className="h-full" style={{ width: `${(s.n / total) * 100}%`, background: s.color }} title={`${s.n} ${s.label.toLowerCase()}`} /> : null))}
+    </div>
   );
 }
 
@@ -282,6 +377,11 @@ export function OverviewPage() {
           </div>
 
           <SeverityTiles summary={summary} />
+
+          <div className="grid gap-4 xl:grid-cols-2 empty:hidden">
+            <SupplyChainTile />
+            <ControlsTile />
+          </div>
 
           <div className="grid gap-4 md:grid-cols-3">
             {summary.scanners.map((s) => (

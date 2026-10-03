@@ -16,6 +16,7 @@ import { ReportsPage } from '@/pages/reports';
 import { ScanDetailPage } from '@/pages/scan-detail';
 import { ScansPage } from '@/pages/scans';
 import { SettingsPage } from '@/pages/settings';
+import { SupplyChainPage } from '@/pages/supply-chain';
 import { VulnerabilitiesPage } from '@/pages/vulnerabilities';
 import { VulnerabilityDetailPage } from '@/pages/vulnerability-detail';
 import { WorkloadsPage } from '@/pages/workloads';
@@ -34,6 +35,7 @@ export const routes: RouteObject[] = [
       { path: 'workloads', element: <WorkloadsPage /> },
       { path: 'namespaces', element: <NamespacesPage /> },
       { path: 'checks', element: <ChecksPage /> },
+      { path: 'supply-chain', element: <SupplyChainPage /> },
       { path: 'checks/:id', element: <CheckDetailPage /> },
       { path: 'scans', element: <ScansPage /> },
       { path: 'scans/:id', element: <ScanDetailPage /> },

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Download, FilePlus2, Trash2 } from 'lucide-react';
+import { Download, FilePlus2, PackageCheck, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '@/api/client';
@@ -104,7 +104,11 @@ function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
               <SimpleSelect ariaLabel="Format" className="w-full" value={format} onChange={setFormat} options={(selected?.formats ?? []).map((f) => ({ value: f, label: f.toUpperCase() }))} disabled={!selected} />
             </div>
           </div>
-          {selected ? <p className="text-muted-foreground text-xs">{selected.description}</p> : null}
+          {selected ? (
+            <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-muted-foreground text-xs leading-relaxed">
+              <span className="font-medium font-mono text-foreground">{selected.type}</span> — {selected.description || 'No description provided.'}
+            </p>
+          ) : null}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label>Scope</Label>
@@ -150,6 +154,52 @@ function GenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One-click ATO package (DESIGN §11/§13): POA&M, STIG checklist, SAR, OSCAL AR + SSP. */
+const COMPLIANCE_PACKAGE: Array<{ type: string; format: string }> = [
+  { type: 'poam', format: 'xlsx' },
+  { type: 'stig-checklist', format: 'cklb' },
+  { type: 'sar', format: 'pdf' },
+  { type: 'oscal-ar', format: 'json' },
+  { type: 'oscal-ssp', format: 'json' },
+];
+
+function CompliancePackageButton() {
+  const types = useReportTypes();
+  const queryClient = useQueryClient();
+  const queue = useMutation({
+    mutationFn: async () => {
+      const catalogue = types.data ?? [];
+      const wanted = COMPLIANCE_PACKAGE.filter((p) => catalogue.length === 0 || catalogue.some((t) => t.type === p.type && t.formats.includes(p.format)));
+      const skipped = COMPLIANCE_PACKAGE.filter((p) => !wanted.includes(p));
+      const results = await Promise.allSettled(wanted.map((p) => api.createReport({ type: p.type, format: p.format, scope: { kind: 'cluster' } })));
+      return { results, wanted, skipped };
+    },
+    onSuccess: ({ results, wanted, skipped }) => {
+      void queryClient.invalidateQueries({ queryKey: qk.reports });
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const failed = results
+        .map((r, i) => (r.status === 'rejected' ? `${wanted[i].type} (${errorMessage(r.reason)})` : null))
+        .filter(Boolean);
+      const notes = [
+        ...(failed.length ? [`failed: ${failed.join(', ')}`] : []),
+        ...(skipped.length ? [`not offered by the API: ${skipped.map((p) => `${p.type}.${p.format}`).join(', ')}`] : []),
+      ];
+      toast.add({
+        title: ok ? `Compliance package queued (${ok} report${ok === 1 ? '' : 's'})` : 'Compliance package failed',
+        description: notes.length ? notes.join(' · ') : 'POA&M (xlsx), STIG checklist (cklb), SAR (pdf), OSCAL AR and OSCAL SSP for the cluster.',
+        type: failed.length || skipped.length ? (ok ? 'warning' : 'error') : 'info',
+      });
+    },
+    onError: (e) => toast.add({ title: 'Compliance package failed', description: errorMessage(e), type: 'error' }),
+  });
+  return (
+    <Button variant="outline" onClick={() => queue.mutate()} loading={queue.isPending} loadingText="Queuing…" disabled={types.isLoading} title="POA&M xlsx + STIG cklb + SAR pdf + OSCAL AR + OSCAL SSP">
+      <PackageCheck />
+      Compliance package
+    </Button>
   );
 }
 
@@ -291,12 +341,15 @@ export function ReportsPage() {
     <>
       <PageHeader
         title="Reports"
-        description="ATO / cATO artifacts generated from scan snapshots: POA&M, STIG checklists, SAR, OSCAL assessment results, inventories."
+        description="ATO / cATO artifacts generated from scan snapshots: POA&M, STIG checklists, SAR, OSCAL assessment results, SSP and component definitions, inventories."
         actions={
-          <Button onClick={() => setOpen(true)}>
-            <FilePlus2 />
-            Generate report
-          </Button>
+          <>
+            <CompliancePackageButton />
+            <Button onClick={() => setOpen(true)}>
+              <FilePlus2 />
+              Generate report
+            </Button>
+          </>
         }
       />
       <Card>

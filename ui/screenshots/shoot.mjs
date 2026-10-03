@@ -8,7 +8,19 @@ const PAGES = [
   { name: 'overview', path: '/', ready: 'text=Cluster security posture' },
   { name: 'images', path: '/images', ready: 'table[aria-label="Images"] tbody tr:nth-child(10)' },
   { name: 'image-detail', path: '/images/img-003', ready: 'table[aria-label="Findings"] tbody tr' },
-  { name: 'compliance', path: '/compliance', ready: 'text=CAT I open' },
+  { name: 'image-detail-supply-chain', path: '/images/img-004?tab=supply-chain', ready: 'table[aria-label="Supply-chain score deductions"]' },
+  { name: 'supply-chain', path: '/supply-chain', ready: 'table[aria-label="Outdated images"] tbody tr:nth-child(5)' },
+  {
+    name: 'compliance-controls',
+    path: '/compliance',
+    ready: 'table[aria-label="Control catalog"] tbody tr:nth-child(10)',
+    // expand one control to show assertion evidence
+    act: async (page) => {
+      await page.getByRole('button', { name: 'Show evidence for AC-12' }).click();
+      await page.getByText('Raw evidence').first().click();
+    },
+  },
+  { name: 'compliance', path: '/compliance?tab=stig', ready: 'text=CAT I open' },
   { name: 'reports', path: '/reports', ready: 'table[aria-label="Reports"] tbody tr' },
 ];
 
@@ -21,6 +33,7 @@ for (const theme of ['light', 'dark']) {
   for (const p of PAGES) {
     await page.goto(`${BASE}${p.path}`, { waitUntil: 'networkidle' });
     await page.waitForSelector(p.ready, { timeout: 20000 });
+    if (p.act) await p.act(page);
     await page.waitForTimeout(600);
     // the app scrolls inside <main>; grow the viewport so the whole page is captured
     const height = await page.evaluate(() => (document.querySelector('#main')?.scrollHeight ?? 1000) + 64);

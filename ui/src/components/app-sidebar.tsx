@@ -10,6 +10,7 @@ import {
   Settings,
   ShieldCheck,
   Bug,
+  PackageCheck,
 } from 'lucide-react';
 import { NavLink as RouterNavLink, useLocation } from 'react-router';
 import {
@@ -37,6 +38,7 @@ const GROUPS = [
       { to: '/workloads', label: 'Workloads', icon: Layers },
       { to: '/namespaces', label: 'Namespaces', icon: Folders },
       { to: '/checks', label: 'Posture checks', icon: ClipboardCheck },
+      { to: '/supply-chain', label: 'Supply chain', icon: PackageCheck },
     ],
   },
   {

@@ -21,6 +21,10 @@ export const qk = {
   reports: ['reports'] as const,
   controls: ['compliance', 'controls'] as const,
   stig: ['compliance', 'stig'] as const,
+  families: ['compliance', 'families'] as const,
+  assertions: ['compliance', 'assertions'] as const,
+  supplyChain: ['supplyChain'] as const,
+  helmReleases: ['helmReleases'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: qk.me, queryFn: api.me, staleTime: 5 * 60_000 });
@@ -41,6 +45,10 @@ export const useScanners = () => useQuery({ queryKey: qk.scanners, queryFn: api.
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settings });
 export const useReportTypes = () => useQuery({ queryKey: qk.reportTypes, queryFn: api.reportTypes, staleTime: Infinity });
 export const useControls = () => useQuery({ queryKey: qk.controls, queryFn: api.complianceControls });
+export const useFamilies = () => useQuery({ queryKey: qk.families, queryFn: api.complianceFamilies });
+export const useAssertions = () => useQuery({ queryKey: qk.assertions, queryFn: api.assertions });
+export const useSupplyChain = () => useQuery({ queryKey: qk.supplyChain, queryFn: api.supplyChain });
+export const useHelmReleases = () => useQuery({ queryKey: qk.helmReleases, queryFn: api.helmReleases });
 export const useStig = () => useQuery({ queryKey: qk.stig, queryFn: api.complianceStig });
 
 /** Poll a scan every 3s while it's queued/running (DESIGN §7). */

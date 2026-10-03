@@ -1,6 +1,7 @@
 import { delay, http, HttpResponse } from 'msw';
 import type { Grade, ImageSummary, Report, ReportCreate, Scan, Settings, Severity, VulnSummary } from '@/api/types';
 import { SCANNERS } from '@/api/types';
+import { FAMILY_TITLES } from '@/lib/controls';
 import { gradeRank, severityRank } from '@/lib/scoring';
 import {
   buildSummary,
@@ -17,9 +18,12 @@ import {
   scannerHealth,
   scans as seedScans,
   stigRules,
+  supplyChainSummary,
   vulnIndex,
   workloads,
 } from './fixtures';
+import { assertions, resetAssertionRun, setAssertionRunAt } from './controls';
+import { helmReleases } from './provenance';
 
 /**
  * MSW handlers mirroring DESIGN §5/§11. Mutable state (scans, reports,
@@ -29,6 +33,16 @@ import {
 const API = '*/api/v1';
 const SCAN_DURATION_MS = 30_000;
 const REPORT_DURATION_MS = 5_000;
+const ASSERTION_RUN_MS = 4_000;
+let assertionRunStarted: number | null = null;
+
+/** The engine "finishes" ASSERTION_RUN_MS after POST /compliance/assertions/run. */
+function settleAssertionRun() {
+  if (assertionRunStarted !== null && Date.now() - assertionRunStarted >= ASSERTION_RUN_MS) {
+    setAssertionRunAt(assertionRunStarted + ASSERTION_RUN_MS);
+    assertionRunStarted = null;
+  }
+}
 
 let settings: Settings = structuredClone(defaultSettings);
 const scans: Scan[] = structuredClone(seedScans);
@@ -44,6 +58,8 @@ export function resetMockState() {
   reportStarted.clear();
   scanStarted.clear();
   cancelled.clear();
+  assertionRunStarted = null;
+  resetAssertionRun();
 }
 
 /** Optional auth simulation: `?mockAuth=401|403` on the page URL. */
@@ -323,7 +339,53 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
-  http.get(`${API}/compliance/controls`, () => HttpResponse.json(controlCoverage())),
+  http.get(`${API}/compliance/controls`, () => {
+    settleAssertionRun();
+    return HttpResponse.json(controlCoverage());
+  }),
+  http.get(`${API}/compliance/catalog`, ({ request }) => {
+    const family = new URL(request.url).searchParams.get('family');
+    return HttpResponse.json(controlCoverage().filter((c) => !family || c.family === family.toUpperCase()).map(({ control, title, family: f, baseline }) => ({ control, title, family: f, baseline })));
+  }),
+  http.get(`${API}/compliance/families`, () => {
+    settleAssertionRun();
+    const map = new Map<string, { family: string; title: string; implemented: number; partial: number; notImplemented: number; inherited: number; notApplicable: number; unknown: number }>();
+    const key = { implemented: 'implemented', partial: 'partial', 'not-implemented': 'notImplemented', inherited: 'inherited', 'not-applicable': 'notApplicable', unknown: 'unknown' } as const;
+    for (const c of controlCoverage()) {
+      const f = c.family ?? c.control.split('-')[0];
+      const row = map.get(f) ?? { family: f, title: FAMILY_TITLES[f] ?? f, implemented: 0, partial: 0, notImplemented: 0, inherited: 0, notApplicable: 0, unknown: 0 };
+      row[key[c.status as keyof typeof key] ?? 'unknown'] += 1;
+      map.set(f, row);
+    }
+    return HttpResponse.json([...map.values()].sort((a, b) => a.family.localeCompare(b.family)));
+  }),
+  http.get(`${API}/compliance/assertions`, () => {
+    settleAssertionRun();
+    return HttpResponse.json(assertions());
+  }),
+  http.post(`${API}/compliance/assertions/run`, () => {
+    if (assertionRunStarted !== null) return HttpResponse.json({ detail: 'an assertion run is already in progress' }, { status: 409 });
+    assertionRunStarted = Date.now();
+    return HttpResponse.json({ status: 'queued', startedAt: new Date(assertionRunStarted).toISOString() }, { status: 202 });
+  }),
+  http.get(`${API}/compliance/assertions/:id`, ({ params }) => {
+    settleAssertionRun();
+    const a = assertions().find((x) => x.id === params.id);
+    if (!a) return HttpResponse.json({ detail: 'assertion not found' }, { status: 404 });
+    const history = [0, 1, 2, 3, 4].map((n) => ({ status: a.status, checkedAt: new Date(Date.parse(a.checkedAt ?? '') - n * 6 * 3_600_000).toISOString() }));
+    return HttpResponse.json({ ...a, history });
+  }),
+
+  http.get(`${API}/supply-chain`, () => HttpResponse.json(supplyChainSummary())),
+  http.get(`${API}/helm-releases`, () => HttpResponse.json(helmReleases)),
+  http.get(`${API}/images/:id/sbom`, ({ params }) => {
+    const image = images.find((i) => i.id === params.id);
+    if (!image?.provenance?.sbom?.hasSBOM) return HttpResponse.json({ detail: 'no SBOM attestation' }, { status: 404 });
+    return HttpResponse.json(
+      { spdxVersion: 'SPDX-2.3', name: image.ref, packages: image.findings.slice(0, 5).map((f) => ({ name: f.package, versionInfo: f.installedVersion })) },
+      { headers: { 'Content-Disposition': `attachment; filename="${image.repository.split('/').pop()}.sbom.json"` } },
+    );
+  }),
   http.get(`${API}/compliance/stig`, () => HttpResponse.json(stigRules())),
 
   http.get(`${API}/export`, ({ request }) => {

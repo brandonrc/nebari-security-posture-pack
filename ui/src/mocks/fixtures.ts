@@ -26,11 +26,15 @@ import type {
   SeverityCounts,
   StigRule,
   Summary,
+  SupplyChainSummary,
   TrendPoint,
   Workload,
 } from '@/api/types';
 import { SCANNERS } from '@/api/types';
 import { emptyCounts, gradeForScore, imageVulnScore, maxSeverity, SEVERITY_WEIGHT } from '@/lib/scoring';
+import { clusterScore as weightedClusterScore, supplyChainScore, updateLevel } from '@/lib/supply-chain';
+import { controlCatalog } from './controls';
+import { helmReleases, PROVENANCE_BY_REF } from './provenance';
 import { type CveSeed, GO_CVES, JAVA_CVES, NODE_CVES, OS_CVES, PY_CVES } from './cves';
 
 // ── PRNG ─────────────────────────────────────────────────────────────────────
@@ -319,12 +323,21 @@ IMAGE_SEEDS.forEach((seed, index) => {
       ...(ok.length === 1 ? ['only one scanner succeeded: low confidence'] : []),
     ],
     confidence: ok.length <= 1 ? 'low' : 'normal',
+    provenance: withScore(id, PROVENANCE_BY_REF[seed.ref], tag, scannedAgo),
     findings,
     usedBy,
     scans,
     postureFindings: [],
   });
 });
+
+function withScore(id: string, p: ImageDetail['provenance'], tag: string | null, scannedAgo: number): ImageDetail['provenance'] {
+  if (!p) return null;
+  if (p.sbom?.hasSBOM) p = { ...p, sbom: { ...p.sbom, downloadUrl: `/api/v1/images/${id}/sbom` } };
+  const sc = supplyChainScore({ ...p, mutableTag: p.mutableTag ?? false }, { tag });
+  const update = p.update ? { ...p.update, level: p.update.level ?? updateLevel(p.update) } : p.update;
+  return { ...p, update, mutableTag: p.mutableTag ?? false, score: sc?.score ?? null, grade: sc?.grade ?? null, deductions: sc?.deductions ?? [], checkedAt: iso(scannedAgo + 90_000) };
+}
 
 function checkDetail(checkId: string, container: string): string {
   switch (checkId) {
@@ -474,7 +487,11 @@ const weighted = internal.filter((w) => w._vuln !== null);
 const wContainers = weighted.reduce((a, w) => a + w.containers, 0);
 export const clusterVulnScore = Math.round((weighted.reduce((a, w) => a + (w._vuln ?? 0) * w.containers, 0) / wContainers) * 10) / 10;
 export const clusterPostureScore = Math.round((internal.reduce((a, w) => a + w._postureScore * w.containers, 0) / internal.reduce((a, w) => a + w.containers, 0)) * 10) / 10;
-export const clusterScore = Math.round((0.7 * clusterVulnScore + 0.3 * clusterPostureScore) * 10) / 10;
+// §12 supply-chain score: container-weighted mean over running containers
+const scImages = images.filter((i) => i.running && typeof i.provenance?.score === 'number');
+export const clusterSupplyChainScore =
+  Math.round((scImages.reduce((a, i) => a + (i.provenance?.score ?? 0) * i.containers, 0) / scImages.reduce((a, i) => a + i.containers, 0)) * 10) / 10;
+export const clusterScore = weightedClusterScore(clusterVulnScore, clusterPostureScore, clusterSupplyChainScore) as number;
 for (const w of internal) {
   delete (w as Partial<typeof w>)._postureScore;
   delete (w as Partial<typeof w>)._vuln;
@@ -583,6 +600,7 @@ export function buildSummary(): Summary {
     grade: gradeForScore(clusterScore),
     vulnScore: clusterVulnScore,
     postureScore: clusterPostureScore,
+    supplyChainScore: clusterSupplyChainScore,
     generatedAt: last.finishedAt ?? new Date(NOW).toISOString(),
     lastScan: {
       id: last.id,
@@ -650,6 +668,17 @@ export const defaultSettings: Settings = {
   organization: 'Nebari Dev',
   remediationSlaDays: { critical: 15, high: 30, medium: 90, low: 180 },
   reports: { autoGenerate: ['poam'] },
+  provenance: {
+    verifySignatures: true,
+    cosign: { mode: 'keyless', publicKey: '', certificateIdentity: 'https://github.com/nebari-dev/.*', certificateOidcIssuer: 'https://token.actions.githubusercontent.com' },
+    checkSbom: true,
+    checkProvenance: true,
+    checkUpdates: true,
+    updateLevel: 'minor',
+    skipPrerelease: true,
+    helmReleases: { enabled: true },
+  },
+  controlsEngine: { enabled: true, baseline: 'moderate', adminSubjects: ['nebari-admin', 'User/admin'] },
 };
 
 // ── §11 reports & compliance ─────────────────────────────────────────────────
@@ -657,7 +686,9 @@ export const reportTypes: ReportType[] = [
   { type: 'poam', title: 'POA&M', formats: ['xlsx', 'csv'], scopes: ['cluster', 'namespace', 'workload'], description: 'Plan of Action & Milestones in the eMASS POA&M import layout. One row per consensus finding per image, with NIST control, SLA-based scheduled completion and mitigation.' },
   { type: 'stig-checklist', title: 'STIG checklist', formats: ['ckl', 'cklb'], scopes: ['cluster', 'namespace', 'workload'], description: 'Kubernetes STIG / Container Platform SRG checklist for STIG Viewer 2.x (ckl) or 3 (cklb). Unmapped rules are Not_Reviewed.' },
   { type: 'sar', title: 'Security Assessment Report', formats: ['pdf', 'html'], scopes: ['cluster', 'namespace'], description: 'Narrative SAR: scope, methodology, score & trend, inventory, findings by severity, posture results, scanner freshness, limitations.' },
-  { type: 'oscal-ar', title: 'OSCAL Assessment Results', formats: ['json'], scopes: ['cluster'], description: 'OSCAL 1.1 assessment-results with observations, risks and findings tied to control ids (ra-5, si-2, cm-6 …).' },
+  { type: 'oscal-ar', title: 'OSCAL Assessment Results', formats: ['json'], scopes: ['cluster'], description: 'OSCAL 1.1 assessment-results with observations, risks and findings tied to control ids (ra-5, si-2, cm-6 …), plus control-engine assertion observations.' },
+  { type: 'oscal-ssp', title: 'OSCAL System Security Plan', formats: ['json'], scopes: ['cluster'], description: 'OSCAL 1.1.2 system-security-plan: control-implementation statements per component with live assertion status and links to evidence, for the selected NIST baseline.' },
+  { type: 'oscal-component-definition', title: 'OSCAL Component Definition', formats: ['json'], scopes: ['cluster'], description: 'OSCAL component-definition for the platform components (Keycloak, Envoy Gateway, cert-manager, Kubernetes, logging, this pack) and the controls each implements or inherits.' },
   { type: 'inventory', title: 'Software inventory', formats: ['xlsx', 'csv'], scopes: ['cluster', 'namespace'], description: 'eMASS-style hardware/software inventory: image, digest, registry, version, namespaces, workloads, running count, scanner coverage.' },
   { type: 'vuln-export', title: 'Vulnerability export', formats: ['csv', 'json'], scopes: ['cluster', 'namespace', 'workload'], description: 'Flat (image, CVE, package) export with all three scanners’ severities for ACAS-style trackers.' },
 ];
@@ -690,16 +721,31 @@ const CONTROL_TITLES: Record<string, string> = {
   'AC-4': 'Information Flow Enforcement',
 };
 
+/** §11 per-control counts merged into the §13 catalog. */
 export function controlCoverage(): ControlCoverage[] {
   const findingsOpen = new Map<string, number>();
   for (const image of runningImages) for (const f of image.findings) for (const c of f.controls ?? []) findingsOpen.set(c, (findingsOpen.get(c) ?? 0) + 1);
   const checksFailed = new Map<string, number>();
   for (const c of checks) for (const ctl of c.controls ?? []) checksFailed.set(ctl, (checksFailed.get(ctl) ?? 0) + c.failed);
-  return Object.entries(CONTROL_TITLES).map(([control, title]) => {
-    const open = findingsOpen.get(control) ?? 0;
-    const failed = checksFailed.get(control) ?? 0;
-    return { control, title, findingsOpen: open, checksFailed: failed, status: open + failed === 0 ? 'satisfied' : 'not-satisfied' };
-  });
+  const extra = new Map(Object.keys(CONTROL_TITLES).map((control) => [control, { findingsOpen: findingsOpen.get(control) ?? 0, checksFailed: checksFailed.get(control) ?? 0 }]));
+  return controlCatalog(extra);
+}
+
+// ── §12 supply chain ─────────────────────────────────────────────────────────
+export function supplyChainSummary(): SupplyChainSummary {
+  const p = images.map((i) => i.provenance);
+  return {
+    signed: p.filter((x) => x?.signature?.signed).length,
+    verified: p.filter((x) => x?.signature?.verified).length,
+    withSbom: p.filter((x) => x?.sbom?.hasSBOM).length,
+    withProvenance: p.filter((x) => x?.provenance?.hasProvenance).length,
+    withUpdates: p.filter((x) => x?.update?.updateAvailable).length,
+    unique: images.length,
+    helmReleases: helmReleases.length,
+    helmWithUpdates: helmReleases.filter((h) => h.update?.updateAvailable).length,
+    score: clusterSupplyChainScore,
+    grade: gradeForScore(clusterSupplyChainScore),
+  };
 }
 
 export function stigRules(): StigRule[] {

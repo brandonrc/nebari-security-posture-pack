@@ -3,7 +3,8 @@
 React 19 + Vite 7 + TypeScript (strict) + Tailwind v4 SPA for the Nebari Security Posture pack,
 built on the [Nebari design system](https://github.com/nebari-dev/nebari-design). Served by an
 unprivileged nginx that also proxies `/api/` to the API service. Contract: `../docs/DESIGN.md`
-§5 (API), §7 (UI), §11 (compliance reports) and `../docs/SCORING.md`.
+§5 (API), §7 (UI), §11 (compliance reports), §12 (supply-chain provenance), §13 (control evidence
+engine) and `../docs/SCORING.md`.
 
 ## Container contract (for the chart)
 
@@ -63,16 +64,51 @@ vitest/msw otherwise).
 failing → grade `?`; Clair `unsupported`/`timeout` and Grype `error` on others), ~220 consensus
 findings drawn from real CVEs with per-scanner severity disagreements, 28 workloads across 11
 namespaces, 16 posture checks with per-container results, a 30-scan history (one failed, one
-cancelled), STIG rules in Open / NotAFinding / Not_Reviewed, NIST control coverage, and reports
-in done / running / failed. `POST /scans` progresses over ~30 s (live progress + toast);
-`POST /reports` completes after ~5 s; `PUT /settings` persists in memory.
+cancelled), STIG rules in Open / NotAFinding / Not_Reviewed, and reports in done / running / failed.
+§12: provenance on every image (cosign keyless-verified upstream images, Docker official images with
+BuildKit SBOM + SLSA v0.2 but no signature, a signed-but-unverified Bitnami image, unattested
+third-party images, one private image whose checks couldn't run) with patch/minor/major updates, and 12
+Helm releases (deployed / failed / pending-upgrade). §13: 33 assertions across pass / fail / unknown /
+not-applicable with realistic evidence JSON, and a 79-control 800-53 rev5 slice over 13 families whose
+statuses derive from the assertions (plus inherited and tailored-out controls). `POST /scans` progresses over ~30 s (live progress + toast);
+`POST /reports` completes after ~5 s; `POST /compliance/assertions/run` finishes after ~4 s (the
+Compliance page polls and toasts); `PUT /settings` persists in memory.
 Append `?mockAuth=401` or `?mockAuth=403` to any URL to see the session-expired / admins-only screens.
 
 ### Screenshots
 
 `screenshots/run.sh` builds the mock bundle, serves it with `vite preview`, and captures
-Overview, Images, Image detail, Compliance and Reports in light and dark (plus Overview at
+Overview, Images, Image detail (Findings and Supply chain tabs), Supply chain, Compliance (Controls
+tab with one control expanded, and STIG tab) and Reports in light and dark (plus Overview at
 900 px) with Playwright in `mcr.microsoft.com/playwright:v1.63.0-noble`.
+
+## API assumptions (§12 / §13)
+
+The contract leaves these open; the UI uses the names below and reads every one defensively
+(missing → the view degrades, never crashes). Types live in `src/api/types.ts`.
+
+| Where | Field / behaviour | Notes |
+|---|---|---|
+| `ImageSummary.provenance` | `{signature?, sbom?, provenance?, update?, score?, grade?, deductions?, mutableTag?, checkedAt?}` | Sub-objects use provenance-collector-pack's JSON names (`signed`, `verified`, `error`, `hasSBOM`, `format`, `hasProvenance`, `predicateType`, `currentTag`, `latestInMajor`, `newestAvailable`, `updateAvailable`). A missing sub-object means "check not run" and is shown as a dashed "not checked" glyph with no score deduction. Absent `provenance` → no Supply chain data state. |
+| `provenance.signature.mode` | `key` \| `keyless` | Optional; shown next to the signature status. |
+| `provenance.sbom.downloadUrl` | root-relative or absolute URL | When present the Supply chain tab shows a Download button (mock: `GET /api/v1/images/{id}/sbom`). |
+| `provenance.provenance.builder` | SLSA builder id | Optional. |
+| `provenance.update.level` | `patch` \| `minor` \| `major` | Optional; otherwise derived by semver-comparing `currentTag` with `newestAvailable` / `latestInMajor` (unparseable tags → `patch`). |
+| `provenance.score` / `deductions[]` | `[{reason, points}]` | Optional; when absent the UI recomputes the §12 score client-side (`src/lib/supply-chain.ts`). |
+| `provenance.mutableTag` | bool | Optional; falls back to tag `latest`/missing. |
+| `Summary.supplyChainScore` | number \| null | Present → the Overview shows the 0.6 / 0.25 / 0.15 split; absent → the pre-§12 0.7 / 0.3. |
+| `GET /supply-chain` | `{signed, verified, withSbom, withProvenance, withUpdates, unique, helmReleases, helmWithUpdates, score, grade}` | If it fails, `/supply-chain` derives the same numbers from `/images?pageSize=500` + `/helm-releases`; the Overview tile hides. |
+| `GET /helm-releases` | `HelmRecord[]` (`releaseName, namespace, chart, version, appVersion, status, update?`) | Bare array or `{items}`. |
+| `GET /compliance/controls` | §13 shape; `family`, `baseline`, `components`, `assertions` all optional | `baseline` is the **lowest** baseline containing the control (`low`/`moderate`/`high`; baselines nest) or an explicit list. Status spellings normalised: `satisfied`→implemented, `not-satisfied`/`planned`→not-implemented. A plain §11 list still renders (family from the id prefix). |
+| `ControlAssertion.detail` | one-line summary | Shown under each assertion; otherwise a compact `key=value` rendering of `evidence`. `evidence` is any JSON, shown in a collapsible code block. |
+| `GET /compliance/families` | as §13 | If it fails or is empty, the rollup is computed from `/compliance/controls`. |
+| `POST /compliance/assertions/run` | 202 `{status, startedAt?}` | The UI then polls `GET /compliance/assertions` every 2 s until the newest `checkedAt` ≥ `startedAt` (3 min cap), toasts the pass/fail tally and refetches the compliance queries. |
+| Settings `provenance` | `{verifySignatures, cosign:{mode, publicKey?, certificateIdentity?, certificateOidcIssuer?}, checkSbom, checkProvenance, checkUpdates, updateLevel, skipPrerelease, helmReleases:{enabled}}` | Missing keys are filled with defaults before editing; key mode requires `publicKey`. |
+| Settings `controlsEngine` | `{enabled, baseline, adminSubjects[]}` | Baseline drives the Controls coverage tile ("x/y (moderate baseline)"). |
+| Reports | types `oscal-ssp`, `oscal-component-definition` | Listed from `/reports/types` like every other type; "Compliance package" queues `poam.xlsx`, `stig-checklist.cklb`, `sar.pdf`, `oscal-ar.json`, `oscal-ssp.json` (cluster scope), skipping any the API doesn't offer. |
+
+The Control catalog is composed from table-kit + the Nebari `Table` primitives rather than
+`DataTable`, because the vendored DataTable has no row-expansion slot.
 
 ## Design system
 
@@ -81,7 +117,7 @@ upstream-managed — don't edit them; customise at the call site:
 
 - `src/index.css` — `@nebari/theme` (`globals.css`) verbatim, then the app-owned header tokens
   (`--header-action-hover`, `--notification-badge`, `--sign-out-foreground`) in separate blocks.
-- `src/components/ui/*` — alert, badge, breadcrumb, button, card, checkbox, data-table, dialog,
+- `src/components/ui/*` — alert, badge, breadcrumb, button, card, checkbox, code-block, data-table, dialog,
   dropdown-menu, field, input, label, navigation-menu, select, sidebar, skeleton, spinner,
   switch, table, tabs, textarea, toast, tooltip.
 - `src/hooks/*` — `use-theme-preference`, `theme-provider`; `src/lib/utils.ts` — `cn()`.

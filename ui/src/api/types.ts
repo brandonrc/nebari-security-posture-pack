@@ -97,6 +97,8 @@ export interface Summary {
   warnings?: string[];
   /** §11 remediation SLA. */
   slaOverdue?: Partial<SeverityCounts>;
+  /** §12 cluster supply-chain score (0.6/0.25/0.15 split once present). */
+  supplyChainScore?: number | null;
 }
 
 // ── images ───────────────────────────────────────────────────────────────────
@@ -132,6 +134,92 @@ export interface ImageSummary {
   warnings: string[];
   /** SCORING.md: `low` when only one scanner succeeded (assumed field). */
   confidence?: 'low' | 'normal';
+  /** §12 supply-chain provenance (absent before §12 ships). */
+  provenance?: ImageProvenance | null;
+}
+
+// ── §12 supply-chain provenance ──────────────────────────────────────────────
+/** provenance-collector-pack `SignatureInfo`. */
+export interface SignatureInfo {
+  signed: boolean;
+  verified: boolean;
+  error?: string | null;
+  /** assumed: `key` | `keyless` — how verification was attempted. */
+  mode?: string | null;
+}
+
+/** provenance-collector-pack `SBOMInfo` (+ assumed download link). */
+export interface SbomInfo {
+  hasSBOM: boolean;
+  format?: string | null;
+  /** assumed: link to the stored SBOM attestation, when the API exposes one. */
+  downloadUrl?: string | null;
+}
+
+/** provenance-collector-pack `ProvenanceInfo`. */
+export interface ProvenanceInfo {
+  hasProvenance: boolean;
+  predicateType?: string | null;
+  /** assumed: SLSA builder id, when present in the predicate. */
+  builder?: string | null;
+}
+
+/** provenance-collector-pack `UpdateInfo`. */
+export interface UpdateInfo {
+  currentTag: string;
+  latestInMajor?: string | null;
+  newestAvailable?: string | null;
+  updateAvailable: boolean;
+  /** assumed: how far behind (`patch`|`minor`|`major`); derived from tags when absent. */
+  level?: UpdateLevel | null;
+}
+
+export type UpdateLevel = 'patch' | 'minor' | 'major';
+
+/** assumed: one itemised supply-chain score deduction. */
+export interface SupplyChainDeduction {
+  reason: string;
+  points: number;
+}
+
+/** `ImageSummary.provenance` (§12). Every member optional: a check that didn't run is absent. */
+export interface ImageProvenance {
+  signature?: SignatureInfo | null;
+  sbom?: SbomInfo | null;
+  provenance?: ProvenanceInfo | null;
+  update?: UpdateInfo | null;
+  /** assumed: per-image supply-chain score; recomputed client-side when absent. */
+  score?: number | null;
+  grade?: Grade | null;
+  deductions?: SupplyChainDeduction[] | null;
+  /** assumed: tag is mutable (latest/missing) and the spec doesn't pin a digest. */
+  mutableTag?: boolean | null;
+  checkedAt?: string | null;
+}
+
+/** `GET /supply-chain`. */
+export interface SupplyChainSummary {
+  signed: number;
+  verified: number;
+  withSbom: number;
+  withProvenance: number;
+  withUpdates: number;
+  unique: number;
+  helmReleases: number;
+  helmWithUpdates: number;
+  score: number | null;
+  grade: Grade;
+}
+
+/** `GET /helm-releases` (provenance-collector-pack `HelmRecord`). */
+export interface HelmRelease {
+  releaseName: string;
+  namespace: string;
+  chart: string;
+  version: string;
+  appVersion: string;
+  status: string;
+  update?: UpdateInfo | null;
 }
 
 export interface Finding {
@@ -368,6 +456,32 @@ export interface Settings {
   organization?: string;
   remediationSlaDays?: { critical: number; high: number; medium: number; low: number };
   reports?: { autoGenerate: string[] };
+  /** §12 */
+  provenance?: ProvenanceSettings;
+  /** §13 */
+  controlsEngine?: ControlsEngineSettings;
+}
+
+export type Baseline = 'low' | 'moderate' | 'high';
+export const BASELINES: Baseline[] = ['low', 'moderate', 'high'];
+
+/** §12 `provenance.*` settings (names assumed, mirroring chart values). */
+export interface ProvenanceSettings {
+  verifySignatures: boolean;
+  cosign: { mode: 'keyless' | 'key'; publicKey?: string; certificateIdentity?: string; certificateOidcIssuer?: string };
+  checkSbom: boolean;
+  checkProvenance: boolean;
+  checkUpdates: boolean;
+  updateLevel: UpdateLevel;
+  skipPrerelease: boolean;
+  helmReleases: { enabled: boolean };
+}
+
+/** §13 `controlsEngine.*` settings (names assumed). */
+export interface ControlsEngineSettings {
+  enabled: boolean;
+  baseline: Baseline;
+  adminSubjects: string[];
 }
 
 // ── §11 reports & compliance ─────────────────────────────────────────────────
@@ -409,12 +523,58 @@ export interface ReportCreate {
   options?: { rollupByCve?: boolean; systemName?: string; includeSystemNamespaces?: boolean };
 }
 
+/** §13 control implementation status. Older APIs return `satisfied`/`not-satisfied`; normalised client-side. */
+export type ControlStatus = 'implemented' | 'partial' | 'not-implemented' | 'inherited' | 'not-applicable' | 'unknown';
+export type AssertionStatus = 'pass' | 'fail' | 'unknown' | 'not-applicable';
+
+export interface ControlAssertion {
+  id: string;
+  title: string;
+  status: AssertionStatus | string;
+  evidence?: unknown;
+  checkedAt?: string | null;
+  /** assumed: one-line human summary (`detail` from evaluate()). */
+  detail?: string | null;
+}
+
+/** `GET /compliance/controls` (§11 shape extended by §13; new fields optional). */
 export interface ControlCoverage {
   control: string;
   title: string;
   findingsOpen: number;
   checksFailed: number;
   status: string;
+  family?: string | null;
+  /** lowest baseline containing the control (`low`…), or a list of baselines; null = not in a baseline. */
+  baseline?: string | string[] | null;
+  components?: string[];
+  assertions?: ControlAssertion[];
+}
+
+/** `GET /compliance/families`. */
+export interface FamilyRollup {
+  family: string;
+  title: string;
+  implemented: number;
+  partial: number;
+  notImplemented: number;
+  inherited: number;
+  notApplicable: number;
+  unknown: number;
+}
+
+/** `GET /compliance/assertions`. */
+export interface Assertion extends ControlAssertion {
+  controls: string[];
+  component: string;
+  severity?: string;
+}
+
+/** `POST /compliance/assertions/run` 202 body (assumed). */
+export interface AssertionRun {
+  status: string;
+  startedAt?: string | null;
+  id?: string | number | null;
 }
 
 export type StigCat = 'I' | 'II' | 'III';
