@@ -98,7 +98,87 @@
   `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
   never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
 
-## Grace deployment status (2026-10-03, phase 2)
+## Grace deployment status (2026-10-03, hardened pack)
+
+- Deployed: chart `nebari-security-posture-pack-0.1.0` (this repo), helm revision 16, images
+  `cc63640-1791050439` (api, worker, ui; the report-worker and the hook Jobs run the api image).
+  Rev 13 (319c484) replaced rev 12 (`provenance-collector-0.2.0` from the fork) with a plain
+  `helm upgrade`: no uninstall, no `nameOverride` (the fullname collapses to the release name and
+  the selector label `app.kubernetes.io/name: nebari-security-posture-pack` was already the old
+  chart's); PVCs, DB and the `-db` Secret were kept (DB not reset). Revs 14-16 carried the fixes below.
+- Upgrade path: the hooks ran (ensure-secrets patched `security-posture-db`, created
+  `security-posture-compat-token`). On rev 13 the migrate hook could not reach Postgres (the
+  *old* NetworkPolicy admits only api/worker/clair; hooks run before the new one is applied) and
+  exited 0 after its 120 s wait; the api `migrate` init container applied `0004_ops_scale` and
+  `0005_control_status_detail`, and the report-worker logged one loop error (missing column) before
+  that. From rev 14 on the migrate hook connects (`migrate.done`). One-time effect of upgrading
+  from a pre-hook chart.
+- Fixed during the deploy: backup PVC stayed Pending under WaitForFirstConsumer and `helm --wait`
+  hung (9d2f941; rev 13 was unblocked with a manual backup Job); metrics gauges took targeted event
+  scans as "latest scan" (5ba5d13); `vuln_rollup.kev` always false (255202d); `pack-scan-recent` /
+  `pack-poam-current` judged event scans (0254df4, cc63640); grace values need
+  `allowMasterFallback: true` since M4, else all 12 kc-* assertions were unknown (d6cc06e).
+- Security fixes, observed live: api, ui and report-worker pods (SA `security-posture-api`) have no
+  `/var/run/secrets/kubernetes.io/serviceaccount`; `can-i list secrets -A`: api no, scanner no,
+  controls yes (`iUnderstandClusterSecretsRead`); NetworkPolicies `worker-egress` and
+  `workers-ingress` present; compat listener from a Grafana pod in `observability`: no token 401,
+  wrong token 401, token 200 (69 KB); from `default` with the token: connection timeout;
+  anonymous -> 302 to Keycloak; alice -> 403 (gateway); admin -> 200; cookie POST with
+  `Origin: https://evil.example` -> 403 `cross-site request blocked`, same-origin -> 202; UI and
+  API responses carry CSP `frame-ancestors 'none'`, XFO DENY, nosniff, Referrer-Policy,
+  Permissions-Policy, COOP (no HSTS from nginx).
+- Scheduler: `scheduler.next_scan due=<max(started_at) of done full scans> + 6h` (to the
+  microsecond of scan 10, later scan 13), not worker start. Event scans (pod watcher) run and do not
+  move it.
+- Scan #13 (manual, force, 17:23:50-17:41:00 UTC, 17m10s: scan stage 13m57s, privileged stage
+  3m13s): 80 images, 80 scored, 0 failed; trivy/grype/Clair 80/80 each. Split hand-off seen in the
+  logs: worker `status=scanned` -> worker-privileged `scan.finalize`, provenance, `done`, controls
+  run, 6 reports auto-queued. Cluster 30.4 F (vulnerability 8.1, configuration 76.2, supply chain
+  43.0 F); 781 C / 6,915 H / 12,411 M / 3,550 L; checks 1,248 pass / 468 fail. KEV exposure: 10
+  findings, 7 CVEs, all past due (catalog 2026.10.02). `mirrorDigestVerified` 54/80: 13 Docker Hub
+  images hit 429 during the forced re-mirror (cached single-platform copies no longer match the
+  index digest, the re-copy is rate-limited, scanned from the original ref), 9 `localhost:32000`
+  images are scanned in place (flag false by definition), 4 are mirrored by digest but have no
+  image digest recorded (flag false). Provenance: 13 signed, 5 verified, 3 SBOM, 28 provenance,
+  23 registry errors (Docker Hub 429; scan 11 an hour earlier had 19/10/36/0).
+- Storage: raw JSON gzip for all 240 image_scans rows (trivy 10 MB gz / 132 MB raw, grype 6.9 / 119,
+  Clair 4.2 / 25); the dask-kubernetes-operator image's trivy (43 MB) and grype (59 MB) outputs
+  exceed `RAW_MAX_GZ_BYTES` and are stored as valid `{"truncated": true, ...}` summaries.
+  `vuln_rollup` 7,984 rows. `/vulnerabilities` page 1: 63-79 ms, 25 KB; `?kev=true` 7 CVEs.
+  `/images/28` (10,466 findings) page 1 257 ms / 46 KB, page 2 149 ms.
+- Control evidence (MODERATE, run 14, 39 assertions: 17 pass / 21 fail / 1 unknown
+  `k8s-api-audit-logging`): 287 controls = 2 passing (AC-6(5), RA-5(2)), 5 hybrid, 8 partial,
+  32 failing, 0 inherited, 5 org-provided-unverified (PE), 0 not-applicable, 235 not assessed
+  (catalog view 288: + AC-6(8) failing). CONTROLS.md's re-derived prediction was 2/5/8/31/5/236/0;
+  the extra failing control has no per-control list to diff against; 5 baseline controls fail on
+  scan posture-check evidence alone (AC-4, CM-2, SC-5, SC-39, SI-7). CRM 287 rows (org 199,
+  customer 46, shared 38, provider 4). `/compliance/stig`: 92 Kubernetes STIG rows, no SRG rows,
+  90 Not_Reviewed / 2 Open; V-242383 Not_Reviewed; V-233234 (SRG) Not_Reviewed in a checklist
+  generated with `includeSrg`.
+- Reports (report-worker pod, one at a time, `report.processed` logged): POA&M xlsx 10 s, STIG
+  cklb 8 s, SAR pdf 122 s, OSCAL AR 18 s (26 MB), SSP 9 s, OSCAL POA&M 9 s, CRM 8 s. OSCAL AR,
+  POA&M and SSP validate against the 1.1.2 schemas in the test fixtures with 0 errors; SSP
+  `import-profile` = NIST MODERATE profile, 11 `set-parameters`; POA&M xlsx 101 items (66 SI-2
+  vulnerability groups, 21 control-assertion, 14 posture-check), was 24k-row scale before.
+  Retention was not exercised (max 15 per type, 1.0 GB total, below 20 / 2 GiB): no pruning log.
+- Monitoring: Prometheus scrapes api (:8000) and the three worker pods (:9000), all `up=1`;
+  `posture_scan_images` 80/80/0 after 5ba5d13; PrometheusRule loaded (5 rules, health ok);
+  `PostureReportFailed` fires on 9 failed reports from 00:33-00:48 (pre-hardening OOM/restart
+  orphans), clears 24 h later.
+- Backup: CronJob present; two manual runs wrote 87 MB / 112 MB dumps; the 03:17 schedule not yet observed.
+- Known issues / not verified: Docker Hub 429 (needs `registryAuth.existingSecret`); retention
+  pruning; scheduled-scan execution under the new scheduler (next due 23:23:50 UTC); reports
+  requested while an event scan is newest are stamped with that scan id (#15), not the last full
+  scan; event scans re-run provenance for all images (~3 min); the UI has no CRM tab (report
+  only); Keycloak view-only client (M4) not set up, grace uses the master super-admin;
+  Grafana Infinity datasource not yet given the bearer token.
+- Grace hazard: creating or removing a docker network adds/removes a host IP; MicroK8s
+  `apiserver-kicker` then regenerates certs and restarts kubelite and containerd, killing every
+  pod for ~40 s (2026-10-03 00:45). Use `--network host`; leave `sp-shots` alone.
+- Capacity: node memory requests ~99% allocated; root filesystem 29 GB free (93%) after pruning
+  superseded local images.
+
+## Grace deployment status (2026-10-03, phase 2; superseded by the section above)
 
 - Deployed: api/worker `10f6df7-1790990443` (phase 2: §12 provenance + §13 control evidence
   engine, `extraCACerts`), ui `72a5e81-1790990739` (findings pagination). Migrations
