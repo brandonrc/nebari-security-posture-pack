@@ -491,3 +491,75 @@ back to the `kubernetes.io/os` nodeSelector) and the effective `windowsOptions.h
 - `run-as-root` fails only for an explicit `runAsUserName: ContainerAdministrator`. It is n/a when the image default user applies, because `runAsUser` does not exist on Windows.
 - `privileged` fails on `hostProcess: true`, which is the Windows equivalent of privileged.
 - SCORING.md's check table still describes Linux semantics only. Add a Windows column when the doc is next revised.
+
+## 2026-10-05: scan accounting, post-scan stage scoping, event-scan hygiene
+
+Observed on grace over 48 h: scheduled scans (every 6 h, `rescanAfterHours` 24) rescanned only
+stale images, so the scan row read `images_total: 0` (scans 20, 21, 24) or `1` (25) with ~80
+images deployed; every scan, including each event scan, still re-ran the provenance stage over
+all ~85 images (3 min), a full controls-engine run and 6 auto-reports (scans 30-33: four times
+in 7 min); event scans fired for CronJob pods (`bitnami/postgresql:latest` backups) and
+short-lived verify pods.
+
+- **Scan accounting** (migration `0006_scan_accounting`): `scans.images_inventoried`,
+  `images_rescanned`, `images_skipped_fresh`, `images_targeted` (nullable; null = older row),
+  exposed as `imagesInventoried` / `imagesRescanned` / `imagesSkippedFresh` / `imagesTargeted`
+  on `/scans` and `/scans/{id}`. `images_total` keeps its meaning (images the scan attempted;
+  `progress` denominator). The snapshot already covered the whole inventory (`_persist_snapshot`
+  aggregates every image of `key_to_id`, rescanned or not); a regression test now pins it
+  (`test_scan_accounting.py`). UI: "68 rescanned · 12 fresh · 80 in inventory"; event scans
+  "3 targeted · 1 rescanned · 2 fresh" (`ui/src/lib/scan-counts.ts`).
+- **Hashes on the scan row**: `inventory_hash` = sha256 of the sorted unique image keys;
+  `posture_hash` = sha256 of (namespace, workload kind, workload name, container, container
+  type, security context) per container. Pod names, replica counts and image digests are left
+  out, so restarts and image rollouts keep the posture hash.
+- **Provenance scoping**: the stage registry-checks only the images (re)scanned by this scan,
+  plus images without a reusable previous result (never checked, last check errored, check
+  configuration changed). A forced full scan (`force` and no targets) checks everything. Every
+  other inventory image is *carried*: its previous `image_provenance` row is copied into the
+  scan (`details.carried`, `details.carriedFromScan`) without a registry call, so
+  `/supply-chain`, the compat report and the supply-chain score still cover the whole inventory
+  and the 10-scan row retention never drops a long-fresh image. Trade-off: per-tag update checks
+  (new upstream tags) refresh when the image is rescanned, i.e. once per `rescanAfterHours`,
+  instead of on every scan. Helm release discovery still runs every scan (one Secrets list).
+  Split workers carry the scope in the inventory hand-off (`provenanceScope`); a hand-off from an
+  older scan worker without it means "check all".
+- **Controls engine** after a done scan: always after a full (untargeted) scan; after a
+  targeted / event scan only when `posture_hash` differs from the previous done scan's (or
+  either is unknown). Otherwise it is skipped with a log line (`controls.skipped`, and in the
+  scan log). On-demand runs (`POST /compliance/assertions/run`) are unchanged.
+- **Auto-reports** (`reports.autoGenerate`): never after targeted / event scans; after a full
+  scan only when it rescanned at least one image or its `inventory_hash` differs from the
+  previous done full scan's. Skips are logged (`reports.auto_skipped`, scan log).
+- **Metrics**: `posture_scan_image_selection_total{trigger,result=rescanned|skipped_fresh}`,
+  `posture_provenance_images_total{result=checked|carried}`,
+  `posture_post_scan_stage_total{stage=controls|reports,action=run|skipped}`, and
+  `posture_scan_images{status=inventoried|rescanned|skipped_fresh}` for the latest full scan.
+- **Event-scan hygiene** (chart `scanner.events.*`):
+  - `includeJobs` / `EVENT_SCANS_INCLUDE_JOBS` (false): pods with a Job / CronJob owner are
+    ignored. The scheduled scan still covers their images.
+  - `minPodAgeSeconds` / `EVENT_SCANS_MIN_POD_AGE_SECONDS` (120): a younger pod is held until it
+    reaches that age (from `creationTimestamp`) and dropped on its DELETED event. Pods that
+    already terminated (Succeeded / Failed) are ignored. Pods without a timestamp count as old.
+  - `debounceSeconds` / `EVENT_SCANS_DEBOUNCE_SECONDS` (300, was 60): at most one event scan per
+    interval across namespaces. The chart value now maps to this variable. The old
+    `EVENT_SCAN_DEBOUNCE_SECONDS` (60) stays as the collection window after the first new
+    digest and is no longer set by the chart.
+  - No event scan while a full scan is in flight: a queued full scan absorbs the new digests
+    (its inventory sees them; nothing is queued). With a running full scan the digests wait,
+    re-checked every 30 s; once it finished, digests it scanned are dropped and the rest go into
+    one event scan. ("Merging" into a running full scan is not possible after its inventory
+    was taken.)
+- **Expected effect on grace** (4 scheduled scans/day, K event scans/day before the change):
+  - Provenance registry passes: before, 4 + K full passes/day (~85 images, ~3 min each). After,
+    each image is re-checked about once per day, when it goes stale (~85 checks/day in total,
+    plus new digests); scans with nothing rescanned finish the stage in seconds.
+  - Auto-reports: before, 6 per scan (24/day from scheduled scans alone, plus the burst seen
+    with scans 30-33). After, 6 only for scheduled scans that rescanned something or saw a
+    different image set. On the observed pattern (3 of 4 scheduled scans rescanned 0), that is
+    roughly 6-12 per day.
+  - Controls engine: before, 4 + K runs/day. After, 4 plus the event scans that add a workload or
+    change a securityContext.
+  - Event scans: CronJob pods and verify pods no longer trigger them, and bursts collapse into one
+    per 5 min, so K should drop to a handful a day, around deployments.
+

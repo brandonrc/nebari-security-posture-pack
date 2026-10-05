@@ -22,6 +22,9 @@ Process metrics (reset on restart; use `rate()` / `increase()`), recorded where 
 | `posture_scan_images_deferred_total` | | scan worker (SCAN_MAX_IMAGE_GB admission) |
 | `posture_grype_db_updates_total` | `status` | scan worker |
 | `posture_event_scans_total` | | scan worker (pod watcher) |
+| `posture_scan_image_selection_total` | `trigger`, `result` = rescanned \| skipped_fresh | scan worker (per scan: images scanned now vs still fresh) |
+| `posture_provenance_images_total` | `result` = checked \| carried | privileged worker (registry check vs previous result reused) |
+| `posture_post_scan_stage_total` | `stage` = controls \| reports, `action` = run \| skipped | privileged worker |
 | `posture_image_cache_bytes` | | scan worker (`MIRROR_MODE=local`) |
 | `posture_report_duration_seconds`, `posture_reports_generated_total` | `type`, `status` | report-worker |
 
@@ -33,7 +36,7 @@ which pod is scraped:
 |---|---|
 | `posture_last_successful_scan_timestamp_seconds` | finish time of the newest `done` full scan (0 = never) |
 | `posture_scan_interval_seconds` | settings `scanIntervalHours` |
-| `posture_scan_images{status=total\|done\|failed}` | latest done full scan (targeted event / image rescans are ignored) |
+| `posture_scan_images{status=total\|done\|failed\|inventoried\|rescanned\|skipped_fresh}` | latest done full scan (targeted event / image rescans are ignored); see "Reading scan counts" |
 | `posture_scan_scanner_results{scanner,result=ok\|error}` | per-image scanner results of the latest done full scan |
 | `posture_scanner_db_age_seconds{scanner}`, `posture_scanner_healthy{scanner}` | `scanner_status` |
 | `posture_queue_depth{kind}`, `posture_queue_running{kind}`, `posture_queue_oldest_age_seconds{kind}` | `kind` = scans, reports, controls |
@@ -56,6 +59,42 @@ Scrape config: the chart's `ServiceMonitor` / `PodMonitor` (see DECISIONS "needs
 
 The DB gauges are reported by every process: aggregate them with `max()` (or scrape only the
 api for them).
+
+## Reading scan counts
+
+A scan row (`GET /api/v1/scans`, the Scans page) carries five image counts. With the defaults
+(`scanIntervalHours` 6, `rescanAfterHours` 24) most scheduled scans rescan only the images whose
+last scan is older than 24 h, so `imagesTotal` alone is misleading (0 or 1 on grace while the
+inventory held ~80 images).
+
+| Field (column) | Meaning |
+|---|---|
+| `imagesInventoried` (`images_inventoried`) | unique images in the scan's inventory snapshot. The snapshot, workload/namespace scores and the cluster score always cover all of them, including images that were not rescanned (their last results are reused) |
+| `imagesRescanned` | images scanned by this scan: stale, forced or targeted. Equals `imagesDone` once the scan finished |
+| `imagesSkippedFresh` | candidates skipped because their last scan is still fresh (`rescanAfterHours`) |
+| `imagesTargeted` | event / targeted scans only: images in the target namespaces or ids (null for full scans) |
+| `imagesTotal` | images this scan attempted (= rescanned), the denominator of `progress` |
+
+The Scans page shows full scans as "68 rescanned · 12 fresh · 80 in inventory" and event scans
+as "3 targeted · 1 rescanned · 2 fresh". Rows from before migration `0006_scan_accounting` show
+"done/total". Healthy patterns:
+
+- **0 rescanned · 80 fresh · 80 in inventory** on a scheduled scan: normal; everything was
+  scanned within `rescanAfterHours`. The scan still writes a full snapshot and runs the controls
+  engine, but skips `reports.autoGenerate` (log: "auto-reports skipped: no image rescanned and
+  inventory unchanged") and re-checks provenance for no image (log: "0 checked, 80 carried").
+- **N rescanned** on one scheduled scan per day: the images first scanned together go stale
+  together. Provenance re-checks exactly those N images (plus any image never checked).
+- **Event scan, 0 rescanned**: the new digest was scanned meanwhile (e.g. by a full scan).
+  Event scans never queue reports; the controls engine runs only when a workload appeared or a
+  securityContext changed (log: "controls engine skipped: ..." otherwise).
+- **Many event scans in a row**: should not happen any more. The pod watcher queues at most one
+  per `EVENT_SCANS_DEBOUNCE_SECONDS` (300), none while a full scan is queued or running, and
+  ignores Job / CronJob pods (`EVENT_SCANS_INCLUDE_JOBS`), terminated pods and pods younger than
+  `EVENT_SCANS_MIN_POD_AGE_SECONDS` (120).
+
+To force a full re-check of every image (CVE scanners and provenance), `POST /api/v1/scans`
+with `{"force": true}`.
 
 ## Alert rules
 
