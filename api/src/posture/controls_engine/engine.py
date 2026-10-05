@@ -18,6 +18,10 @@ Status vocabulary (evidence status, never an assessment result; compliance revie
                            (`controlsEngine.commonControlProviders`)
   not-applicable           tailored out by the AO-approved `controlsEngine.notApplicable` only
 
+Risk acceptances (`controlsEngine.exceptions`, exceptions.py): an assertion whose only failures are
+accepted reports `accepted-risk`; its objectives are `risk-accepted` (neither satisfied nor
+failing), so a control evidenced by it is at most `partial` and never `passing`.
+
 Derivation order: tailoring, common control provider, objective evidence, org-provided, not-assessed.
 Assertions map to controls through their own `controls` (objective tags in `objectives`) and through
 component `implemented-requirements[].assertions`.
@@ -40,7 +44,7 @@ from .assertions import all_assertions
 from .catalog import Catalog, get_catalog, objective_control, to_label, to_oscal_id
 from .components import Component, load_components, requirements_by_control
 from .context import EngineConfig, EngineContext, EngineError, K8sForbidden, NotConfigured
-from .model import FAIL, NA, PASS, UNKNOWN, Assertion
+from .model import ACCEPTED, FAIL, NA, PASS, UNKNOWN, Assertion
 
 log = get_logger(__name__)
 
@@ -54,6 +58,7 @@ ROLLUP_KEYS = {PASSING: "passing", PARTIAL: "partial", FAILING: "failing", HYBRI
 # objective evidence states
 OBJ_SATISFIED, OBJ_NOT_SATISFIED, OBJ_UNKNOWN, OBJ_ASSIGNED, OBJ_NONE = (
     "satisfied", "not-satisfied", "unknown", "assigned", "no-evidence")
+OBJ_RISK_ACCEPTED = "risk-accepted"
 KEEP_RUNS = 100
 DEFAULT_ORG_STATEMENT = ("Expected to be provided by the organization (policy, procedures, personnel, training or "
                          "physical safeguards). UNVERIFIED: no common control provider or authorization is "
@@ -224,6 +229,8 @@ def _objective_states(label: str, cat: Any, results: list[Outcome], amap_obj: di
         sts = {r.status for r in rs}
         if FAIL in sts:
             state = OBJ_NOT_SATISFIED
+        elif ACCEPTED in sts:  # never satisfied; not failing evidence either
+            state = OBJ_RISK_ACCEPTED
         elif sts == {PASS}:
             state = OBJ_SATISFIED
         elif sts:  # unknown (possibly next to a pass): not fully evidenced
@@ -323,7 +330,7 @@ def derive_statuses(outcomes: list[Outcome], *, baseline: str = "moderate",
                             in_baseline=bool(cat and cat.in_baseline(baseline)), status=NOT_ASSESSED,
                             components=comps, assertions=ids, responsibility=responsibility_of(label, declared, cat))
         results = [by_id[i] for i in ids]
-        evaluated = [r for r in results if r.status in (PASS, FAIL, UNKNOWN)]
+        evaluated = [r for r in results if r.status in (PASS, FAIL, UNKNOWN, ACCEPTED)]
         if scan_items:  # M3: scan results are evidence too (failing posture checks, open/overdue findings)
             res.inputs = dict((scan.get(label) or {}).get("inputs") or {})
             for it in scan_items:
@@ -386,6 +393,7 @@ def _status_from_objectives(res: ControlResult, evaluated: list[Outcome]) -> Non
     bad = sum(o["state"] == OBJ_NOT_SATISFIED for o in objs)
     unk = sum(o["state"] == OBJ_UNKNOWN for o in objs)
     asg = sum(o["state"] == OBJ_ASSIGNED for o in objs)
+    acc = sum(o["state"] == OBJ_RISK_ACCEPTED for o in objs)
     real = [r for r in evaluated if not r.id.startswith("scan:")]
     p = sum(r.status == PASS for r in real)
     f = sum(r.status == FAIL for r in real)
@@ -395,17 +403,20 @@ def _status_from_objectives(res: ControlResult, evaluated: list[Outcome]) -> Non
     cov = f"{sat} of {m} objective(s) with passing evidence"
     if asg:
         cov += f", {asg} assigned to the program/organization"
+    if acc:
+        cov += f", {acc} with accepted risk (controlsEngine.exceptions)"
     tail = f" ({p} assertion(s) pass, {f} fail, {u} unknown" + (
         "; scan: " + "; ".join(r.detail for r in scan_fail) if scan_fail else "") + ")"
     if bad and not sat:
         res.status, res.detail = FAILING, f"{cov}; {bad} objective(s) with failing evidence" + tail
     elif not sat:
         res.status = NOT_ASSESSED
-        res.detail = f"no passing evidence: {unk} objective(s) could not be evaluated" + tail
-    elif bad or unk or sat + asg < m:
+        res.detail = (f"no passing evidence: {unk} objective(s) could not be evaluated"
+                      + (f", {acc} with accepted risk" if acc else "") + tail)
+    elif bad or unk or acc or sat + asg < m:
         res.status = PARTIAL
         res.detail = f"partial: {cov}" + (f"; {bad} failing" if bad else "") + (f"; {unk} unknown" if unk else "") \
-            + tail
+            + (f"; {acc} risk accepted" if acc else "") + tail
     elif asg:
         res.status, res.detail = HYBRID, f"platform part passing: {cov}" + tail
     else:
@@ -437,7 +448,7 @@ def summarize(statuses: list[ControlResult], outcomes: list[Outcome], baseline: 
                            "assessed": len(objs),
                            "baseline": sum(len(get_catalog().get(s.control).objective_ids) for s in in_b
                                            if get_catalog().get(s.control))},
-            "assertions": {st: sum(o.status == st for o in outcomes) for st in (PASS, FAIL, UNKNOWN, NA)}}
+            "assertions": {st: sum(o.status == st for o in outcomes) for st in (PASS, FAIL, UNKNOWN, NA, ACCEPTED)}}
 
 
 # ------------------------------------------------------------------------- config / snapshot
@@ -475,6 +486,7 @@ def engine_config(env: Any, st: Any) -> EngineConfig:
         cfg.min_lockout_seconds = int(eff["minLockoutSeconds"])
         cfg.require_admin_release = bool(eff["requireAdminRelease"])
     cfg.approved_issuers = list(getattr(ce, "approved_issuers", None) or [])
+    cfg.exceptions = list(getattr(ce, "exceptions", None) or [])
     return cfg
 
 
@@ -515,10 +527,13 @@ async def load_snapshot(session: AsyncSession, st: Any | None = None) -> dict[st
         .where(Image.running.is_(True), ConsensusFindingRow.open_filter())
         .group_by(ConsensusFindingRow.fixable))).all()}
     snap["slaOverdue"] = await compute_sla_overdue(session, st.remediation_sla_days.model_dump())
-    snap["postureFailures"] = [
-        {"checkId": r.check_id, "namespace": r.namespace, "kind": r.kind, "name": r.name, "severity": r.severity}
-        for r in (await session.execute(select(PostureResultRow).where(
-            PostureResultRow.scan_id == last.id, PostureResultRow.status == "fail"))).scalars()]
+    snap["postureFailures"], snap["postureAccepted"] = [], []
+    for r in (await session.execute(select(PostureResultRow).where(
+            PostureResultRow.scan_id == last.id, PostureResultRow.status.in_(("fail", "accepted-risk"))))).scalars():
+        # accepted-risk results (controlsEngine.exceptions) are not failing scan evidence
+        snap["postureFailures" if r.status == "fail" else "postureAccepted"].append(
+            {"checkId": r.check_id, "namespace": r.namespace, "kind": r.kind, "name": r.name, "severity": r.severity,
+             "detail": r.detail})
     snap["inventory"] = {
         "containers": int(await session.scalar(select(func.count()).select_from(ContainerRow)
                                                .where(ContainerRow.scan_id == last.id)) or 0),

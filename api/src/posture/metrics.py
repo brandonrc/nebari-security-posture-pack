@@ -193,7 +193,7 @@ async def _refresh(session: AsyncSession) -> None:
                 .group_by(ControlAssertionResult.status))).all():
                 ASSERTIONS.labels(status).set(n)
                 seen.add(status)
-        for status in ("pass", "fail", "unknown", "not-applicable"):
+        for status in ("pass", "fail", "unknown", "not-applicable", "accepted-risk"):
             if status not in seen:
                 ASSERTIONS.labels(status).set(0)
     await session.rollback()  # read-only; release the snapshot

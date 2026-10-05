@@ -10,7 +10,10 @@ if TYPE_CHECKING:
     from .context import EngineContext
 
 PASS, FAIL, UNKNOWN, NA = "pass", "fail", "unknown", "not-applicable"
-ASSERTION_STATUSES = (PASS, FAIL, UNKNOWN, NA)
+# every failure the assertion found is covered by an active risk acceptance (controlsEngine.exceptions);
+# never counted as a pass (exceptions.py)
+ACCEPTED = "accepted-risk"
+ASSERTION_STATUSES = (PASS, FAIL, UNKNOWN, NA, ACCEPTED)
 SEVERITIES = ("critical", "high", "medium", "low")
 
 
@@ -39,6 +42,10 @@ def unknown(detail: str, **evidence: Any) -> Result:
 
 def not_applicable(detail: str, **evidence: Any) -> Result:
     return Result(NA, detail, evidence)
+
+
+def accepted_risk(detail: str, **evidence: Any) -> Result:
+    return Result(ACCEPTED, detail, evidence)
 
 
 Evaluate = Callable[["EngineContext"], Awaitable[Result]]

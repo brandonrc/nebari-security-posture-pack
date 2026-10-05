@@ -7,7 +7,8 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from ..context import EngineContext
-from ..model import Result, assertion, failed, not_applicable, passed, unknown
+from ..exceptions import find as find_exception
+from ..model import Result, accepted_risk, assertion, failed, not_applicable, passed, unknown
 
 C = "kubernetes"
 PSA_ENFORCE = "pod-security.kubernetes.io/enforce"
@@ -268,21 +269,58 @@ async def api_audit(ctx: EngineContext) -> Result:
            controls=["AC-6", "CM-7"], objectives=["ac-6_obj", "cm-7_obj.a"], component=C, severity="high")
 async def workload_least_privilege(ctx: EngineContext) -> Result:
     """From the latest scan's posture checks: no non-system workload fails `privileged`,
-    `host-namespaces`, `host-path`, `added-capabilities` or `privilege-escalation`."""
+    `host-namespaces`, `host-path`, `added-capabilities` or `privilege-escalation`. A workload whose
+    failures are all covered by an active risk acceptance (`controlsEngine.exceptions`: the posture
+    result is `accepted-risk`, or the exception lists this assertion) is listed as accepted; with
+    only accepted workloads left the result is `accepted-risk`, never `pass`."""
     snap = ctx.snapshot
     if snap is None:
         return unknown("scan evidence unavailable (posture database not readable)")
     if not snap.get("lastDoneScan"):
         return unknown("no completed scan yet (posture checks unavailable)")
-    fails = [f for f in snap.get("postureFailures") or [] if f.get("checkId") in LEAST_PRIVILEGE_CHECKS
-             and not ctx.is_system_namespace(f.get("namespace", ""))]
-    by_check: dict[str, int] = {}
-    workloads = sorted({f"{f['namespace']}/{f['kind']}/{f['name']}" for f in fails})
+
+    def relevant(f: dict[str, Any]) -> bool:
+        return f.get("checkId") in LEAST_PRIVILEGE_CHECKS and not ctx.is_system_namespace(f.get("namespace", ""))
+
+    fails = [f for f in snap.get("postureFailures") or [] if relevant(f)]
+    pre_accepted = [f for f in snap.get("postureAccepted") or [] if relevant(f)]
+    key = lambda f: f"{f['namespace']}/{f['kind']}/{f['name']}"  # noqa: E731
+    open_fails, accepted = [], list(pre_accepted)
+    lapsed: dict[str, str] = {}
+    by_exc: dict[str, Any] = {}
     for f in fails:
+        act, exp = find_exception(ctx.config.exceptions, f["kind"], f["namespace"], f["name"],
+                                  assertion="k8s-workload-least-privilege")
+        if act is not None:
+            accepted.append(f)
+            by_exc[key(f)] = act
+        else:
+            open_fails.append(f)
+            if exp is not None and exp.expires_at is not None:
+                lapsed[key(f)] = exp.expires_at.isoformat()
+    for f in pre_accepted:
+        act, _ = find_exception(ctx.config.exceptions, f["kind"], f["namespace"], f["name"], check=f["checkId"])
+        if act is not None:
+            by_exc.setdefault(key(f), act)
+    by_check: dict[str, int] = {}
+    workloads = sorted({key(f) for f in open_fails})
+    for f in open_fails:
         by_check[f["checkId"]] = by_check.get(f["checkId"], 0) + 1
+    acc_workloads = sorted({key(f) for f in accepted} - set(workloads))
     ev = {"scanId": snap["lastDoneScan"].get("id"), "failuresByCheck": by_check, "workloads": workloads[:100],
-          "workloadCount": len(workloads)}
-    if fails:
+          "workloadCount": len(workloads),
+          "acceptedRisk": [{"workload": w, "checks": sorted({f["checkId"] for f in accepted if key(f) == w}),
+                            **({"reason": by_exc[w].reason, "approvedBy": by_exc[w].approved_by,
+                                "expiresAt": by_exc[w].expires_at.isoformat() if by_exc[w].expires_at else None,
+                                "reviewBy": by_exc[w].review_by.isoformat() if by_exc[w].review_by else None,
+                                "ticket": by_exc[w].ticket} if w in by_exc else {})}
+                           for w in acc_workloads[:100]],
+          **({"lapsedAcceptances": lapsed} if lapsed else {})}
+    acc_txt = f"; {len(acc_workloads)} workload(s) with accepted risk ({', '.join(acc_workloads[:5])})" \
+        if acc_workloads else ""
+    if open_fails:
         return failed(f"{len(workloads)} workload(s) fail least-privilege checks ("
-                      + ", ".join(f"{k}: {v}" for k, v in sorted(by_check.items())) + ")", **ev)
+                      + ", ".join(f"{k}: {v}" for k, v in sorted(by_check.items())) + ")" + acc_txt, **ev)
+    if acc_workloads:
+        return accepted_risk(f"no unaccepted least-privilege failure (scan {ev['scanId']})" + acc_txt, **ev)
     return passed(f"no non-system workload fails least-privilege checks (scan {ev['scanId']})", **ev)

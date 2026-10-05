@@ -85,6 +85,7 @@ class EngineConfig:
     min_lockout_seconds: int = 1800  # AC-7 b: minimum lockout duration
     require_admin_release: bool = False  # AC-7 b (DoD): locked until released by an administrator
     approved_issuers: list[str] = field(default_factory=list)  # SC-17: ClusterIssuers chaining to approved CAs
+    exceptions: list[Any] = field(default_factory=list)  # risk acceptances (exceptions.RiskException)
     # services ("" = discover)
     loki_url: str = ""
     prometheus_url: str = ""

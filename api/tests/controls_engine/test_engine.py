@@ -164,7 +164,7 @@ def test_rollup_and_summary():
     assert ac["total"] == sum(ac[k] for k in engine.ROLLUP_KEYS.values())
     assert sum(f["total"] for f in fam.values()) == len(get_catalog().baseline("moderate"))
     sm = summarize(rows, outs, "moderate")
-    assert sm["controls"] == 287 and sm["assertions"] == {"pass": 2, "fail": 1, "unknown": 0, "not-applicable": 0}
+    assert sm["controls"] == 287 and sm["assertions"] == {"pass": 2, "fail": 1, "unknown": 0, "not-applicable": 0, "accepted-risk": 0}
     # dict input (API rows) works too
     assert family_rollup([{"family": "AC", "status": "passing", "inBaseline": True}])[0]["passing"] == 1
     assert sm["objectives"]["baseline"] > sm["objectives"]["assessed"] >= sm["objectives"]["evidenced"] > 0
