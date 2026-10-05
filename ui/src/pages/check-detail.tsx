@@ -43,7 +43,7 @@ export function CheckDetailPage() {
   const { id = '' } = useParams();
   const { data: check, error, isLoading, refetch } = useCheck(id);
   const [state, update] = useUrlState({ all: '' });
-  const results = check ? (state.all ? check.results : check.results.filter((r) => r.status === 'fail')) : [];
+  const results = check ? (state.all ? check.results : check.results.filter((r) => r.status !== 'pass')) : [];
 
   return (
     <>
@@ -60,6 +60,11 @@ export function CheckDetailPage() {
               <Meta label="Category">{check.category}</Meta>
               <Meta label="Results">
                 <PassFailBar passed={check.passed} failed={check.failed} />
+                {check.acceptedRisk ? (
+                  <span className="mt-1 block text-xs text-muted-foreground" title="Failing results covered by an approved risk acceptance (controlsEngine.exceptions): listed, no score penalty, never a pass">
+                    + {check.acceptedRisk} accepted risk
+                  </span>
+                ) : null}
               </Meta>
               <Meta label="NIST 800-53">
                 <ControlChips controls={check.controls} max={4} />

@@ -232,6 +232,9 @@ const STATUS_TONE: Record<string, string> = {
   'not-satisfied': 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
   pass: 'border-success-foreground/40 bg-success text-success-foreground',
   fail: 'border-destructive-foreground/40 bg-destructive text-destructive-foreground',
+  // controlsEngine.exceptions: a failing result covered by an approved risk acceptance (never a pass)
+  'accepted-risk': 'border-dashed border-warning-foreground/60 bg-warning text-warning-foreground',
+  'risk-accepted': 'border-dashed border-warning-foreground/60 bg-warning text-warning-foreground',
   // §13 control evidence / assertion statuses
   passing: 'border-success-foreground/40 bg-success text-success-foreground',
   hybrid: 'border-info-foreground/40 bg-info text-info-foreground',
@@ -263,6 +266,8 @@ const STATUS_TEXT: Record<string, string> = {
   'org-provided-unverified': 'Organization-provided (unverified)',
   'pending-upgrade': 'Pending upgrade',
   'pending-install': 'Pending install',
+  'accepted-risk': 'Accepted risk',
+  'risk-accepted': 'Risk accepted',
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {

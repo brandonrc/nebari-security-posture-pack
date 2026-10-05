@@ -283,7 +283,8 @@ export interface ScannerRun {
   error?: string | null;
 }
 
-export type CheckResultStatus = 'pass' | 'fail';
+/** `accepted-risk`: failing, covered by an approved risk acceptance (controlsEngine.exceptions); no score penalty. */
+export type CheckResultStatus = 'pass' | 'fail' | 'accepted-risk';
 
 export interface CheckResult {
   namespace: string;
@@ -454,6 +455,8 @@ export interface Check {
   remediation: string;
   passed: number;
   failed: number;
+  /** results covered by a risk acceptance (controlsEngine.exceptions); not counted in `failed`. */
+  acceptedRisk?: number;
   controls?: string[];
   stig?: StigRef | null;
 }
@@ -642,7 +645,7 @@ export type ControlStatus =
   | 'org-provided-unverified'
   | 'not-applicable'
   | 'not-assessed';
-export type AssertionStatus = 'pass' | 'fail' | 'unknown' | 'not-applicable';
+export type AssertionStatus = 'pass' | 'fail' | 'unknown' | 'not-applicable' | 'accepted-risk';
 
 export interface ControlAssertion {
   id: string;

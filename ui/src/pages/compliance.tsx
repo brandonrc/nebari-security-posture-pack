@@ -165,7 +165,8 @@ function useAssertionRun() {
       }
       const failed = list.filter((a) => a.status === 'fail').length;
       const passed = list.filter((a) => a.status === 'pass').length;
-      toast.add({ title: 'Assertions evaluated', description: `${passed} pass · ${failed} fail · ${list.length - passed - failed} unknown or n/a`, type: failed ? 'warning' : 'success' });
+      const accepted = list.filter((a) => a.status === 'accepted-risk').length;
+      toast.add({ title: 'Assertions evaluated', description: `${passed} pass · ${failed} fail${accepted ? ` · ${accepted} accepted risk` : ''} · ${list.length - passed - failed - accepted} unknown or n/a`, type: failed ? 'warning' : 'success' });
     },
     onError: (e) => toast.add({ title: 'Assertion run failed', description: errorMessage(e), type: 'error' }),
   });

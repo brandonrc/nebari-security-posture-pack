@@ -158,7 +158,7 @@ export function vulnDetail(raw: unknown): VulnDetail {
 
 export function checkDetail(raw: unknown): CheckDetail {
   const r = obj(raw);
-  return { ...(r as unknown as CheckDetail), results: arr(r.results), controls: arr(r.controls), passed: num(r.passed), failed: num(r.failed) };
+  return { ...(r as unknown as CheckDetail), results: arr(r.results), controls: arr(r.controls), passed: num(r.passed), failed: num(r.failed), acceptedRisk: num(r.acceptedRisk) };
 }
 
 export function supplyChain(raw: unknown): SupplyChainSummary {
