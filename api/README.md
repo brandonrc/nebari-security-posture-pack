@@ -156,7 +156,7 @@ docker run --rm -u 0 -v "$PWD":/src:ro -w /src --entrypoint sh security-posture-
 | `migrate.py` | `python -m posture.migrate` |
 | `inventory.py` / `inventory_model.py` | K8s API inventory: pods (containers/init/ephemeral), owner chain (RS→Deployment, Job→CronJob), NebariApp mapping, securityContext snapshot, NetworkPolicies |
 | `images.py` | image ref parsing, `imageID` normalization (`docker-pullable://`, bare `sha256:`), unique image key, rewrite map, mirror target |
-| `mirror.py` | skopeo copy (`--digestfile`) to `<mirror>/posture-mirror/<registry>/<repo>:sha256-<hex>`; scanners pull `…@<copied digest>`; a cached copy is reused only when its digest matches the source (`mirrorDigestVerified`); fallback to the original ref |
+| `mirror.py` | skopeo copy (`--digestfile`) to `<mirror>/posture-mirror/<registry>/<repo>:sha256-<hex>`; scanners pull `…@<copied digest>`; a cached copy is reused only when its digest matches the source, one of the source index's platform manifests, or the copy digest recorded when skopeo copied that source digest (`CACHE_DIR/skopeo/mirror-verified.json`, so multi-arch copies are re-verified without an upstream request) (`mirrorDigestVerified`); fallback to the original ref |
 | `scanners/` | `trivy.py` (`trivy image --server`), `grype.py` (local DB on PVC), `clair.py` (`clairctl report --out json`, generated clairctl config) → `ScanResult`; `base.run_proc`: allowlisted env, stdin `/dev/null`, own process group (SIGTERM, SIGKILL after 10 s on timeout or cancel), JSON streamed to `CACHE_DIR/tmp` and parsed from the file |
 | `correlate.py` / `analysis.py` | consensus per `(vulnId, package)`, agreement, max severity, per-image score |
 | `scoring.py` | SCORING.md formulas (pure) |

@@ -200,3 +200,17 @@ async def test_converted_config_verifies_by_diff_ids(tmp_path):
     bad.mirror.config = src_cfg
     with pytest.raises(RuntimeError, match="not part of source"):
         await bad.ensure("docker.io/coredns/coredns", d_docker, False)
+
+
+async def test_local_layout_of_multiarch_index_reused_without_upstream(tmp_path):
+    """MIRROR_MODE=local / scap stage: the layout of a multi-arch source (index digest) is reused from
+    its marker on later scans; no upstream request is made (Docker Hub 429)."""
+    c = cache(tmp_path, fake_skopeo(tmp_path), raw=INDEX)
+    layout, digest = await c.ensure("docker.io/library/alpine:3.20", I_DIGEST, False)
+    assert digest == M_DIGEST
+    c.mirror.raw = None  # upstream unreachable from now on
+    c2 = cache(tmp_path, fake_skopeo(tmp_path))
+    c2.mirror.raw = None
+    layout2, digest2 = await c2.ensure("docker.io/library/alpine:3.20", I_DIGEST, False)
+    assert (layout2, digest2) == (layout, M_DIGEST)
+    assert len((tmp_path / "calls").read_text().splitlines()) == 1

@@ -58,8 +58,12 @@ class Mirror:
     manifest digest matches the source digest (or one of the source index's platform manifests).
     """
 
+    VERIFIED_FILE = "mirror-verified.json"
+    VERIFIED_MAX = 5000
+
     def __init__(self, settings: Settings):
         self.s = settings
+        self._verified: dict[str, str] | None = None
         self.registry = settings.mirror_registry
         self.rewrite = settings.rewrite_map
         self.insecure_registries = {self.registry, *self.rewrite.values()} if settings.mirror_insecure else set()
@@ -102,20 +106,78 @@ class Mirror:
     async def exists(self, dest: str, insecure: bool) -> bool:
         return await self._raw_bytes(dest, insecure) is not None
 
+    # ------------------------------------------------------------ verified copies
+    def _verified_path(self) -> str:
+        return os.path.join(self.s.cache_dir, "skopeo", self.VERIFIED_FILE)
+
+    def _verified_map(self) -> dict[str, str]:
+        """source digest -> manifest digest of the mirror copy, recorded when skopeo copied the
+        source *by digest* (skopeo verified the pulled manifest against it) or when the copy was
+        found in the source index. Lives on the worker's cache volume, not in the mirror registry
+        (which is not trusted), so a later check needs no upstream request (Docker Hub 429)."""
+        if self._verified is None:
+            try:
+                with open(self._verified_path(), encoding="utf-8") as fh:
+                    data = json.load(fh)
+                self._verified = {str(k): str(v) for k, v in data.items()
+                                  if _DIGEST_RE.match(str(k)) and _DIGEST_RE.match(str(v))} \
+                    if isinstance(data, dict) else {}
+            except (OSError, ValueError):
+                self._verified = {}
+        return self._verified
+
+    def _record_verified(self, src_digest: str, copy_digest: str | None) -> None:
+        m = self._verified_map()
+        if copy_digest is None:
+            if m.pop(src_digest, None) is None:
+                return
+        elif m.get(src_digest) == copy_digest:
+            return
+        else:
+            m.pop(src_digest, None)
+            m[src_digest] = copy_digest  # insertion order = age; oldest dropped first
+            while len(m) > self.VERIFIED_MAX:
+                m.pop(next(iter(m)))
+        path = self._verified_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(m, fh)
+            os.replace(tmp, path)
+        except OSError as e:  # best effort: the next check falls back to the source index
+            log.warning("mirror.verified_record_failed", error=str(e))
+
     async def verify_cached(self, dest: str, dest_insecure: bool, src_ref: str, src_insecure: bool,
-                            src_digest: str) -> tuple[str | None, bool]:
-        """-> (digest of the cached copy or None when absent, matches the source)."""
+                            src_digest: str) -> tuple[str | None, str]:
+        """-> (digest of the cached copy or None when absent, verdict). Verdicts:
+        `match` (the copy is the source manifest), `recorded` (the copy is the platform manifest /
+        converted manifest skopeo wrote when it copied this source digest), `child` (listed by the
+        source index), `mismatch` (it is not), `unverifiable` (the source index could not be fetched,
+        e.g. Docker Hub 429 - not evidence of a mismatch), `absent`.
+
+        Before the record existed every reuse of a multi-arch copy re-fetched the source index; when
+        that fetch was rate limited the copy was reported as "did not match source digest" and
+        re-copied, which hit the same rate limit (grace scan #43, alpine:3.20 / postgres:16-alpine)."""
         cached = await self._raw_bytes(dest, dest_insecure)
         if cached is None:
-            return None, False
+            return None, "absent"
         cached_digest = _sha256(cached)
         if cached_digest == src_digest:
-            return cached_digest, True
+            return cached_digest, "match"
+        recorded = self._verified_map().get(src_digest)
+        if recorded and recorded == cached_digest:
+            return cached_digest, "recorded"
         # single-platform copy of a multi-arch source: the copy must be one of the index's children
         source = await self._raw_bytes(src_ref, src_insecure, authfile=True)
-        if source is None or _sha256(source) != src_digest:
-            return cached_digest, False
-        return cached_digest, cached_digest in _child_digests(source)
+        if source is None:
+            return cached_digest, "unverifiable"
+        if _sha256(source) != src_digest:
+            return cached_digest, "mismatch"
+        if cached_digest in _child_digests(source):
+            self._record_verified(src_digest, cached_digest)
+            return cached_digest, "child"
+        return cached_digest, "mismatch"
 
     async def _raw_config(self, ref: str, insecure: bool, authfile: bool = False) -> bytes | None:
         """The image config blob of a (single-platform) manifest ref."""
@@ -157,14 +219,20 @@ class Mirror:
         try:
             safe_ref_arg(source)
             if ref.digest:
-                cached_digest, ok = await self.verify_cached(dest, dest_insecure, source, src_insecure, ref.digest)
-                if cached_digest and ok:
+                cached_digest, verdict = await self.verify_cached(dest, dest_insecure, source, src_insecure,
+                                                                  ref.digest)
+                if cached_digest and verdict in ("match", "recorded", "child"):
                     return ScanTarget(f"{dest_repo}@{cached_digest}", dest_insecure, True, source,
                                       digest_verified=True, mirror_digest=cached_digest)
-                if cached_digest:
+                if verdict == "mismatch":
                     log.warning("mirror.digest_mismatch", ref=source, dest=dest, cached=cached_digest,
                                 expected=ref.digest)
+                    self._record_verified(ref.digest, None)
                     warnings.append(f"mirror copy {dest} did not match source digest {ref.digest}; re-copied")
+                elif verdict == "unverifiable":
+                    log.warning("mirror.unverifiable", ref=source, dest=dest, cached=cached_digest)
+                    warnings.append(f"mirror copy {dest} could not be verified (source manifest of {ref.digest} "
+                                    "unavailable, e.g. registry rate limit); re-copied")
             with tempfile.TemporaryDirectory(dir=scratch_dir(self.s.cache_dir)) as d:
                 digestfile = os.path.join(d, "digest")
                 argv = [self.s.skopeo_bin, "--policy", self.policy_path(), "copy", "--retry-times", "2",
@@ -193,6 +261,8 @@ class Mirror:
             return ScanTarget(source, src_insecure, False, source,
                               [*warnings, "mirror copy reported no digest; scanned original ref"])
         log.info("mirror.copied", ref=source, dest=dest, digest=copied, duration_ms=res.duration_ms)
+        if ref.digest:
+            self._record_verified(ref.digest, copied)
         # skopeo pulled the source by digest (it verifies the manifest against it), so the copy is
         # the source content; with no source digest (tag only) it is pinned but not verified.
         return ScanTarget(f"{dest_repo}@{copied}", dest_insecure, True, source, warnings,
