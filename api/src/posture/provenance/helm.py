@@ -6,15 +6,19 @@ Secret `data.release` = base64(k8s) of base64(helm) of gzip(JSON) (gzip optional
 
 Requires cluster-wide `secrets` get/list (chart: `provenance.helmReleases.enabled`).
 Optional chart update check against configured chart repositories
-(`PROVENANCE_HELM_CHART_REPOS`: `https://…` index.yaml repos and/or `oci://…` prefixes).
+(`PROVENANCE_HELM_CHART_REPOS`: `https://…` index.yaml repos and/or `oci://…` prefixes), with repo
+indexes / OCI tag lists and per-release results cached under `CACHE_DIR/helm-index/`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
+import tempfile
+import time
 import zlib
 from dataclasses import dataclass, field
 from typing import Any
@@ -63,6 +67,7 @@ class HelmRelease:
     last_deployed: str | None = None
     update: UpdateInfo | None = None
     chart_source: str | None = None  # repo the update was resolved against (ours)
+    update_check: str | None = None  # CHECK_* below; None = no chart update check ran
 
     def as_json(self) -> dict[str, Any]:
         """Their HelmRecord (update omitempty)."""
@@ -188,23 +193,169 @@ async def discover(excluded_namespaces: list[str] | None = None) -> tuple[list[H
 
 
 # ---------------------------------------------------------------- chart update check
+DOCKER_HUB_HOSTS = ("docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com")
+DEFAULT_INDEX_TTL_HOURS = 12.0
+
+# `HelmRelease.update_check` values
+CHECK_DONE = "checked"  # found in a configured source; `update` set when one is flagged
+CHECK_NOT_CONFIGURED = "not-configured"  # no configured source publishes the chart
+CHECK_ERROR = "error"  # a source that might publish it failed (not carried; retried next scan)
+CHECK_SKIPPED = "skipped"  # version is not semver-like (no tag list needed)
+
+
+def _utcnow() -> float:
+    return time.time()
+
+
+class HelmIndexCache:
+    """On-disk cache under `CACHE_DIR/helm-index/` (grace, 2026-10-05: the stage re-downloaded every
+    configured `index.yaml` and OCI tag list on every scan).
+
+    * `index-<h>.json`: parsed chart -> versions of one index.yaml repo + its ETag / Last-Modified.
+      Fresh for `ttl_hours`; after that it is revalidated (If-None-Match / If-Modified-Since when the
+      server sent validators; a 304 only refreshes `fetchedAt`). A failed refresh falls back to the
+      stale copy.
+    * `oci-<h>.json`: an OCI tag list (an empty list = repository not found), same TTL; errors are
+      not cached.
+    * `checks.json`: the last update-check result per release (see `check_chart_updates`).
+
+    `root=None` (or an unwritable directory) keeps everything in memory for this process.
+    """
+
+    def __init__(self, root: str | None, ttl_hours: float = DEFAULT_INDEX_TTL_HOURS):
+        self.root = root
+        self.ttl = max(0.0, float(ttl_hours)) * 3600
+        self._mem: dict[str, dict[str, Any]] = {}
+        if root:
+            try:
+                os.makedirs(root, exist_ok=True)
+            except OSError as e:
+                log.warning("provenance.helm_cache_unavailable", dir=root, error=str(e)[:200])
+                self.root = None
+
+    @staticmethod
+    def _name(kind: str, key: str) -> str:
+        return f"{kind}-{hashlib.sha256(key.encode()).hexdigest()[:24]}.json"
+
+    def get(self, name: str) -> dict[str, Any] | None:
+        if name in self._mem:
+            return self._mem[name]
+        if not self.root:
+            return None
+        try:
+            with open(os.path.join(self.root, name), encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        self._mem[name] = data
+        return data
+
+    def put(self, name: str, data: dict[str, Any]) -> None:
+        self._mem[name] = data
+        if not self.root:
+            return
+        try:
+            fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".tmp-")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, separators=(",", ":"))
+            os.replace(tmp, os.path.join(self.root, name))
+        except OSError as e:
+            log.warning("provenance.helm_cache_write_failed", file=name, error=str(e)[:200])
+
+    def fresh(self, entry: dict[str, Any] | None) -> bool:
+        return (entry is not None and self.ttl > 0
+                and _utcnow() - float(entry.get("fetchedAt") or 0) < self.ttl)
+
+    def index_name(self, url: str) -> str:
+        return self._name("index", url)
+
+    def oci_name(self, host: str, repo: str) -> str:
+        return self._name("oci", f"{host}/{repo}")
+
+
+_YamlLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def parse_index(body: bytes) -> dict[str, list[str]]:
+    """chart -> versions of an index.yaml. libyaml when available: the pure-Python loader needs ~18 s
+    (on a desktop CPU) for prometheus-community's 6.5 MB index, libyaml ~5.5 s. Runs in a thread."""
+    data = yaml.load(body, Loader=_YamlLoader) or {}  # noqa: S506 (a safe loader)
+    versions: dict[str, list[str]] = {}
+    for chart, entries in ((data.get("entries") or {}) if isinstance(data, dict) else {}).items():
+        versions[str(chart)] = [str(e.get("version")) for e in entries or []
+                                if isinstance(e, dict) and e.get("version")]
+    return versions
+
+
+@dataclass
+class ChartLookup:
+    versions: list[str] | None
+    source: str | None
+    status: str  # CHECK_DONE | CHECK_NOT_CONFIGURED | CHECK_ERROR
+
+
 @dataclass
 class ChartRepos:
-    """Configured chart sources: classic repos (index.yaml) and OCI prefixes."""
+    """Configured chart sources: classic repos (index.yaml) and OCI prefixes.
+
+    `oci://host/path` is a prefix (`host/path/<chart>`), or the chart itself when the last path
+    segment is the chart name. Docker Hub OCI entries are only used in the second form: a prefix on
+    Docker Hub would turn every chart no other source publishes into a rate-limited tag-list probe.
+    """
 
     urls: list[str] = field(default_factory=list)
     timeout: float = 30.0
     transport: httpx.AsyncBaseTransport | None = None  # tests
-    _index: dict[str, dict[str, list[str]]] = field(default_factory=dict, init=False)
+    cache: HelmIndexCache | None = None
+    _index: dict[str, tuple[dict[str, list[str]], bool]] = field(default_factory=dict, init=False)
+    _oci: dict[tuple[str, str], list[str] | None] = field(default_factory=dict, init=False)
+    _http: httpx.AsyncClient | None = field(default=None, init=False)
+    requests: int = field(default=0, init=False)  # network round trips (index GETs + tag lists)
 
-    async def _load_index(self, http: httpx.AsyncClient, url: str) -> dict[str, list[str]]:
+    def __post_init__(self) -> None:
+        if self.cache is None:
+            self.cache = HelmIndexCache(None)
+
+    def fingerprint(self) -> str:
+        return ",".join(self.urls)
+
+    async def aclose(self) -> None:
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
+
+    def _client(self) -> httpx.AsyncClient:
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, transport=self.transport)
+        return self._http
+
+    async def _load_index(self, url: str) -> tuple[dict[str, list[str]], bool]:
+        """(chart -> versions, ok). ok=False: no usable copy (fetch failed, nothing cached)."""
         if url in self._index:
             return self._index[url]
-        versions: dict[str, list[str]] = {}
+        assert self.cache is not None
+        name = self.cache.index_name(url)
+        entry = self.cache.get(name)
+        if entry is not None and entry.get("url") == url and self.cache.fresh(entry):
+            self._index[url] = (entry.get("versions") or {}), True
+            return self._index[url]
+        if entry is not None and entry.get("url") != url:
+            entry = None
+        headers: dict[str, str] = {}
+        if entry is not None:
+            if entry.get("etag"):
+                headers["If-None-Match"] = entry["etag"]
+            if entry.get("lastModified"):
+                headers["If-Modified-Since"] = entry["lastModified"]
+        result: tuple[dict[str, list[str]], bool]
         try:
             body = b""
-            async with http.stream("GET", url.rstrip("/") + "/index.yaml") as resp:
+            self.requests += 1
+            async with self._client().stream("GET", url.rstrip("/") + "/index.yaml", headers=headers) as resp:
                 status = resp.status_code
+                etag, last_mod = resp.headers.get("etag"), resp.headers.get("last-modified")
                 if status == 200:
                     buf = bytearray()
                     async for chunk in resp.aiter_bytes():
@@ -212,52 +363,147 @@ class ChartRepos:
                         if len(buf) > MAX_INDEX_BYTES:
                             raise httpx.HTTPError(f"index.yaml larger than {MAX_INDEX_BYTES} bytes")
                     body = bytes(buf)
-            if status == 200:
-                data = yaml.safe_load(body.decode("utf-8", "replace")) or {}
-                for name, entries in (data.get("entries") or {}).items():
-                    versions[name] = [str(e.get("version")) for e in entries or [] if e.get("version")]
+            if status == 304 and entry is not None:
+                entry = {**entry, "fetchedAt": _utcnow()}
+                self.cache.put(name, entry)
+                result = (entry.get("versions") or {}), True
+            elif status == 200:
+                t = time.monotonic()
+                versions = await asyncio.to_thread(parse_index, body)
+                log.info("provenance.helm_index_parsed", repo=url, bytes=len(body), charts=len(versions),
+                         ms=int((time.monotonic() - t) * 1000))
+                self.cache.put(name, {"url": url, "fetchedAt": _utcnow(), "etag": etag, "lastModified": last_mod,
+                                      "versions": versions})
+                result = versions, True
+            else:
+                raise httpx.HTTPError(f"GET index.yaml -> {status}")
         except (httpx.HTTPError, yaml.YAMLError) as e:
-            log.warning("provenance.helm_repo_failed", repo=url, error=str(e)[:200])
-        self._index[url] = versions
-        return versions
+            log.warning("provenance.helm_repo_failed", repo=url, error=str(e)[:200], stale=entry is not None)
+            result = ((entry.get("versions") or {}), True) if entry is not None else ({}, False)
+        self._index[url] = result
+        return result
+
+    async def _oci_tags(self, registry, host: str, repo: str) -> list[str] | None:
+        """Tag list ([] = not found) or None on error. Disk-cached for the TTL."""
+        key = (host, repo)
+        if key in self._oci:
+            return self._oci[key]
+        assert self.cache is not None
+        name = self.cache.oci_name(host, repo)
+        entry = self.cache.get(name)
+        if entry is not None and entry.get("ref") == f"{host}/{repo}" and self.cache.fresh(entry):
+            self._oci[key] = list(entry.get("tags") or [])
+            return self._oci[key]
+        try:
+            self.requests += 1
+            tags: list[str] | None = list(await registry.list_tags(host, repo) or [])
+            self.cache.put(name, {"ref": f"{host}/{repo}", "fetchedAt": _utcnow(), "tags": tags})
+        except Exception as e:  # noqa: BLE001
+            log.debug("provenance.helm_oci_failed", repo=f"{host}/{repo}", error=str(e)[:200])
+            tags = list(entry.get("tags") or []) if entry is not None and entry.get("ref") == f"{host}/{repo}" else None
+        self._oci[key] = tags
+        return tags
+
+    @staticmethod
+    def oci_candidate(url: str, chart: str) -> tuple[str, str] | None:
+        """(host, repository) to list for `chart` under an `oci://` entry, or None (not probed)."""
+        host, _, path = url[len("oci://"):].partition("/")
+        path = path.strip("/")
+        if path and path.rsplit("/", 1)[-1] == chart:
+            return host, path
+        if host.lower() in DOCKER_HUB_HOSTS:
+            return None
+        return host, f"{path}/{chart}".strip("/")
+
+    async def lookup(self, chart: str, registry=None) -> ChartLookup:
+        """First configured source that publishes the chart wins."""
+        errored = False
+        for url in self.urls:
+            if url.startswith("oci://"):
+                cand = self.oci_candidate(url, chart)
+                if registry is None or cand is None:
+                    continue
+                tags = await self._oci_tags(registry, *cand)
+                if tags is None:
+                    errored = True
+                elif tags:
+                    return ChartLookup([t.replace("_", "+") for t in tags], url, CHECK_DONE)
+            else:
+                idx, ok = await self._load_index(url)
+                errored = errored or not ok
+                if chart in idx:
+                    return ChartLookup(idx[chart], url, CHECK_DONE)
+        return ChartLookup(None, None, CHECK_ERROR if errored else CHECK_NOT_CONFIGURED)
 
     async def versions(self, chart: str, registry=None) -> tuple[list[str] | None, str | None]:
         """(available versions, source) for a chart name; first repo that knows it wins."""
         if not self.urls:
             return None, None
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True, transport=self.transport) as http:
-            for url in self.urls:
-                if url.startswith("oci://"):
-                    if registry is None:
-                        continue
-                    host, _, path = url[len("oci://"):].partition("/")
-                    repo = f"{path.strip('/')}/{chart}".strip("/")
-                    try:
-                        tags = await registry.list_tags(host, repo)
-                    except Exception as e:  # noqa: BLE001
-                        log.debug("provenance.helm_oci_failed", repo=f"{host}/{repo}", error=str(e)[:200])
-                        continue
-                    if tags:
-                        return [t.replace("_", "+") for t in tags], url
-                else:
-                    idx = await self._load_index(http, url)
-                    if chart in idx:
-                        return idx[chart], url
-        return None, None
+        try:
+            r = await self.lookup(chart, registry)
+        finally:
+            await self.aclose()
+        return r.versions, r.source
+
+
+CHECKS_FILE = "checks.json"
 
 
 async def check_chart_updates(releases: list[HelmRelease], repos: ChartRepos, *, skip_prerelease: bool,
                               update_level: str, registry=None,
-                              max_major_jump: int = DEFAULT_MAX_MAJOR_JUMP) -> None:
+                              max_major_jump: int = DEFAULT_MAX_MAJOR_JUMP,
+                              max_age_hours: float | None = None, force: bool = False) -> dict[str, int]:
     """Fill `update` for releases whose chart is found in a configured repo. Like the
-    images, `update` is only kept when an update is flagged (their omitempty usage)."""
-    for rel in releases:
-        if not needs_tag_list(rel.version):
-            continue
-        available, source = await repos.versions(rel.chart, registry)
-        if available is None:
-            continue
-        info = compute_update(rel.version, available, skip_prerelease=skip_prerelease, update_level=update_level,
-                              max_major_jump=max_major_jump)
-        rel.chart_source = source
-        rel.update = info if info.update_available else None
+    images, `update` is only kept when an update is flagged (their omitempty usage).
+
+    With `max_age_hours` (the stage passes `rescanAfterHours`), a release whose chart and version
+    are unchanged since its last check, checked under the same configuration less than that long
+    ago, *carries* the stored result (`repos.cache` `checks.json`) without any request; errors are
+    never carried. Returns counts: checked / carried / notConfigured / errors / skipped.
+    """
+    assert repos.cache is not None
+    cfg = json.dumps([repos.fingerprint(), skip_prerelease, update_level, max_major_jump])
+    stored = repos.cache.get(CHECKS_FILE) or {}
+    prev_checks: dict[str, Any] = (stored.get("releases") or {}) if stored.get("config") == cfg else {}
+    checks: dict[str, Any] = {}
+    stats = {"checked": 0, "carried": 0, "notConfigured": 0, "errors": 0, "skipped": 0}
+    now_ts = _utcnow()
+    try:
+        for rel in releases:
+            key = f"{rel.namespace}/{rel.release_name}"
+            if not needs_tag_list(rel.version):
+                rel.update_check = CHECK_SKIPPED
+                stats["skipped"] += 1
+                continue
+            prev = prev_checks.get(key)
+            if (not force and max_age_hours is not None and isinstance(prev, dict)
+                    and prev.get("chart") == rel.chart and prev.get("version") == rel.version
+                    and prev.get("updateCheck") in (CHECK_DONE, CHECK_NOT_CONFIGURED)
+                    and now_ts - float(prev.get("checkedAt") or 0) < max_age_hours * 3600):
+                rel.update = UpdateInfo.from_json(prev.get("update"))
+                rel.chart_source = prev.get("source")
+                rel.update_check = prev["updateCheck"]
+                checks[key] = prev
+                stats["carried"] += 1
+                continue
+            found = await repos.lookup(rel.chart, registry)
+            rel.update_check = found.status
+            if found.versions is not None:
+                info = compute_update(rel.version, found.versions, skip_prerelease=skip_prerelease,
+                                      update_level=update_level, max_major_jump=max_major_jump)
+                rel.chart_source = found.source
+                rel.update = info if info.update_available else None
+                stats["checked"] += 1
+            elif found.status == CHECK_ERROR:
+                stats["errors"] += 1
+            else:
+                stats["notConfigured"] += 1
+            if found.status != CHECK_ERROR:
+                checks[key] = {"chart": rel.chart, "version": rel.version, "checkedAt": now_ts,
+                               "updateCheck": found.status, "source": rel.chart_source,
+                               "update": rel.update.as_json() if rel.update else None}
+    finally:
+        await repos.aclose()
+    if checks != prev_checks or stored.get("config") != cfg:
+        repos.cache.put(CHECKS_FILE, {"config": cfg, "releases": checks})
+    return stats

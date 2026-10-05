@@ -741,3 +741,58 @@ short-lived verify pods.
   0.1.76) and PostgreSQL 15 (DISA V1R2). Eight images have results: `security-posture-api`
   has two benchmarks, and calico/node has a degraded rootfs. The other 19 images are n/a.
   `/stig/benchmarks` also lists one content-only entry with `id: null`.
+
+## 2026-10-05: provenance stage, chart update check cached and carried
+
+Grace (see "Grace deployment status (2026-10-05, scan accounting)") spent 51-193 s in the
+provenance stage while checking 1-4 images. Every scan built a fresh `ChartRepos`, so it downloaded
+and parsed every configured `index.yaml` again. prometheus-community's index is 6.5 MB and grafana's
+4 MB. The pure-Python PyYAML loader takes ~18 s for the prometheus index alone on a desktop CPU, on
+the event loop. Charts that no repo publishes then fell through to the `oci://docker.io/envoyproxy`
+tag list (Docker Hub, 429).
+
+- **Disk cache** `CACHE_DIR/helm-index/` (`PROVENANCE_HELM_INDEX_TTL_HOURS`, default 12):
+  - `index-<h>.json` holds the parsed chart -> versions map of one repo, with its `ETag` /
+    `Last-Modified`. Within the TTL it is used without a request. After the TTL it is revalidated
+    with `If-None-Match` / `If-Modified-Since` (all six grace repos send an ETag), and a 304 only
+    refreshes the timestamp. A failed refresh falls back to the stale copy.
+  - `oci-<h>.json` holds an OCI tag list, where an empty list means not found. It uses the same
+    TTL. Errors are not cached.
+  - TTL 0 disables reuse.
+  - The cache is per pod: worker-privileged's `/cache` is an emptyDir, so a rollout starts cold.
+  - Parsing uses libyaml (`CSafeLoader`, ~3x faster) in a worker thread, logged as
+    `provenance.helm_index_parsed` (bytes, charts, ms).
+- **Per-release carry-over** (`checks.json`), the same pattern as the image carry-over:
+  - A release whose chart and version are unchanged since its last check, checked less than
+    `rescanAfterHours` ago under the same repo list / `skipPrerelease` / `updateLevel` /
+    max-major-jump, keeps its stored result (`update`, `chartSource`, `updateCheck`) without any
+    request. Repo indexes are only loaded when some release actually needs a lookup.
+  - Errors (repo unreachable with nothing cached, OCI 429) are not carried and are retried on
+    the next scan.
+  - A forced full scan re-checks every release. The index TTL still applies.
+  - Trade-off: a new upstream chart version shows up within `rescanAfterHours` (24 h), not on the
+    next scan.
+- **No Docker Hub fall-through.** An `oci://` entry is either a prefix (`host/path/<chart>`) or the
+  chart itself, when its last path segment is the chart name. On Docker Hub (`docker.io`,
+  `index.docker.io`, `registry-1.docker.io`, `registry.hub.docker.com`) only the second form is
+  used, so a chart that no other source publishes makes no Docker Hub request. Such a chart gets
+  `updateCheck: not-configured`.
+  - `HelmRelease.update_check` is `checked` | `not-configured` | `error` | `skipped`. It is stored
+    in `checks.json` and counted in the scan log line. `helm_releases` has no column for it (no
+    migration in this change). The API's `update` / `chartSource` are unchanged.
+  - **Grace values need** `oci://docker.io/envoyproxy/gateway-helm` instead of
+    `oci://docker.io/envoyproxy`. Otherwise gateway-helm reads "not checked".
+- **Timing.** The stage logs `provenance.timing` once per scan, with ms for `load_ms` (previous
+  rows), `images_ms` (registry checks), `helm_discovery_ms` (Secrets list + decode),
+  `helm_updates_ms`, `carry_ms` and `persist_ms`, plus `collector_ms` (the whole stage). It also
+  logs `helm_checked` / `helm_carried` / `helm_notConfigured` / `helm_errors` / `helm_requests`.
+  The scan log line gains "chart update checks: N checked, M carried, K not configured, E
+  error(s), R request(s)".
+- **Expected on grace:**
+  - Steady state: `helm_updates_ms` ~0 with 0 requests. `helm_discovery_ms` covers one Secrets list
+    (72 Secrets, 15 MB; `kubectl` takes 2.5 s; the Python client probably 3-6 s). `images_ms` is
+    1-4 image checks, a few seconds each unless Docker Hub rate-limits.
+  - Total: ~5-15 s instead of 51-193 s.
+  - Once a day (`rescanAfterHours`) and after a worker-privileged rollout, the releases are
+    re-checked. That costs ~6 conditional GETs (304 when unchanged), or a download plus libyaml
+    parse of the changed indexes (~10-30 s on grace), but is not repeated on every scan.

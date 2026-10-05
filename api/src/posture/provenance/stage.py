@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -159,6 +160,14 @@ class ProvenanceStage:
         self.registry_factory = registry_factory or self._default_registry
         self.cosign_factory = cosign_factory or (lambda cfg: CosignCli(cfg, env.cosign_bin))
         self.helm_discover = helm_discover or helm_mod.discover
+        self._helm_cache: helm_mod.HelmIndexCache | None = None
+
+    def helm_cache(self) -> helm_mod.HelmIndexCache:
+        """`CACHE_DIR/helm-index/` (repo indexes, OCI tag lists, per-release check results)."""
+        if self._helm_cache is None:
+            self._helm_cache = helm_mod.HelmIndexCache(os.path.join(self.env.cache_dir, "helm-index"),
+                                                       self.env.provenance_helm_index_ttl_hours)
+        return self._helm_cache
 
     def _default_registry(self) -> Registry:
         rewrite = self.env.rewrite_map
@@ -181,10 +190,17 @@ class ProvenanceStage:
         if not ps.enabled:
             return {}
         started = now()
+        t0 = time.monotonic()
+        timing: dict[str, int] = {}
+
+        def ms(since: float) -> int:
+            return int((time.monotonic() - since) * 1000)
+
         async with self.sm() as s:
             images = {i.id: i for i in (await s.execute(
                 select(Image).where(Image.id.in_(list(key_to_id.values()) or [0])))).scalars()}
             prev = await self._previous(s, list(images))
+        timing["load_ms"] = ms(t0)
         all_items = work_items(inv, key_to_id, images)
         fp = config_fingerprint(ps)
         if only is None:
@@ -222,21 +238,34 @@ class ProvenanceStage:
                     outcomes.append(ImageOutcome(w.image_id, w.ref.digest, now(), None, None, None, {}, {},
                                                  f"internal error: {e}"[:500], SupplyChainInputs(), None, w.ref.tag))
 
+        helm_stats: dict[str, int] = {}
         try:
+            t = time.monotonic()
             await asyncio.gather(*(one(w) for w in items))
-            helm_rows, helm_errors = await self._helm(ps, reg) if ps.helm_releases else ([], [])
+            timing["images_ms"] = ms(t)
+            helm_rows, helm_errors = ([], [])
+            if ps.helm_releases:
+                helm_rows, helm_errors = await self._helm(ps, reg, settings.rescan_after_hours,
+                                                          force and only is None, timing, helm_stats)
         finally:
             closer = getattr(reg, "aclose", None)
             if closer is not None:
                 await closer()
+        t = time.monotonic()
         for w in carried:
             outcomes.append(self._carry(w, ps, prev[w.image_id], cosign_cfg.enabled))
+        timing["carry_ms"] = ms(t)
         from .. import metrics
 
         metrics.PROVENANCE_IMAGES.labels("checked").inc(len(items))
         metrics.PROVENANCE_IMAGES.labels("carried").inc(len(carried))
         mutable = {w.image_id: w.mutable for w in all_items}
+        t = time.monotonic()
         await self._persist(scan_id, outcomes, mutable, helm_rows)
+        timing["persist_ms"] = ms(t)
+        timing["collector_ms"] = ms(t0)
+        log.info("provenance.timing", scan_id=scan_id, checked=len(items), carried=len(carried),
+                 helm_releases=len(helm_rows), **{f"helm_{k}": v for k, v in helm_stats.items()}, **timing)
         signed = sum(1 for o in outcomes if (o.signature or {}).get("signed"))
         with_sbom = sum(1 for o in outcomes if (o.sbom or {}).get("hasSBOM"))
         with_prov = sum(1 for o in outcomes if (o.provenance or {}).get("hasProvenance"))
@@ -246,6 +275,10 @@ class ProvenanceStage:
         msg = (f"provenance: {len(outcomes)} image(s), {signed} signed, {with_sbom} with SBOM, {with_prov} with "
                f"provenance, {errors} registry error(s); {len(helm_rows)} helm release(s) "
                f"in {int((now() - started).total_seconds())}s{scope}")
+        if helm_stats:
+            msg += (f"; chart update checks: {helm_stats.get('checked', 0)} checked, {helm_stats.get('carried', 0)} "
+                    f"carried, {helm_stats.get('notConfigured', 0)} not configured, {helm_stats.get('errors', 0)} "
+                    f"error(s), {helm_stats.get('requests', 0)} request(s)")
         log_line(msg)
         for e in helm_errors[:5]:
             log_line(f"provenance: helm: {e}")
@@ -340,20 +373,31 @@ class ProvenanceStage:
         return self._outcome(w, ps, sig, sbom, prov, updates, details, error, checked_at, cosign_on,
                              ref.digest or details.get("resolvedDigest"))
 
-    async def _helm(self, ps: ProvenanceSettings, reg: Registry) -> tuple[list[helm_mod.HelmRelease], list[str]]:
+    async def _helm(self, ps: ProvenanceSettings, reg: Registry, max_age_hours: float | None = None,
+                    force: bool = False, timing: dict[str, int] | None = None,
+                    stats: dict[str, int] | None = None) -> tuple[list[helm_mod.HelmRelease], list[str]]:
+        timing = {} if timing is None else timing
+        t = time.monotonic()
         try:
             releases, errors = await self.helm_discover(list(self.env.excluded_namespaces))
         except Exception as e:  # noqa: BLE001  (403 without the optional RBAC)
+            timing["helm_discovery_ms"] = int((time.monotonic() - t) * 1000)
             status = getattr(e, "status", None)
             msg = (f"helm release discovery needs secrets list RBAC (provenance.helmReleases.enabled): {status}"
                    if status == 403 else f"helm release discovery failed: {str(e)[:200]}")
             log.warning("provenance.helm_failed", error=msg)
             return [], [msg]
+        timing["helm_discovery_ms"] = int((time.monotonic() - t) * 1000)
         if ps.check_updates and self.env.provenance_helm_chart_repos:
-            await helm_mod.check_chart_updates(
-                releases, helm_mod.ChartRepos(list(self.env.provenance_helm_chart_repos)),
-                skip_prerelease=ps.skip_prerelease, update_level=ps.update_level, registry=reg,
-                max_major_jump=self.env.provenance_max_major_jump)
+            t = time.monotonic()
+            repos = helm_mod.ChartRepos(list(self.env.provenance_helm_chart_repos), cache=self.helm_cache())
+            got = await helm_mod.check_chart_updates(
+                releases, repos, skip_prerelease=ps.skip_prerelease, update_level=ps.update_level, registry=reg,
+                max_major_jump=self.env.provenance_max_major_jump, max_age_hours=max_age_hours, force=force)
+            got["requests"] = repos.requests
+            timing["helm_updates_ms"] = int((time.monotonic() - t) * 1000)
+            if stats is not None:
+                stats.update(got)
         return releases, errors
 
     async def _persist(self, scan_id: int, outcomes: list[ImageOutcome], mutable: dict[int, bool],

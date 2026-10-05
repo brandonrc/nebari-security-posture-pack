@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     provenance_max_major_jump: int = 50  # ignore update candidates whose MAJOR is this far above current; 0 = off
     provenance_helm_enabled: bool = True  # needs cluster-wide secrets list (chart: provenance.helmReleases.enabled)
     provenance_helm_chart_repos: CsvList = []  # https://.../ (index.yaml) or oci://host/path
+    provenance_helm_index_ttl_hours: float = 12  # CACHE_DIR/helm-index/: chart repo index.yaml + OCI tag list TTL
     provenance_recheck_hours: float = 24  # reuse signature/SBOM/provenance results per digest
     provenance_concurrency: int = 8
     provenance_registry_timeout: float = 30
