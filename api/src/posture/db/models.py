@@ -260,7 +260,7 @@ class PostureResultRow(Base):
     name: Mapped[str] = mapped_column(String(253), nullable=False)
     pod: Mapped[str | None] = mapped_column(String(253))
     container: Mapped[str] = mapped_column(String(253), nullable=False, default="")
-    status: Mapped[str] = mapped_column(String(8), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
     severity: Mapped[str] = mapped_column(String(16), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text)
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=0)

@@ -146,3 +146,13 @@ def test_env_empty_or_json(monkeypatch):
                                                            "checks": ["privileged"], "reason": "r", "approvedBy": "x",
                                                            "expiresAt": ""}]))
     assert Settings().controls_exceptions[0]["source"] == "values"
+
+
+def test_status_columns_hold_accepted_risk():
+    """Grace revision 20: posture_results.status was varchar(8), so persisting an `accepted-risk`
+    result failed the scan's finalize (Postgres enforces the length; SQLite does not)."""
+    from posture.controls_engine.models import ControlAssertionResult
+    from posture.db.models import PostureResultRow
+
+    assert PostureResultRow.__table__.c.status.type.length >= len(ACCEPTED_RISK)
+    assert ControlAssertionResult.__table__.c.status.type.length >= len(ACCEPTED_RISK)
