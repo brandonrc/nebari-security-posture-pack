@@ -509,3 +509,85 @@ SSP draft + assessment results an assessor can *review*, with per-control eviden
   raw evidence JSON), **STIG** (existing), **SLA** (existing). Overview gets a "Controls with passing
   evidence x/y (moderate)" tile. Reports dialog gains `oscal-ssp`, `oscal-component-definition` and `crm`;
   the one-click button is the "Evidence package".
+
+## 14. SCAP scanner (product and OS STIGs inside images)
+
+Goal: evaluate the operating-system and product STIGs that apply *inside* each image, using
+OpenSCAP against DISA SCAP benchmarks and ComplianceAsCode (SSG) datastreams, so every
+container gets: the Kubernetes STIG for how it is run (§11), vulnerability consensus (§4), and
+now the applicable OS/product STIG for what it contains. Images with no applicable benchmark
+report exactly that (`notApplicable`), which is an honest and accepted answer.
+
+### Pipeline (worker stage `scap`, after the image is cached)
+1. **Rootfs**: from the local OCI cache (`MIRROR_MODE=local`, §12/§4) flatten the layers into a
+   rootfs directory under `CACHE_DIR/scap/<digest>/rootfs` honouring OCI whiteouts (`.wh.*`,
+   `.wh..wh..opq`). Extraction must preserve owner/mode/xattrs because many STIG rules check
+   them, so the stage runs in a dedicated `scap-worker` process/pod that runs as root inside
+   its container with only `CHOWN`, `FOWNER`, `DAC_OVERRIDE`, `SETUID`, `SETGID` capabilities,
+   no ServiceAccount token, read-only root filesystem, egress only to the registry/mirror and
+   the configured content hosts, seccomp RuntimeDefault. Rootfs dirs are deleted after the scan
+   (size cap `SCAP_MAX_ROOTFS_GB`, default 10).
+2. **Detect**: read `etc/os-release` (ID, VERSION_ID, ID_LIKE) and probe for products
+   (`postgresql` version from `bin/postgres --version` strings or package db, `nginx`, `httpd`,
+   `java`, `tomcat`, `docker`, `kubernetes`) → candidate benchmarks from the content catalogue.
+3. **Evaluate**: `oscap-chroot <rootfs> xccdf eval --profile <profile> --results-arf <arf.xml>
+   --report <report.html> [--fetch-remote-resources off] <datastream>` per applicable benchmark,
+   with a per-image timeout (`SCAP_TIMEOUT_SECONDS`, default 900). Rules that need a running
+   system (services, processes, kernel params, audit daemon) are reported as `notchecked`/
+   `notapplicable` by OpenSCAP in chroot mode; we keep that distinction.
+4. **Normalise** to `scap_results` rows: `{imageId, scanId, benchmarkId, benchmarkVersion,
+   profileId, source (disa|ssg), ruleId, stigId (V-/SV- when present), cci[], severity
+   (cat1|cat2|cat3), result (pass|fail|notapplicable|notchecked|error|unknown|informational),
+   title, fixText?, checkedAt}` and a per-image summary `{benchmark, profile, pass, fail,
+   notapplicable, notchecked, error, score}`.
+
+### Content catalogue (`SCAP_CONTENT_DIR`, PVC; refreshed by the privileged worker daily)
+| source | what | redistribution |
+|---|---|---|
+| ComplianceAsCode / SSG (`ssg-<os>-ds.xml`, profiles `..._profile_stig`) | RHEL 8/9/10, Ubuntu 20.04/22.04/24.04, Debian 11/12, SLE, Alpine (limited), plus `ssg-...-postgresql`-style product content where present | BSD, vendored/fetched from GitHub releases; **default** |
+| DISA SCAP 1.3 benchmarks (`U_*_STIG_SCAP_1-3_Benchmark.zip`) | authoritative RHEL, Ubuntu, Windows, PostgreSQL, Apache, Tomcat, JRE… | US Government work, public download from `public.cyber.mil`; fetched at runtime via `scap.disa.urls[]` or mounted; **off by default** (optional, preferred when present) |
+`scap.content.sources[]` lists URLs with sha256; air-gapped installs mount a PVC/ConfigMap.
+Mapping `os-release` → benchmark lives in `scap/data/benchmarks.yaml` (ID/VERSION_ID patterns,
+preference order DISA > SSG, profile id).
+
+### Scoring (SCORING.md addendum)
+Image STIG score = `100 × (1 − Σ failed weight / Σ evaluated weight)` with CAT I=10, CAT II=4,
+CAT III=1 over rules whose result is pass or fail (notapplicable/notchecked excluded); `null`
+when no benchmark applies. Configuration posture for a workload becomes the mean of
+`workloadPostureScore` and the STIG scores of its images when any image has one. KEV/consensus
+untouched. Surface `stig: {evaluated, pass, fail, cat1Open, cat2Open, cat3Open, coverage}` on
+`/summary` and per image.
+
+### API
+- `GET /images/{id}/stig` → `{benchmarks:[{benchmarkId, title, version, source, profileId,
+  summary, rules:[…paged…]}]}` with `page/pageSize/result/severity/q` params.
+- `GET /stig/benchmarks` (catalogue: id, title, version, source, imagesEvaluated, pass/fail
+  totals) and `GET /stig/benchmarks/{id}/rules` (rollup across images: ruleId, stigId, cat,
+  failingImages, passingImages).
+- `/compliance/stig` gains a `product` section (per-benchmark rollup) next to the Kubernetes
+  STIG; `GET /scanners` lists `scap` with content versions and `dbUpdatedAt` = content fetch.
+- Settings: `scanners.scap` toggle, `scap.sources`, `scap.preferDisa`, `scap.timeoutSeconds`.
+
+### Reports
+- `stig-checklist` gains per-image product checklists: one `.ckl`/`.cklb` per (image, benchmark)
+  with real pass/fail from OpenSCAP, asset = image ref + digest, plus a zipped bundle
+  (`stig-bundle.zip`) option; STIG Viewer imports them as separate assets.
+- POA&M rows for failing rules (CAT → raw severity; Security Checks = V-ID; CCIs; control via
+  CCI mapping per §11 N1), rolled up per (image, rule). SAR gets a "Product STIG results" section.
+  OSCAL AR observations for STIG failures (subject = image).
+
+### UI
+- Image detail: tab **STIG** (benchmark header with pass/fail/NA/notchecked bars, CAT I/II/III
+  open chips, rule table with result badges, severity, V-ID, title, fix text expander, filters).
+- Compliance → STIG tab: two sections, "Kubernetes STIG" (existing) and "Product STIGs" (per
+  benchmark rollup with images evaluated, open CAT I count, link to a benchmark page listing
+  failing rules across images).
+- Overview: STIG tile (evaluated images, coverage %, open CAT I). Images table: STIG column
+  (score or "n/a"). Settings: scap section. Scanner health card for `scap` with content versions.
+
+### Chart
+`scapWorker` Deployment (own SA, no token, root-in-container with the capability set above,
+`securityContext` documented and justified in README/CONTROLS as the one exception), PVC
+`persistence.scapContent` (2Gi) + `persistence.scapWork` (20Gi), NetworkPolicy egress to
+content hosts, env plumbing. `scanner.scap.enabled` default **false** (opt-in; heavy), true on
+grace.
