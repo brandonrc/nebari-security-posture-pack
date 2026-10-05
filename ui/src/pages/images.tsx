@@ -7,8 +7,8 @@ import { EmptyState, ErrorAlert, PageHeader } from '@/components/page';
 import { AgreementDots, GradeBadge, ScannerGlyphs, SeverityChips } from '@/components/posture';
 import { SimpleSelect } from '@/components/simple-select';
 import { DatasetBanner } from '@/components/provenance';
-import { StigScore } from '@/components/stig';
-import { imageStigScore } from '@/lib/stig';
+import { StigStateLabel } from '@/components/stig';
+import { stigState } from '@/lib/stig';
 import { ProvenanceGlyph, SbomGlyph, SignatureGlyph, UpdateIndicator } from '@/components/supply-chain';
 import { Pager, SearchInput, SkeletonRows, SortableHead, StateRow, Toolbar, useUrlState } from '@/components/table-kit';
 import { Badge } from '@/components/ui/badge';
@@ -27,23 +27,17 @@ const SEVERITY_OPTIONS = [
 const STIG_OPTIONS = [
   { value: 'evaluated', label: 'STIG evaluated' },
   { value: 'cat1', label: 'Open CAT I' },
-  { value: 'na', label: 'No benchmark (n/a)' },
+  { value: 'na', label: 'Not applicable / no content' },
 ];
 
+/** §14: score (+ stale marker), or "not yet" / "n/a" / "no content" / "error" ... with a tooltip. */
 function StigCell({ image }: { image: ImageSummary }) {
-  const score = imageStigScore(image);
-  const status = image.stig?.status;
-  if (status === 'error' || status === 'timeout') {
-    return (
-      <Link to={`/images/${encodeURIComponent(image.id)}?tab=stig`} className="text-warning-foreground text-xs underline-offset-4 hover:underline" title={image.stig?.error ?? `SCAP ${status}`}>
-        {status}
-      </Link>
-    );
-  }
-  if (score === null || score === undefined) return <StigScore score={null} />;
+  const state = stigState(image.stig);
+  if (state === undefined) return null;
+  if (state === 'notEvaluated') return <StigStateLabel stig={image.stig} />;
   return (
-    <Link to={`/images/${encodeURIComponent(image.id)}?tab=stig`} className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Open the STIG tab">
-      <StigScore score={score} />
+    <Link to={`/images/${encodeURIComponent(image.id)}?tab=stig`} className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+      <StigStateLabel stig={image.stig} />
     </Link>
   );
 }

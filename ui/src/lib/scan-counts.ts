@@ -29,3 +29,25 @@ export function scanImageParts(s: Counts): string[] {
 export function scanImageSummary(s: Counts): string {
   return scanImageParts(s).join(' · ');
 }
+
+type ScapFields = Pick<Scan, 'scapStatus' | 'scapImages' | 'scapProgress' | 'scapPending'>;
+
+/** The scan's SCAP stage is still evaluating (queued / running) or its results are not folded in yet. */
+export function scapInProgress(s: ScapFields): boolean {
+  return s.scapStatus === 'queued' || s.scapStatus === 'running' || Boolean(s.scapPending);
+}
+
+/**
+ * §14 SCAP stage of a scan: "STIG evaluation in progress (12/83)" while queued / running (the
+ * scan itself may already be done: `scapPending`), "STIG results being applied" between the stage
+ * finishing and the re-aggregation, "STIG evaluation failed", or null (off / nothing to show).
+ */
+export function scapLine(s: ScapFields): string | null {
+  if (!s.scapStatus) return null;
+  const total = s.scapProgress?.total ?? s.scapImages ?? 0;
+  const done = Math.min(s.scapProgress?.done ?? 0, total);
+  if (s.scapStatus === 'queued' || s.scapStatus === 'running') return `STIG evaluation in progress (${done}/${total})`;
+  if (s.scapStatus === 'failed') return 'STIG evaluation failed';
+  if (s.scapPending) return 'STIG results being applied';
+  return null;
+}

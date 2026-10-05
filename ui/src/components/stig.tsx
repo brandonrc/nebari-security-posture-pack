@@ -1,7 +1,7 @@
-import type { ScapCat } from '@/api/types';
+import type { ImageStigBrief, ScapCat } from '@/api/types';
 import { GradeBadge } from '@/components/posture';
 import { Badge } from '@/components/ui/badge';
-import { CAT_LABEL, CAT_TONE, normCat, normResult, RESULT_LABEL, RESULT_SEGMENTS, RESULT_TONE, SOURCE_LABEL, stigGrade } from '@/lib/stig';
+import { CAT_LABEL, CAT_TONE, normCat, normResult, RESULT_LABEL, RESULT_SEGMENTS, RESULT_TONE, SOURCE_LABEL, STIG_STATE_LABEL, stigGrade, stigState, stigStateTooltip } from '@/lib/stig';
 import { cn } from '@/lib/utils';
 
 /** §14 shared bits: CAT / result / source badges, the results bar and open-CAT chips. */
@@ -84,6 +84,35 @@ export function CatOpenChips({ cat1, cat2, cat3, className }: { cat1?: number; c
           {CAT_LABEL[c]} · {n ?? '—'}
         </Badge>
       ))}
+    </span>
+  );
+}
+
+/**
+ * Image STIG state: the grade-coloured score (with a "stale" marker when the last re-evaluation
+ * failed), or a label that tells "not yet" (never evaluated), "n/a" (no applicable benchmark),
+ * "no content", "not scored", "error" and "timeout" apart, each with a tooltip.
+ */
+export function StigStateLabel({ stig }: { stig: ImageStigBrief | null | undefined }) {
+  const state = stigState(stig);
+  if (state === undefined) return null;
+  const title = stigStateTooltip(state, stig);
+  if (state === 'evaluated') {
+    return (
+      <span className="inline-flex items-center gap-1" title={title}>
+        <GradeBadge grade={stigGrade(stig?.score ?? null)} score={stig?.score ?? null} />
+        {stig?.stale ? (
+          <Badge variant="outline" className="border-warning-foreground/40 text-warning-foreground" data-testid="stig-stale">
+            stale
+          </Badge>
+        ) : null}
+      </span>
+    );
+  }
+  const warn = state === 'error' || state === 'timeout';
+  return (
+    <span className={cn('text-xs', warn ? 'text-warning-foreground' : 'text-muted-foreground', state === 'notEvaluated' && 'italic')} title={title} data-stig-state={state}>
+      {STIG_STATE_LABEL[state]}
     </span>
   );
 }

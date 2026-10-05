@@ -1,7 +1,9 @@
 /**
  * §14 SCAP mock data: three benchmarks (RHEL 9 DISA, Ubuntu 22.04 SSG, PostgreSQL 15 DISA) with
  * 30 rules each, evaluated against eight of the fixture images (one with two benchmarks, one
- * with degraded rootfs fidelity); every other image has no applicable benchmark (`stig: null`).
+ * with degraded rootfs fidelity, keycloak's kept result stale after a registry 429); nebari-landing
+ * (nginx) has no content, loki and the stopped batch-agent were never evaluated (`stig: null`, as
+ * the API serves it), every other image has no applicable benchmark (`status: notApplicable`).
  * Deterministic (own seeded PRNG, so the rest of the fixtures are unchanged).
  */
 import type {
@@ -220,12 +222,43 @@ for (const image of images) {
   );
 }
 
+/** Images without benchmark results: never evaluated (null) or no content; the rest are not applicable. */
+const NOT_EVALUATED = new Set(['docker.io/grafana/loki:3.2.0', 'ghcr.io/acme-internal/batch-agent:1.4.0']);
+const NO_CONTENT: Record<string, string> = {
+  'quay.io/nebari/nebari-landing:0.3.1': 'no content for the applicable benchmark(s): disa-nginx',
+};
+const STALE: Record<string, string> = {
+  'quay.io/keycloak/keycloak:26.0.5': 'image copy failed: toomanyrequests: 429 Too Many Requests',
+};
+const NOT_APPLICABLE_REASON = 'No SCAP content matches this image (os-release and product probes found no applicable benchmark).';
+
+function refOf(imageId: string): string {
+  return images.find((i) => i.id === imageId)?.ref ?? '';
+}
+
+/** `image.stig` as the API serves it (views.stig_brief); null = never evaluated. */
 export function imageStigBrief(imageId: string): ImageStigBrief | null {
   const list = STIG_RESULTS.get(imageId);
-  if (!list) return null;
+  const ref = refOf(imageId);
+  if (!list) {
+    if (NOT_EVALUATED.has(ref)) return null;
+    if (NO_CONTENT[ref]) return { status: 'noContent', score: null, error: NO_CONTENT[ref] };
+    return { status: 'notApplicable', score: null, error: 'no SCAP benchmark applies (os debian 12)' };
+  }
   const all = list.flatMap((e) => e.rules);
   const s = summarise(all);
-  return { score: s.score, benchmarks: list.length, pass: s.pass, fail: s.fail, cat1Open: s.cat1Open, cat2Open: s.cat2Open, cat3Open: s.cat3Open };
+  const stale = STALE[ref];
+  return {
+    status: 'evaluated',
+    score: s.score,
+    benchmarks: list.length,
+    pass: s.pass,
+    fail: s.fail,
+    cat1Open: s.cat1Open,
+    cat2Open: s.cat2Open,
+    cat3Open: s.cat3Open,
+    ...(stale ? { stale: true, staleError: stale, staleSince: iso(1 * HOUR) } : {}),
+  };
 }
 
 const RESULT_ORDER: Record<string, number> = { fail: 0, error: 1, pass: 2, notchecked: 3, notapplicable: 4 };
@@ -233,7 +266,12 @@ const RESULT_ORDER: Record<string, number> = { fail: 0, error: 1, pass: 2, notch
 /** `GET /images/{id}/stig` with `page/pageSize/result/severity/q` applied to every benchmark's rules. */
 export function imageStigResponse(imageId: string, params: URLSearchParams): ImageStig {
   const list = STIG_RESULTS.get(imageId);
-  if (!list) return { status: 'notApplicable', benchmarks: [], reason: 'No SCAP content matches this image (os-release and product probes found no applicable benchmark).' };
+  if (!list) {
+    const brief = imageStigBrief(imageId);
+    if (!brief) return { status: 'notEvaluated', benchmarks: [], reason: null, stig: null };
+    if (brief.status === 'noContent') return { status: 'noContent', benchmarks: [], reason: brief.error, stig: brief };
+    return { status: 'notApplicable', benchmarks: [], reason: NOT_APPLICABLE_REASON, stig: brief };
+  }
   const results = params.get('result')?.split(',').filter(Boolean);
   const sevs = params.get('severity')?.split(',').filter(Boolean);
   const q = params.get('q')?.toLowerCase();
@@ -267,6 +305,7 @@ export function imageStigResponse(imageId: string, params: URLSearchParams): Ima
   return {
     status: 'evaluated',
     benchmarks,
+    stig: imageStigBrief(imageId),
     rootfs: { fidelity: degraded ? 'degraded' : 'full', layers: 7, files: 18_412, droppedXattrs: degraded ? 214 : 0, skippedDevices: 0, unsafeEntries: 0, notes: degraded ? ['file capabilities could not be restored (security.capability)'] : [] },
   } as ImageStig;
 }
@@ -346,10 +385,11 @@ export function stigRollup(): StigRollup {
     cat2Open: s.cat2Open,
     cat3Open: s.cat3Open,
     coverage: current.length ? Math.round((1000 * evaluated.length) / current.length) / 10 : null,
-    notApplicable: current.length - evaluated.length,
-    noContent: 0,
+    notApplicable: current.filter((i) => imageStigBrief(i.id)?.status === 'notApplicable').length,
+    noContent: current.filter((i) => imageStigBrief(i.id)?.status === 'noContent').length,
     errors: 0,
-    pending: 0,
+    pending: current.filter((i) => imageStigBrief(i.id) === null).length,
+    stale: current.filter((i) => imageStigBrief(i.id)?.stale).length,
     images: current.length,
     score: s.score,
   };

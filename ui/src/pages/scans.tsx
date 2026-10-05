@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { DataTable, type DataTableColumnDef } from '@/components/ui/data-table';
 import { asRows, durationBetween, formatDateTime, formatDuration, formatRelative } from '@/lib/format';
-import { scanImageSummary } from '@/lib/scan-counts';
+import { scanImageSummary, scapLine } from '@/lib/scan-counts';
 
 type Row = Scan & Record<string, unknown>;
 
@@ -62,6 +62,11 @@ const columns: DataTableColumnDef<Row>[] = [
       <span className="tabular-nums">
         {scanImageSummary(row.original)}
         {row.original.imagesFailed ? <span className="ml-1 text-destructive-foreground text-xs">({row.original.imagesFailed} failed)</span> : null}
+        {scapLine(row.original) ? (
+          <span className="block text-muted-foreground text-xs" data-testid="scap-line" title="SCAP (product STIG) stage of this scan. Scores are re-aggregated and deferred auto-reports run when it completes.">
+            {scapLine(row.original)}
+          </span>
+        ) : null}
       </span>
     ),
   },

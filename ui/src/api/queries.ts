@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { getCapabilities } from '@/capabilities';
 import { api } from './client';
+import { scapInProgress } from '@/lib/scan-counts';
 import type { ImageFindingsQuery, ImageQuery, ImageStigQuery, VulnQuery } from './types';
 
 export const qk = {
@@ -86,8 +87,10 @@ export const useScan = (id: string | number | null | undefined) =>
     queryFn: () => api.scan(id as string | number),
     enabled: id !== null && id !== undefined && id !== '',
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === 'queued' || status === 'running' || status === undefined ? 3000 : false;
+      const data = query.state.data;
+      const status = data?.status;
+      if (status === 'queued' || status === 'running' || status === undefined) return 3000;
+      return data && scapInProgress(data) ? 10_000 : false; // §14: STIG evaluation after the scan
     },
   });
 

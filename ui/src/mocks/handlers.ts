@@ -267,8 +267,8 @@ export const handlers = [
     const current = url.searchParams.get('current');
     if (current !== null) items = items.filter((i) => (i.current !== false) === (current === 'true'));
     const stig = url.searchParams.get('stig');
-    if (stig === 'evaluated') items = items.filter((i) => i.stig);
-    else if (stig === 'na') items = items.filter((i) => !i.stig);
+    if (stig === 'evaluated') items = items.filter((i) => i.stig?.status === 'evaluated');
+    else if (stig === 'na') items = items.filter((i) => i.stig?.status === 'notApplicable' || i.stig?.status === 'noContent');
     else if (stig === 'cat1') items = items.filter((i) => (i.stig?.cat1Open ?? 0) > 0);
     items = sortImages(items, sort, order);
     return HttpResponse.json({ items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, pageSize });

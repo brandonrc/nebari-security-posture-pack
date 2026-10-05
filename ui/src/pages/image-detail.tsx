@@ -9,7 +9,7 @@ import { useCapabilities } from '@/capabilities';
 import type { ImageDetail } from '@/api/types';
 import { SCANNERS } from '@/api/types';
 import { ImageStigTab } from '@/components/image-stig';
-import { StigScore } from '@/components/stig';
+import { StigStateLabel } from '@/components/stig';
 import { DEFAULT_FINDINGS_QUERY, FindingsTable, type FindingsQuery } from '@/components/findings-table';
 import { Pager, useClientPagination } from '@/components/table-kit';
 import { CardsSkeleton, CopyButton, EmptyState, ErrorAlert, Meta, PageHeader, errorMessage } from '@/components/page';
@@ -479,7 +479,7 @@ export function ImageDetailPage() {
                   {pv ? null : (
                     <TabsTab value="stig">
                       STIG
-                      {image.stig !== undefined ? <StigScore score={image.stig?.score ?? null} /> : null}
+                      {image.stig !== undefined ? <StigStateLabel stig={image.stig} /> : null}
                     </TabsTab>
                   )}
                   <TabsIndicator />

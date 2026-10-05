@@ -524,6 +524,9 @@ for (let i = 0; i < 30; i += 1) {
 }
 scans[29].score = clusterScore;
 scans[29].grade = gradeForScore(clusterScore);
+// §14: the latest scan is done, its SCAP stage still evaluating (scapPending: reports wait for it)
+Object.assign(scans[29], { scapStatus: 'running', scapImages: 12, scapProgress: { done: 5, total: 12 }, scapPending: true });
+for (const s of scans.slice(0, 29)) if (s.status === 'done') Object.assign(s, { scapStatus: 'done', scapImages: 3, scapProgress: { done: 3, total: 3 }, scapPending: false });
 
 export const SCAN_LOG_FAILED = [
   'scan 12: inventory complete: 27 unique images across 11 namespaces',

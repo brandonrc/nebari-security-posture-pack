@@ -99,6 +99,7 @@ function stigRollup(raw: unknown): StigRollup {
     noContent: optNum(r.noContent),
     errors: optNum(r.errors),
     pending: optNum(r.pending),
+    stale: optNum(r.stale),
     images: optNum(r.images),
     score: typeof r.score === 'number' && Number.isFinite(r.score) ? r.score : null,
   };

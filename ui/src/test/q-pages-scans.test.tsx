@@ -62,6 +62,24 @@ describe('Scans page', () => {
     expect(within(fresh).getByText('0 rescanned · 80 fresh · 80 in inventory')).toBeInTheDocument();
   });
 
+  it('shows "STIG evaluation in progress (n/m)" for a done scan whose SCAP stage still runs', async () => {
+    server.use(
+      http.get('*/api/v1/scans', () =>
+        HttpResponse.json([
+          scan(44, { scapStatus: 'running', scapImages: 83, scapProgress: { done: 12, total: 83 }, scapPending: true }),
+          scan(43, { scapStatus: 'done', scapImages: 83, scapProgress: { done: 83, total: 83 }, scapPending: false }),
+        ]),
+      ),
+    );
+    renderApp('/scans');
+    const table = await screen.findByRole('table', { name: 'Scan history' });
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(3));
+    const [, pending, done] = within(table).getAllByRole('row');
+    expect(within(pending).getByTestId('scap-line')).toHaveTextContent('STIG evaluation in progress (12/83)');
+    expect(within(pending).getByText('done')).toBeInTheDocument(); // the scan itself is done
+    expect(within(done).queryByTestId('scap-line')).toBeNull();
+  });
+
   it('shows the empty state', async () => {
     server.use(http.get('*/api/v1/scans', () => HttpResponse.json({ items: [] })));
     renderApp('/scans');
@@ -91,6 +109,16 @@ describe('Scan detail page', () => {
     expect(screen.getByText('ERROR clair: timeout on img-7').className).toMatch(/destructive/);
     expect(screen.queryByRole('button', { name: /Cancel scan/ })).toBeNull();
     expect(screen.queryByRole('progressbar')).toBeNull();
+  });
+
+  it('shows the SCAP stage progress of a scan finished with scapPending', async () => {
+    server.use(http.get('*/api/v1/scans/8', () => HttpResponse.json(detail({ id: 8, scapStatus: 'running', scapImages: 83, scapProgress: { done: 30, total: 83 }, scapPending: true }))));
+    renderApp('/scans/8');
+    const box = await screen.findByTestId('scap-progress');
+    expect(box).toHaveTextContent('STIG evaluation in progress (30/83)');
+    expect(box).toHaveTextContent('scan finished; reports wait for it');
+    expect(within(box).getByRole('progressbar', { name: 'STIG evaluation progress' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Cancel scan/ })).toBeNull();
   });
 
   it('splits a string log tail into lines', async () => {

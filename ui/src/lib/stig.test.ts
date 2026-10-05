@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coveragePct, fidelityDegraded, imageStigScore, normCat, normResult, passRate, SOURCE_LABEL, stigGrade } from './stig';
+import { coveragePct, fidelityDegraded, imageStigScore, normCat, normResult, passRate, SOURCE_LABEL, stigGrade, stigState, stigStateTooltip } from './stig';
 
 describe('lib/stig', () => {
   it.each([
@@ -45,5 +45,25 @@ describe('lib/stig', () => {
     expect(imageStigScore({})).toBeUndefined();
     expect(imageStigScore({ stig: null })).toBeNull();
     expect(imageStigScore({ stig: { score: 81 } })).toBe(81);
+  });
+
+  it.each([
+    [undefined, undefined],
+    [null, 'notEvaluated'],
+    [{ status: 'notEvaluated', score: null }, 'notEvaluated'],
+    [{ status: 'evaluated', score: 80 }, 'evaluated'],
+    [{ score: 80 }, 'evaluated'],
+    [{ status: 'evaluated', score: null }, 'unscored'],
+    [{ status: 'notApplicable', score: null }, 'notApplicable'],
+    [{ status: 'noContent', score: null }, 'noContent'],
+    [{ status: 'timeout', score: null }, 'timeout'],
+    [{ status: 'error', score: null }, 'error'],
+  ])('stigState(%j) = %s', (input, out) => expect(stigState(input as never)).toBe(out));
+
+  it('has distinct tooltips for not evaluated / not applicable / no content', () => {
+    const tips = (['notEvaluated', 'notApplicable', 'noContent'] as const).map((s) => stigStateTooltip(s));
+    expect(new Set(tips).size).toBe(3);
+    expect(stigStateTooltip('notApplicable', { score: null, error: 'os alpine' })).toContain('(os alpine)');
+    expect(stigStateTooltip('evaluated', { score: 1, stale: true, staleError: '429' })).toMatch(/^Previous STIG result.*\(429\)/);
   });
 });

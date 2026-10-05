@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { formatRelative } from '@/lib/format';
-import { CAT_LABEL, fidelityDegraded, normResult, RESULT_LABEL, stigGrade } from '@/lib/stig';
+import { CAT_LABEL, fidelityDegraded, normResult, RESULT_LABEL, stigGrade, stigStateTooltip } from '@/lib/stig';
 
 const RESULT_FILTER = (['fail', 'pass', 'error', 'notchecked', 'notapplicable', 'informational', 'unknown'] as const).map((r) => ({ value: r, label: RESULT_LABEL[r] }));
 const CAT_FILTER = (['cat1', 'cat2', 'cat3'] as const).map((c) => ({ value: c, label: CAT_LABEL[c] }));
@@ -173,6 +173,20 @@ function RuleTable({ b, query, onQuery, loading }: { b: ImageStigBenchmark; quer
   );
 }
 
+/** The stored result is the previous one: the last re-evaluation failed transiently. */
+function StaleAlert({ error, since }: { error?: string | null; since?: string | null }) {
+  return (
+    <Alert variant="warning" data-testid="stig-stale-alert">
+      <TriangleAlert />
+      <AlertTitle>Showing the previous STIG evaluation</AlertTitle>
+      <AlertDescription>
+        The last re-evaluation{since ? ` (since ${formatRelative(since)})` : ''} failed{error ? `: ${error}` : ''}. The previous result is kept until a genuine
+        evaluation replaces it; the next scan retries.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 /** Image-level outcome without benchmark results (`status` from `GET /images/{id}/stig`). */
 function NoBenchmark({ status, reason }: { status?: string | null; reason?: string | null }) {
   const icon = <FileQuestion className="size-6" />;
@@ -189,23 +203,30 @@ function NoBenchmark({ status, reason }: { status?: string | null; reason?: stri
     case 'queued':
     case 'running':
       return (
-        <EmptyState icon={icon} title="Not evaluated yet">
-          The SCAP stage hasn’t evaluated this image yet. It runs after the image is cached during a scan when the SCAP scanner is enabled.
-        </EmptyState>
+        <div title={stigStateTooltip('notEvaluated')} data-stig-state="notEvaluated">
+          <EmptyState icon={icon} title="Not evaluated yet">
+            The SCAP stage hasn’t evaluated this image yet. It runs after the image is scanned while the SCAP scanner is enabled; this is not the same as “not
+            applicable”.
+          </EmptyState>
+        </div>
       );
     case 'noContent':
       return (
-        <EmptyState icon={icon} title="No SCAP content for this image">
-          {reason ?? 'The operating system or product was detected, but no benchmark for it is in the content catalogue.'} Add a content source in the Helm values
-          to evaluate it.
-        </EmptyState>
+        <div title={stigStateTooltip('noContent')} data-stig-state="noContent">
+          <EmptyState icon={icon} title="No SCAP content for this image">
+            {reason ?? 'The operating system or product was detected, but no benchmark for it is in the content catalogue.'} Add a content source in the Helm
+            values to evaluate it.
+          </EmptyState>
+        </div>
       );
     default:
       return (
-        <EmptyState icon={icon} title="No applicable benchmark">
-          {reason ?? 'No SCAP content in the catalogue matches this image’s operating system or products.'} That is an accepted result: the image is reported as not
-          applicable.
-        </EmptyState>
+        <div title={stigStateTooltip('notApplicable')} data-stig-state="notApplicable">
+          <EmptyState icon={icon} title="No applicable benchmark">
+            {reason ?? 'No SCAP content in the catalogue matches this image’s operating system or products.'} That is an accepted result: the image is reported as
+            not applicable.
+          </EmptyState>
+        </div>
       );
   }
 }
@@ -230,7 +251,15 @@ export function ImageStigTab({ imageId }: { imageId: string }) {
     }
     return <ErrorAlert error={error} onRetry={() => void refetch()} />;
   }
-  if (!data?.benchmarks.length) return <NoBenchmark status={data?.status} reason={data?.reason} />;
+  const stale = data?.stig?.stale ? <StaleAlert error={data.stig.staleError} since={data.stig.staleSince} /> : null;
+  if (!data?.benchmarks.length) {
+    return (
+      <div className="flex flex-col gap-4 pt-2">
+        {stale}
+        <NoBenchmark status={data?.status} reason={data?.reason} />
+      </div>
+    );
+  }
   const selected = data.benchmarks.find((b) => b.benchmarkId === benchmark) ?? data.benchmarks[0];
   const degraded = fidelityDegraded(selected.rootfsFidelity) || (!selected.rootfsFidelity && fidelityDegraded(data.rootfsFidelity));
   const warnings = [...new Set([...(selected.rootfsWarnings ?? []), ...(data.rootfsWarnings ?? [])])];
@@ -242,6 +271,7 @@ export function ImageStigTab({ imageId }: { imageId: string }) {
   );
   return (
     <div className="flex flex-col gap-4 pt-2">
+      {stale}
       {data.benchmarks.length > 1 ? (
         <Tabs value={selected.benchmarkId} onValueChange={(v) => {
             setBenchmark(String(v));

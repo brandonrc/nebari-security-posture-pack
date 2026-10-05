@@ -13,6 +13,9 @@ const idOf = (ref: string) => images.find((i) => i.ref.startsWith(ref))?.id as s
 const API_IMAGE = idOf('localhost:32000/security-posture-api'); // Ubuntu 22.04 SSG + PostgreSQL 15
 const CALICO = idOf('docker.io/calico/node'); // RHEL 9, degraded rootfs
 const PYTHON = idOf('docker.io/library/python'); // no applicable benchmark
+const LOKI = idOf('docker.io/grafana/loki'); // never evaluated
+const LANDING = idOf('quay.io/nebari/nebari-landing'); // no content (disa-nginx)
+const KEYCLOAK = idOf('quay.io/keycloak/keycloak'); // evaluated, kept result stale after a 429
 
 describe('Image detail → STIG tab', () => {
   it('shows one sub-tab per benchmark with header, rule table and fix-text expander', async () => {
@@ -94,6 +97,29 @@ describe('Image detail → STIG tab', () => {
     expect(screen.getByText(/os-release and product probes found no applicable benchmark/)).toBeInTheDocument();
     // the tab carries "n/a" instead of a score
     expect(screen.getByRole('tab', { name: /STIG/ })).toHaveTextContent('n/a');
+  });
+
+  it('shows "not evaluated yet" (not "not applicable") for an image the SCAP stage has not reached', async () => {
+    renderApp(`/images/${LOKI}?tab=stig`);
+    expect(await screen.findByText('Not evaluated yet')).toBeInTheDocument();
+    expect(screen.queryByText('No applicable benchmark')).toBeNull();
+    expect(screen.getByRole('tab', { name: /STIG/ })).toHaveTextContent('not yet');
+    expect(document.querySelector('[data-stig-state="notEvaluated"]')).toHaveAttribute('title', expect.stringMatching(/^Not evaluated yet/));
+  });
+
+  it('shows "no content" with the missing benchmark', async () => {
+    renderApp(`/images/${LANDING}?tab=stig`);
+    expect(await screen.findByText('No SCAP content for this image')).toBeInTheDocument();
+    expect(screen.getByText(/disa-nginx/)).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /STIG/ })).toHaveTextContent('no content');
+  });
+
+  it('keeps showing the previous evaluation with a stale warning', async () => {
+    renderApp(`/images/${KEYCLOAK}?tab=stig`);
+    const alert = await screen.findByTestId('stig-stale-alert');
+    expect(within(alert).getByText('Showing the previous STIG evaluation')).toBeInTheDocument();
+    expect(within(alert).getByText(/429 Too Many Requests/)).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: 'STIG rules' })).toBeInTheDocument();
   });
 
   it('degrades to an empty state when the API has no /stig endpoint', async () => {
@@ -253,6 +279,14 @@ describe('Overview STIG tile and SCAP scanner card', () => {
     expect(within(tile).getByRole('link', { name: /\d+ images evaluated against a STIG benchmark/ })).toHaveAttribute('href', '/compliance?tab=stig#product-stigs');
     expect(within(tile).getByText(/images evaluated · \d+% coverage/)).toBeInTheDocument();
     expect(Number(within(tile).getByTestId('stig-cat1').textContent)).toBeGreaterThan(0);
+    // not evaluated yet / not applicable / no content / stale are separate, each with a tooltip
+    expect(within(tile).getByTestId('stig-tile-pending')).toHaveTextContent('1 not evaluated yet');
+    expect(within(tile).getByTestId('stig-tile-pending')).toHaveAttribute('title', expect.stringMatching(/^Not evaluated yet/));
+    expect(within(tile).getByTestId('stig-tile-notApplicable')).toHaveTextContent(/\d+ not applicable/);
+    expect(within(tile).getByTestId('stig-tile-noContent')).toHaveTextContent('1 no content');
+    expect(within(tile).getByTestId('stig-tile-noContent')).toHaveAttribute('title', expect.stringMatching(/^No content/));
+    expect(within(tile).getByTestId('stig-tile-stale')).toHaveTextContent('1 stale (retrying)');
+    expect(within(tile).queryByTestId('stig-tile-errors')).toBeNull();
     // like the API, the summary lists only the vulnerability scanners: `scap` comes from /scanners
     const card = await screen.findByTestId('scanner-scap');
     expect(within(card).getByText('OpenSCAP')).toBeInTheDocument();
@@ -287,7 +321,10 @@ describe('Images STIG column', () => {
     const table = await screen.findByRole('table', { name: 'Images' });
     await waitFor(() => expect(within(table).getAllByTestId('stig-cell').length).toBeGreaterThan(20));
     const cells = within(table).getAllByTestId('stig-cell');
-    expect(cells.filter((c) => c.textContent === 'n/a').length).toBe(19);
+    // never evaluated (loki, the stopped batch-agent) / no content (nginx-based landing) / not applicable
+    expect(cells.filter((c) => c.textContent === 'n/a').length).toBe(16);
+    expect(cells.filter((c) => c.textContent === 'not yet').length).toBe(2);
+    expect(cells.filter((c) => c.textContent === 'no content').length).toBe(1);
     expect(within(table).getAllByRole('link', { name: /Grade [A-F]/ }).every((l) => l.getAttribute('href')?.endsWith('?tab=stig'))).toBe(true);
 
     await user.click(within(within(table).getByRole('columnheader', { name: /STIG/ })).getByRole('button'));
@@ -297,6 +334,37 @@ describe('Images STIG column', () => {
     await waitFor(() => expect(seen.at(-1)?.get('stig')).toBe('cat1'));
     await waitFor(() => expect(within(table).getAllByTestId('stig-cell').every((c) => c.textContent !== 'n/a')).toBe(true));
     server.events.removeAllListeners();
+  });
+
+  it('tells not evaluated yet, not applicable, no content and stale apart, with tooltips', async () => {
+    server.use(
+      http.get('*/api/v1/images', () =>
+        HttpResponse.json({
+          items: [
+            { id: 1, ref: 'a/never:1', stig: null },
+            { id: 2, ref: 'a/alpine:1', stig: { status: 'notApplicable', score: null, error: 'no SCAP benchmark applies (os alpine 3.20)' } },
+            { id: 3, ref: 'a/nginx:1', stig: { status: 'noContent', score: null, error: 'no content for the applicable benchmark(s): disa-nginx' } },
+            { id: 4, ref: 'a/pg:1', stig: { status: 'evaluated', score: null } },
+            { id: 5, ref: 'a/ubi:1', stig: { status: 'evaluated', score: 85.3, stale: true, staleError: 'image copy failed: 429 Too Many Requests' } },
+          ],
+          total: 5,
+        }),
+      ),
+    );
+    renderApp('/images');
+    const table = await screen.findByRole('table', { name: 'Images' });
+    await within(table).findByText('a/never:1');
+    const cell = (ref: string) => within(within(table).getByText(ref).closest('tr') as HTMLElement).getByTestId('stig-cell');
+    const label = (ref: string, text: string) => within(cell(ref)).getByText(text);
+    expect(label('a/never:1', 'not yet')).toHaveAttribute('title', expect.stringMatching(/^Not evaluated yet/));
+    expect(within(cell('a/never:1')).queryByRole('link')).toBeNull(); // nothing to open yet
+    expect(label('a/alpine:1', 'n/a')).toHaveAttribute('title', expect.stringMatching(/^Not applicable: .*alpine 3\.20/));
+    expect(label('a/nginx:1', 'no content')).toHaveAttribute('title', expect.stringMatching(/^No content: .*disa-nginx/));
+    expect(label('a/pg:1', 'not scored')).toHaveAttribute('title', expect.stringMatching(/no rule passed or failed/));
+    expect(within(cell('a/ubi:1')).getByText('85.3')).toBeInTheDocument();
+    expect(within(cell('a/ubi:1')).getByTestId('stig-stale')).toHaveTextContent('stale');
+    expect(within(cell('a/ubi:1')).getByTitle(/Previous STIG result: .*429/)).toBeInTheDocument();
+    expect(within(cell('a/alpine:1')).getByRole('link')).toHaveAttribute('href', '/images/2?tab=stig');
   });
 
   it('marks SCAP errors and links numeric API image ids', async () => {

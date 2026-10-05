@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
 import { durationBetween, formatDateTime, formatDuration } from '@/lib/format';
-import { scanImageSummary } from '@/lib/scan-counts';
+import { scanImageSummary, scapLine } from '@/lib/scan-counts';
 import { cn } from '@/lib/utils';
 
 export function ScanDetailPage() {
@@ -66,6 +66,17 @@ export function ScanDetailPage() {
                 <Meta label="Score">{scan.grade ? <GradeBadge grade={scan.grade} score={scan.score} /> : '—'}</Meta>
               </div>
               {running ? <ProgressBar value={scan.imagesDone} max={scan.imagesTotal || 1} label="Scan progress" /> : null}
+              {scapLine(scan) ? (
+                <div className="flex flex-col gap-1" data-testid="scap-progress">
+                  <span className="text-sm" title="Scores use the STIG results stored so far; when the SCAP stage completes they are re-aggregated and the deferred auto-reports and controls run.">
+                    {scapLine(scan)}
+                    {scan.scapPending && scan.status === 'done' ? <span className="text-muted-foreground"> · scan finished; reports wait for it</span> : null}
+                  </span>
+                  {scan.scapStatus === 'queued' || scan.scapStatus === 'running' ? (
+                    <ProgressBar value={scan.scapProgress?.done ?? 0} max={scan.scapProgress?.total || scan.scapImages || 1} label="STIG evaluation progress" />
+                  ) : null}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
           {scan.warnings?.length ? (

@@ -582,8 +582,10 @@ untouched. Surface `stig: {evaluated, pass, fail, cat1Open, cat2Open, cat3Open, 
 - Compliance → STIG tab: two sections, "Kubernetes STIG" (existing) and "Product STIGs" (per
   benchmark rollup with images evaluated, open CAT I count, link to a benchmark page listing
   failing rules across images).
-- Overview: STIG tile (evaluated images, coverage %, open CAT I). Images table: STIG column
-  (score or "n/a"). Settings: scap section. Scanner health card for `scap` with content versions.
+- Overview: STIG tile (evaluated images, coverage %, open CAT I; counts of not evaluated yet / not
+  applicable / no content / errors / stale). Images table: STIG column (score, with a "stale"
+  marker when the last re-evaluation failed; otherwise "not yet" = never evaluated, "n/a" = no
+  applicable benchmark, "no content", "not scored", "error", "timeout", each with a tooltip). Settings: scap section. Scanner health card for `scap` with content versions.
 
 ### Chart
 `scapWorker` Deployment (own SA, no token, root-in-container with the capability set above,

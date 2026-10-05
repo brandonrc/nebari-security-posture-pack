@@ -5,7 +5,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTo
 import { useControls, useFamilies, useScanners, useSettings, useSummary, useSupplyChain } from '@/api/queries';
 import { PRODUCT_STIGS_HREF } from '@/components/product-stigs';
 import { CatOpenChips, StigResultBar } from '@/components/stig';
-import { coveragePct, SOURCE_LABEL } from '@/lib/stig';
+import { coveragePct, SOURCE_LABEL, stigStateTooltip } from '@/lib/stig';
 import { ROLLUP_SERIES, ROLLUP_STATUS } from '@/components/family-rollup';
 import type { Baseline } from '@/api/types';
 import { applicableTotal, complianceTotals, totalsByStatus } from '@/lib/controls';
@@ -162,6 +162,15 @@ function ScannerCard({ scanner }: { scanner: ScannerHealth }) {
   );
 }
 
+/** Image states besides "evaluated" on the tile, each with the same tooltip as the Images STIG column. */
+const STIG_TILE_STATES: Array<['pending' | 'notApplicable' | 'noContent' | 'errors' | 'stale', string, string]> = [
+  ['pending', 'not evaluated yet', stigStateTooltip('notEvaluated')],
+  ['notApplicable', 'not applicable', stigStateTooltip('notApplicable')],
+  ['noContent', 'no content', stigStateTooltip('noContent')],
+  ['errors', 'errors', stigStateTooltip('error')],
+  ['stale', 'stale (retrying)', stigStateTooltip('evaluated', { score: null, stale: true })],
+];
+
 /** §14 product/OS STIG tile (`summary.stig`); hidden when the API has no SCAP rollup. */
 function StigTile({ summary }: { summary: Summary }) {
   const stig = summary.stig;
@@ -197,9 +206,14 @@ function StigTile({ summary }: { summary: Summary }) {
           <CatOpenChips cat1={stig.cat1Open} cat2={stig.cat2Open} cat3={stig.cat3Open} />
           <span>
             {stig.pass.toLocaleString()} pass · {stig.fail.toLocaleString()} fail
-            {stig.notApplicable ? ` · ${stig.notApplicable} images not applicable` : ''}
-            {stig.errors ? ` · ${stig.errors} errors` : ''}
           </span>
+          {STIG_TILE_STATES.map(([key, label, tooltip]) =>
+            stig[key] ? (
+              <span key={key} data-testid={`stig-tile-${key}`} title={tooltip} className="cursor-help underline decoration-dotted underline-offset-2">
+                · {stig[key]} {label}
+              </span>
+            ) : null,
+          )}
         </div>
       </CardContent>
     </Card>
