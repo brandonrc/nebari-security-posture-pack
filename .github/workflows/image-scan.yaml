@@ -1,10 +1,15 @@
 name: Image scan
 
-# Builds the pack's three images (buildx, GitHub Actions cache), scans them with Trivy and runs
-# container-structure-test against the image contract (non-root uid, ports, pinned scanners).
+# Builds the pack's three images (buildx, GitHub Actions cache), scans them with Trivy and Grype and
+# runs container-structure-test against the image contract (non-root uid, ports, pinned scanners).
 # - SARIF with every HIGH/CRITICAL finding goes to code scanning (not on fork PRs).
-# - Gate: CRITICAL with a fix available fails the job, minus the reviewed, expiring exceptions in
-#   .github/trivy/ignore.yaml.
+# - Both scanners consume the pack's own OpenVEX (api/vex/posture-images.vex.json), whose statements
+#   are scoped to the pack's image names; not_affected findings drop out of the counts.
+# - Counts: CRITICAL/HIGH (fixable) per image and scanner, for the change ("after") and, on pull
+#   requests, for the base branch's Dockerfiles ("before"); posted as a sticky PR comment (same-repo
+#   PRs) and as the run's job summary.
+# - Gate: any CRITICAL or HIGH with a fix available fails the job: trivy --ignore-unfixed minus the
+#   reviewed, expiring exceptions in .github/trivy/ignore.yaml, and grype --only-fixed --fail-on high.
 # Publishing stays in build-images.yaml (nebari-dev reusable workflow); this workflow never pushes.
 
 on:
@@ -16,6 +21,7 @@ on:
       - ".github/workflows/image-scan.yaml"
       - ".github/cst/**"
       - ".github/trivy/**"
+      - ".github/scripts/image_scan_counts.py"
   pull_request:
     paths:
       - "api/**"
@@ -23,6 +29,7 @@ on:
       - ".github/workflows/image-scan.yaml"
       - ".github/cst/**"
       - ".github/trivy/**"
+      - ".github/scripts/image_scan_counts.py"
   schedule:
     - cron: "17 5 * * 1" # weekly: new CVEs in unchanged images
   workflow_dispatch:
@@ -37,6 +44,9 @@ concurrency:
 env:
   TRIVY_VERSION: v0.75.0
   CST_VERSION: v1.22.1
+  GRYPE_VERSION: 0.120.0
+  GRYPE_SHA256: a5a1218dce63acdac152a6b3b5bb366e7267e36f4069848cf455543b3fa5700e # grype_0.120.0_checksums.txt
+  VEX: api/vex/posture-images.vex.json
 
 jobs:
   image:
@@ -90,27 +100,105 @@ jobs:
           output: trivy-${{ matrix.image }}.sarif
           limit-severities-for-sarif: true
           exit-code: "0"
+        env:
+          TRIVY_VEX: ${{ env.VEX }}
       - name: Upload SARIF to code scanning
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: trivy-${{ matrix.image }}.sarif
           category: image-${{ matrix.image }}
-      - name: Trivy gate (CRITICAL with a fix available)
+      - name: Build the base branch's image ("before", pull requests only)
+        id: base
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          git worktree add ../base FETCH_HEAD
+          docker buildx build --load -t "local/security-posture-${{ matrix.image }}:base" \
+            --cache-from "type=gha,scope=${{ matrix.image }}" \
+            -f "../base/${{ matrix.dockerfile }}" "../base/${{ matrix.context }}"
+      - name: Install grype
+        run: |
+          curl -sSfLo grype.tgz "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          echo "${GRYPE_SHA256}  grype.tgz" | sha256sum -c -
+          sudo tar -xzf grype.tgz -C /usr/local/bin grype && rm grype.tgz
+          grype db update
+      - name: Counts (CRITICAL/HIGH, fixable)
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p counts
+          scan() { # <image ref> <variant>
+            trivy image --quiet --scanners vuln --severity CRITICAL,HIGH --vex "$VEX" --format json \
+              --output "trivy-$2.json" "$1"
+            grype --quiet --vex "$VEX" -o json --file "grype-$2.json" "docker:$1"
+            python3 .github/scripts/image_scan_counts.py count "${{ matrix.image }}:$2" \
+              "trivy-$2.json" "grype-$2.json" -o "counts/${{ matrix.image }}-$2.json"
+          }
+          scan "$IMAGE" after
+          if [ "${{ steps.base.outcome }}" = "success" ]; then
+            scan "local/security-posture-${{ matrix.image }}:base" before
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: counts-${{ matrix.image }}
+          path: counts/
+          retention-days: 14
+      - name: Trivy gate (CRITICAL/HIGH with a fix available)
+        if: ${{ !cancelled() }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: ${{ env.TRIVY_VERSION }}
           image-ref: ${{ env.IMAGE }}
           scanners: vuln
-          severity: CRITICAL
+          severity: CRITICAL,HIGH
           ignore-unfixed: true
           trivyignores: .github/trivy/ignore.yaml
           format: table
           exit-code: "1"
           skip-setup-trivy: true
+        env:
+          TRIVY_VEX: ${{ env.VEX }}
+      - name: Grype gate (CRITICAL/HIGH with a fix available)
+        if: ${{ !cancelled() }}
+        run: grype --quiet --vex "$VEX" --only-fixed --fail-on high "docker:$IMAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ !cancelled() }}
         with:
           name: trivy-${{ matrix.image }}
           path: trivy-${{ matrix.image }}.sarif
           retention-days: 14
+
+  counts:
+    name: counts (before/after)
+    needs: image
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: counts-*
+          path: counts
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          python3 .github/scripts/image_scan_counts.py report counts > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SAME_REPO" = "true" ]; then
+            id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+                   --jq '[.[] | select(.body | startswith("<!-- image-scan-counts -->"))][0].id // empty')
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@report.md >/dev/null
+            else
+              gh pr comment "$PR" --body-file report.md
+            fi
+          fi
