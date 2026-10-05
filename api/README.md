@@ -125,6 +125,7 @@ docker run --rm -u 0 -v "$PWD":/src:ro -w /src --entrypoint sh security-posture-
 | `PROVENANCE_HELM_MAX_RELEASE_BYTES` | `16777216` | worker | decompressed Helm release payload cap (larger releases are reported as corrupt) |
 | `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` (or `KEYCLOAK_CLIENT_SECRET_FILE`) | unset | worker | controls engine: dedicated view-only client (`client_credentials`); when set the Keycloak admin Secret is not read |
 | `KEYCLOAK_ALLOW_MASTER_FALLBACK` | `false` | worker | controls engine: with no pinned admin realm, also try the admin login against `master` |
+| `CONTROLS_EXCEPTIONS` | `[]` | both | JSON list of risk acceptances `{kind, namespace, name, checks[], assertions[], reason, approvedBy, expiresAt?, reviewBy?, ticket?}` (chart `controlsEngine.exceptions`); read-only entries of settings `controlsEngine.exceptions` (docs/CONTROLS.md "Risk acceptances") |
 | `SCANNERS_SCAP_ENABLED` | `false` | both | default for settings `scanners.scap` (SCAP scanner, DESIGN §14) |
 | `SCAP_EMBEDDED` | `false` | worker | run the scap stage inside the scan worker instead of queueing it for `--stages scap` (dev; non-root -> `rootfsFidelity: degraded`) |
 | `SCAP_CONTENT_DIR` / `SCAP_WORK_DIR` | `CACHE_DIR/scap-content` / `CACHE_DIR/scap` | worker | datastreams (+ `index.json`, rule cache) / rootfs + oscap scratch |

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from .catalog import to_label
+from .exceptions import RiskException
 
 
 class _Camel(BaseModel):
@@ -105,6 +106,9 @@ class ControlsEngineSettings(_Camel):
     stig_asset: StigAsset = Field(default_factory=StigAsset)
     not_applicable: dict[str, str] = Field(default_factory=dict)  # tailoring: control -> justification
     parameters: ControlParameters = Field(default_factory=ControlParameters)
+    # risk acceptances (controls_engine/exceptions.py); entries with source `values` come from the chart
+    # (env CONTROLS_EXCEPTIONS), are re-applied on every load and never stored
+    exceptions: list[RiskException] = Field(default_factory=list)
 
     @field_validator("admin_subjects")
     @classmethod

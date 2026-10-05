@@ -175,7 +175,8 @@ def defaults(env: Settings | None = None) -> AppSettings:
             recheck_hours=env.provenance_recheck_hours),
         scap=_scap_defaults(env),
         controls_engine=ControlsEngineSettings(enabled=env.controls_engine_enabled, baseline=env.controls_baseline,
-                                               admin_subjects=env.controls_admin_subjects),
+                                               admin_subjects=env.controls_admin_subjects,
+                                               exceptions=env.controls_exceptions),
         admin_groups=sorted(env.admin_group_set),
     )
 
@@ -213,6 +214,10 @@ async def load(session: AsyncSession, env: Settings | None = None) -> AppSetting
     for k in EDITABLE:
         merged[k] = stored[k]
     merged["controls_engine"]["enabled"] = base.controls_engine.enabled  # read-only (env)
+    # chart risk acceptances (source `values`) always come from the env, settings ones from the row
+    merged["controls_engine"]["exceptions"] = [
+        *[e for e in base.model_dump()["controls_engine"]["exceptions"] if e.get("source") == "values"],
+        *[e for e in stored["controls_engine"]["exceptions"] if e.get("source") != "values"]]
     if trust_settings_locked():
         for f in TRUST_FIELDS:
             merged["provenance"][f] = getattr(base.provenance, f)
@@ -220,7 +225,10 @@ async def load(session: AsyncSession, env: Settings | None = None) -> AppSetting
 
 
 async def save(session: AsyncSession, new: AppSettings, user: str | None) -> AppSettings:
-    data = new.model_dump(by_alias=True, include=EDITABLE)
+    data = new.model_dump(by_alias=True, include=EDITABLE, mode="json")
+    ce = data.get("controlsEngine")
+    if isinstance(ce, dict):  # chart risk acceptances are re-read from the env, never stored
+        ce["exceptions"] = [e for e in ce.get("exceptions") or [] if e.get("source") != "values"]
     row = await session.get(Setting, 1)
     if row is None:
         session.add(Setting(id=1, data=data, updated_by=user))

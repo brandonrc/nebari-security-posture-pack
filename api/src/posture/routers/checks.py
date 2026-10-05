@@ -26,10 +26,10 @@ def stig_ref(check_id: str) -> dict[str, Any] | None:
                      "benchmark": x.get("benchmark")} for x in rules]}
 
 
-def check_dict(c: CheckDef, passed: int = 0, failed: int = 0) -> dict[str, Any]:
+def check_dict(c: CheckDef, passed: int = 0, failed: int = 0, accepted: int = 0) -> dict[str, Any]:
     return {"stig": stig_ref(c.id),"id": c.id, "title": c.title, "severity": c.severity, "category": c.category, "scope": c.scope,
             "description": c.description, "remediation": c.remediation, "controls": c.controls,
-            "passed": passed, "failed": failed}
+            "passed": passed, "failed": failed, "acceptedRisk": accepted}
 
 
 async def check_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
@@ -41,14 +41,15 @@ async def check_counts(session: AsyncSession) -> dict[str, dict[str, int]]:
         select(PostureResultRow.check_id, PostureResultRow.status, func.count())
         .where(PostureResultRow.scan_id == latest.id).group_by(PostureResultRow.check_id, PostureResultRow.status)
     )).all():
-        out.setdefault(cid, {"pass": 0, "fail": 0})[status] = n
+        out.setdefault(cid, {"pass": 0, "fail": 0, "accepted-risk": 0})[status] = n
     return out
 
 
 @router.get("/checks")
 async def list_checks(session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
     counts = await check_counts(session)
-    return [check_dict(c, counts.get(c.id, {}).get("pass", 0), counts.get(c.id, {}).get("fail", 0)) for c in CHECKS]
+    return [check_dict(c, counts.get(c.id, {}).get("pass", 0), counts.get(c.id, {}).get("fail", 0),
+                       counts.get(c.id, {}).get("accepted-risk", 0)) for c in CHECKS]
 
 
 @router.get("/checks/{check_id}")
@@ -58,7 +59,7 @@ async def get_check(check_id: str, status: str | None = None, namespace: str | N
     if c is None:
         raise HTTPException(404, detail="check not found")
     counts = (await check_counts(session)).get(check_id, {})
-    out = check_dict(c, counts.get("pass", 0), counts.get("fail", 0))
+    out = check_dict(c, counts.get("pass", 0), counts.get("fail", 0), counts.get("accepted-risk", 0))
     latest = await latest_done_scan(session)
     results: list[dict[str, Any]] = []
     if latest:
@@ -73,6 +74,6 @@ async def get_check(check_id: str, status: str | None = None, namespace: str | N
         results = [{"namespace": r.namespace, "kind": r.kind, "name": r.name, "container": r.container,
                     "pod": r.pod, "status": r.status, "detail": r.detail, "severity": r.severity,
                     "weight": r.weight, "systemNamespace": r.system_namespace} for r in rows]
-        results.sort(key=lambda r: r["status"] != "fail")
+        results.sort(key=lambda r: {"fail": 0, "accepted-risk": 1}.get(r["status"], 2))
     out["results"] = results
     return out

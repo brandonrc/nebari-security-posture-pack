@@ -137,6 +137,8 @@ class Settings(BaseSettings):
     controls_baseline: str = "moderate"  # default for settings controlsEngine.baseline
     controls_system_namespaces: CsvList = ["kube-system", "kube-public", "kube-node-lease"]
     controls_admin_subjects: CsvList = []  # default for settings controlsEngine.adminSubjects
+    # chart controlsEngine.exceptions (JSON list of risk acceptances; read-only in settings)
+    controls_exceptions: Annotated[list[dict[str, Any]], NoDecode] = []
     controls_keycloak_url: str = "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth"
     controls_keycloak_realm: str = "nebari"
     controls_keycloak_admin_realm: str = ""  # realm of the admin credentials; "" = target realm, then master
@@ -157,6 +159,13 @@ class Settings(BaseSettings):
     @classmethod
     def _controls_csv(cls, v: object) -> list[str]:
         return _split(v)
+
+    @field_validator("controls_exceptions", mode="before")
+    @classmethod
+    def _controls_exceptions(cls, v: object) -> list[dict[str, Any]]:
+        from .controls_engine.exceptions import parse_env
+
+        return parse_env(v)
 
     # SCAP scanner (DESIGN §14, posture.scap): product / OS STIGs inside images with OpenSCAP
     scanners_scap_enabled: bool = False  # default for settings scanners.scap

@@ -154,7 +154,7 @@ async def test_01_empty_state_shapes(env):
     s = (await c.get("/summary")).json()
     assert s["score"] is None and s["grade"] == "?" and s["lastScan"] is None
     assert s["counts"]["critical"] == 0 and s["trend"] == [] and s["topRisks"] == []
-    assert s["checks"] == {"passed": 0, "failed": 0, "total": 0}
+    assert s["checks"] == {"passed": 0, "failed": 0, "acceptedRisk": 0, "total": 0}
     assert s["slaOverdue"] == {"critical": 0, "high": 0, "medium": 0, "low": 0}
     assert s["exposure"]["kev"] == 0 and s["exposure"]["kevCatalogVersion"]  # S4: KEV exposure count
     assert (await c.get("/images")).json() == {"items": [], "total": 0, "page": 1, "pageSize": 50}

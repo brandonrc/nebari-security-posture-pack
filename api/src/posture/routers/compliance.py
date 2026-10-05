@@ -21,6 +21,7 @@ async def control_coverage(session: AsyncSession) -> list[dict[str, Any]]:
     latest = await latest_done_scan(session)
     findings: dict[str, int] = {}
     checks: dict[str, int] = {}
+    accepted: dict[str, int] = {}
     if latest is not None:
         for fixable, n in (await session.execute(
             select(ConsensusFindingRow.fixable, func.count()).join(Image, Image.id == ConsensusFindingRow.image_id)
@@ -28,17 +29,20 @@ async def control_coverage(session: AsyncSession) -> list[dict[str, Any]]:
         )).all():
             for c in vuln_controls(bool(fixable)):
                 findings[c] = findings.get(c, 0) + n
-        for cid, n in (await session.execute(
-            select(PostureResultRow.check_id, func.count())
-            .where(PostureResultRow.scan_id == latest.id, PostureResultRow.status == "fail")
-            .group_by(PostureResultRow.check_id)
+        for cid, st, n in (await session.execute(
+            select(PostureResultRow.check_id, PostureResultRow.status, func.count())
+            .where(PostureResultRow.scan_id == latest.id, PostureResultRow.status.in_(("fail", "accepted-risk")))
+            .group_by(PostureResultRow.check_id, PostureResultRow.status)
         )).all():
+            target = checks if st == "fail" else accepted
             for c in check_controls(cid):
-                checks[c] = checks.get(c, 0) + n
+                target[c] = target.get(c, 0) + n
     out = []
     for c in all_controls():
-        f, k = findings.get(c, 0), checks.get(c, 0)
-        status = "not_assessed" if latest is None else ("open" if f or k else "satisfied")
-        out.append({"control": c, "title": control_title(c), "findingsOpen": f, "checksFailed": k, "status": status})
+        f, k, a = findings.get(c, 0), checks.get(c, 0), accepted.get(c, 0)
+        # an accepted risk is never "satisfied" (controlsEngine.exceptions)
+        status = "not_assessed" if latest is None else ("open" if f or k else "risk_accepted" if a else "satisfied")
+        out.append({"control": c, "title": control_title(c), "findingsOpen": f, "checksFailed": k,
+                    "checksAcceptedRisk": a, "status": status})
     return out
 

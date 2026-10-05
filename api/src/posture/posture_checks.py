@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from .controls import check_controls
+from .controls_engine.exceptions import ACCEPTED_RISK, find as find_exception
 from .images import has_mutable_tag
 from .inventory_model import ContainerRecord, InventorySnapshot, selector_matches
 from .scoring import SYSTEM_NAMESPACES, check_weight, posture_score
@@ -93,7 +95,7 @@ class CheckResult:
     kind: str
     name: str
     container: str  # "" for pod-scoped checks
-    status: str  # pass | fail
+    status: str  # pass | fail | accepted-risk (failing, covered by an active risk acceptance; no penalty)
     detail: str
     severity: str  # effective severity (added-capabilities may escalate)
     weight: float
@@ -170,7 +172,8 @@ def check_run_as_root(c: ContainerRecord) -> Outcome:
         return False, "runAsNonRoot: true"
     if user not in (None, 0):
         return False, f"runAsUser: {user}"
-    return True, "runAsNonRoot not set and runAsUser " + ("is 0" if user == 0 else "unset")
+    return True, ("runAsNonRoot is false" if non_root is False else "runAsNonRoot not set") \
+        + " and runAsUser " + ("is 0" if user == 0 else "unset")
 
 
 def check_privilege_escalation(c: ContainerRecord) -> Outcome:
@@ -359,12 +362,36 @@ class WorkloadPosture:
     def failed(self) -> int:
         return sum(1 for r in self.results if r.status == "fail")
 
+    @property
+    def accepted(self) -> int:
+        return sum(1 for r in self.results if r.status == ACCEPTED_RISK)
 
-def evaluate_inventory(inv: InventorySnapshot) -> dict[tuple[str, str, str], WorkloadPosture]:
+
+def apply_exceptions(results: list[CheckResult], exceptions: Iterable[object] | None,
+                     today: date | None = None) -> list[CheckResult]:
+    """Risk acceptances (controls_engine/exceptions.py): a failing result covered by an active
+    exception becomes `accepted-risk` with weight 0 (no score penalty) and the acceptance in its
+    detail; never `pass`. A lapsed exception leaves the result failing and says so."""
+    if not exceptions:
+        return results
+    for r in results:
+        if r.status != "fail":
+            continue
+        active, expired = find_exception(exceptions, r.kind, r.namespace, r.name, check=r.check_id, today=today)
+        if active is not None:
+            r.status, r.weight = ACCEPTED_RISK, 0.0
+            r.detail = f"{r.detail}; {active.label()}"
+        elif expired is not None and expired.expires_at is not None:
+            r.detail = f"{r.detail}; risk acceptance expired {expired.expires_at.isoformat()} ({expired.reason})"
+    return results
+
+
+def evaluate_inventory(inv: InventorySnapshot, exceptions: Iterable[object] | None = None,
+                       today: date | None = None) -> dict[tuple[str, str, str], WorkloadPosture]:
     groups: dict[tuple[str, str, str], list[ContainerRecord]] = {}
     for c in inv.containers:
         groups.setdefault(workload_key(c), []).append(c)
     out: dict[tuple[str, str, str], WorkloadPosture] = {}
     for key, cs in groups.items():
-        out[key] = WorkloadPosture(*key, results=evaluate_workload(cs, inv))
+        out[key] = WorkloadPosture(*key, results=apply_exceptions(evaluate_workload(cs, inv), exceptions, today))
     return out

@@ -1162,7 +1162,8 @@ class Worker:
         """Containers, posture results, workload / namespace / cluster aggregates, vuln rollup and the
         scan's scores. `aggregates_only` (scap_completed): replace only the STIG-dependent parts
         (workload rows, aggregate snapshots, scan scores) of an already persisted scan."""
-        posture = evaluate_inventory(inv)
+        posture = evaluate_inventory(  # risk acceptances: controlsEngine.exceptions
+            inv, exceptions=getattr(getattr(ctx.settings, "controls_engine", None), "exceptions", None))
         async with self.sm() as s:
             imgs = (await s.execute(select(Image).where(Image.id.in_(list(key_to_id.values()) or [0])))).scalars().all()
         by_id = {i.id: i for i in imgs}

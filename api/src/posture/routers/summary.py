@@ -123,7 +123,7 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
               "running": sum(1 for i in current_imgs if i.running)}
 
     workloads = namespaces = 0
-    checks = {"passed": 0, "failed": 0, "total": 0}
+    checks = {"passed": 0, "failed": 0, "acceptedRisk": 0, "total": 0}
     if latest:
         workloads = await session.scalar(select(func.count()).select_from(WorkloadRow)
                                          .where(WorkloadRow.scan_id == latest.id)) or 0
@@ -133,8 +133,8 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
             select(PostureResultRow.status, func.count()).where(PostureResultRow.scan_id == latest.id)
             .group_by(PostureResultRow.status)
         )).all():
-            checks["passed" if status == "pass" else "failed"] += n
-        checks["total"] = checks["passed"] + checks["failed"]
+            checks[{"pass": "passed", "accepted-risk": "acceptedRisk"}.get(status, "failed")] += n
+        checks["total"] = checks["passed"] + checks["failed"] + checks["acceptedRisk"]
 
     trend_rows = (await session.execute(
         select(Scan, ScanSnapshot).join(ScanSnapshot, (ScanSnapshot.scan_id == Scan.id) & (ScanSnapshot.level == "cluster"))
