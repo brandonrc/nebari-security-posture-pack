@@ -251,6 +251,47 @@ is a dedicated service-account client in the target realm with the `realm-manage
 `view-realm` (realm settings and the authentication flows read by the MFA assertions),
 `view-users` and `view-events` only; the engine issues `GET` requests exclusively.
 
+## SCAP worker privilege exception (DESIGN §14)
+
+Every pod of the pack runs as a non-root user with all capabilities dropped, except the
+optional `<fullname>-scap-worker` (`scanner.scap.enabled`, off by default). It runs as **root
+inside its container**, because the OS and product STIG rules it evaluates check owners, modes,
+setuid / setgid bits and file capabilities of the image's files, and a non-root extraction loses
+exactly those (a non-root run is still possible in embedded mode and flags every result
+`rootfsFidelity: degraded`).
+
+What it keeps, and why each item is needed:
+
+| Capability | Needed for |
+|---|---|
+| `CHOWN` | give extracted files the image's uid / gid |
+| `FOWNER` | set modes and times on files owned by other uids |
+| `DAC_OVERRIDE` | write into image directories that are read-only for their owner (e.g. `0555`) while extracting, and remove the tree afterwards |
+| `FSETID` | keep setuid / setgid bits (the kernel clears them on files of another group otherwise) |
+| `SETFCAP` | restore `security.capability` xattrs (file capabilities) |
+| `SYS_CHROOT` | OpenSCAP's rpm probes `chroot()` into the rootfs to read the image's rpm database |
+
+`SETUID` / `SETGID` (named in the original design) are not needed and not granted: nothing
+switches users. Everything else is removed: `drop: [ALL]`, `allowPrivilegeEscalation: false`,
+`privileged: false`, read-only root filesystem, seccomp `RuntimeDefault`, the pod-level user
+(init containers) stays 10001, its own ServiceAccount `<fullname>-scap` with no RBAC binding
+and no mounted token, egress only to DNS, the release Postgres, the registry namespace and TCP
+443/80 (content hosts, registries; `networkPolicy.scapEgress`), no Kubernetes API.
+
+Containment of the untrusted input: image content is only read, never executed (product
+versions come from paths and strings in binaries); every layer entry is resolved inside the
+rootfs (no `..`, absolute or symlink escapes; hard links must stay inside), device nodes are
+never created, the uncompressed size is capped (`maxRootfsGB`), the rootfs is deleted after
+each image, and the SCAP content itself is pinned by sha256. Root in the container is
+**not** root on the node (no host namespaces, no hostPath, no privileged mode), but a kernel
+or runtime escape from this pod would start with more capabilities than from the other pods:
+that is the residual risk accepted by enabling the scanner. Clusters that cannot accept it keep
+`scanner.scap.enabled: false`, or run it embedded (non-root, degraded fidelity) for dev only.
+
+Controls: AC-6 (least privilege; the exception is scoped to one optional component
+with a documented need), CM-7 (only the capabilities listed), SC-39 (process isolation:
+separate pod, no host access), SI-7 (sha256-pinned content).
+
 ## Where to find the results
 
 | API (`/api/v1`) | returns |

@@ -83,6 +83,51 @@ expected to be privileged); they are flagged `systemNamespace: true`.
   a scored image, and `postureScore` = container-weighted mean of workloadPostureScore.
 - `grade` from the table above. Trend compares to previous completed scan.
 
+## STIG score (OS / product STIGs inside images, DESIGN §14)
+
+When the SCAP scanner is on (`scanner.scap.enabled`, settings `scanners.scap`), every image is
+evaluated with OpenSCAP against the applicable DISA SCAP benchmark or ComplianceAsCode (SSG)
+profile, offline against its flattened root filesystem.
+
+`imageStigScore = 100 × (1 − Σ failed weight / Σ evaluated weight)`, rounded to 1 decimal, with
+
+| DISA category (XCCDF severity) | weight |
+|---|---|
+| CAT I (high) | 10 |
+| CAT II (medium) | 4 |
+| CAT III (low, info, unknown) | 1 |
+
+over the rules whose result is **pass** or **fail**. `notapplicable`, `notchecked` (rules that
+need a running system: services, kernel parameters, audit daemon, mounts), `error`, `unknown`
+and `informational` are excluded. With several benchmarks for one image (an OS benchmark plus a
+product one) the weights are summed across them. The score is `null` when no benchmark applies
+(Alpine, scratch, most distroless images without dpkg metadata), when the applicable benchmark
+has no content on the volume, or when every rule came back notchecked (manual STIGs such as
+PostgreSQL 9.x): such images are reported as `notApplicable` / `noContent` / evaluated-without-
+score, not penalised.
+
+Example: 1 CAT I fail, 1 CAT II pass, 1 CAT III pass, 1 CAT II notchecked → 100 × (1 − 10/15) = 33.3.
+
+**Configuration dimension.** A workload's configuration (posture) score becomes the mean of its
+`workloadPostureScore` and the STIG scores of its images that have one:
+`postureScore = mean(workloadPostureScore, imageStigScore₁, …)`; with no STIG score anywhere it is
+`workloadPostureScore` unchanged. Workload, namespace and cluster scores then use that value
+(0.7 / 0.3, and 0.25 posture share at cluster level). The vulnerability score, KEV exposure and
+consensus are untouched.
+
+Timing: the privileged worker takes the STIG scores present when it writes the posture
+snapshot. It waits up to `scanner.scap.finalizeWaitSeconds` for the scan's SCAP stage; when the
+scap-worker is slower (or absent), the scan finishes with `scapStatus` still queued / running
+("scap pending") and the snapshot uses the previous STIG results; the next scan picks the new
+ones up.
+
+`/summary.stig = {evaluated, pass, fail, cat1Open, cat2Open, cat3Open, coverage, notApplicable,
+noContent, errors, pending, images, score}` over the latest scan's images; `coverage` is the
+percentage of those images with an evaluated benchmark, `score` the mean image STIG score.
+
+Like the rest of the index the STIG score is a hygiene measure, not an assessment result: the
+checklists and the POA&M carry the rule results (REPORTS.md).
+
 ## Exposure (CISA KEV)
 
 `GET /summary` carries `exposure: {kev, kevCves, kevOverdue, kevEarliestDue, kevCatalogVersion,

@@ -796,3 +796,67 @@ tag list (Docker Hub, 429).
   - Once a day (`rescanAfterHours`) and after a worker-privileged rollout, the releases are
     re-checked. That costs ~6 conditional GETs (304 when unchanged), or a download plus libyaml
     parse of the changed indexes (~10-30 s on grace), but is not repeated on every scan.
+
+## 2026-10-05: SCAP scanner backend (DESIGN §14)
+
+Implemented `api/src/posture/scap/`, the `scap` worker stage, migration `0007_scap`, the STIG
+routes, product STIG reports, the worker image changes and the `scap-worker` chart component.
+Choices and deviations from §14:
+
+- **Hand-off**: same pattern as provenance. When its CVE stage finishes, the scan worker sets
+  `scans.scap_status = queued` with `scap_image_ids` (images rescanned now plus inventory images
+  never evaluated; every image on a forced full scan). `python -m posture.worker --stages scap`
+  claims it (`FOR UPDATE SKIP LOCKED`, heartbeat row 3) and writes progress to
+  `scans.scap_detail`, not the scan log (the scan log belongs to the other workers). The
+  privileged worker waits for it before the posture snapshot (`SCAP_FINALIZE_WAIT_SECONDS`, 600);
+  it does not wait when no scap-worker heartbeat is younger than 180 s. Otherwise the scan
+  finishes with `scapStatus` still queued / running ("scap pending") and the snapshot uses the
+  previous STIG results. `--stages all` and `SCAP_EMBEDDED=true` run the stage inline.
+- **Capabilities**: `CHOWN, FOWNER, DAC_OVERRIDE, FSETID, SETFCAP, SYS_CHROOT`; not `SETUID` /
+  `SETGID`. FSETID keeps setuid/setgid bits through chown/chmod. SETFCAP restores file
+  capabilities. SYS_CHROOT is needed by OpenSCAP's rpm probes: on grace they failed on UBI 9 with
+  "chroot failed: Operation not permitted". Justification: docs/CONTROLS.md.
+- **Content refresh**: the scap-worker owns the content volume and refreshes it itself, not the
+  privileged worker. This keeps content egress and the volume in one pod.
+- **Image source**: the scap-worker has its own OCI cache (`persistence.scapWork`). With
+  `MIRROR_MODE=registry` (grace) it copies the verified mirror digest, so upstream is not pulled
+  twice. With `local` mode it pulls the source digest again: the scan worker's RWO cache PVC
+  cannot be shared.
+- **Statuses**: per image `evaluated | notApplicable | noContent | error | timeout`.
+  `noContent` means a benchmark applies but its datastream is missing. It is kept apart from
+  `notApplicable` so content gaps are visible. Manual STIGs (no OVAL) evaluate with every rule
+  `notchecked`: status `evaluated`, score null.
+- **`/compliance/stig`** is now `{items, product}`. `items` holds the Kubernetes rules (the UI
+  already accepted `{items}`). `/scanners` lists `scap` after the three vulnerability scanners
+  and carries its `content` catalogue. `views.SCANNERS` (consensus, freshness) is unchanged.
+- **`/images`**: `sort=stig` and `stig=evaluated|na|cat1` are implemented as the UI entry above
+  describes. Exact semantics are in DESIGN §14 ("Implemented shapes"). This closes that entry's
+  "API gap".
+- **POA&M SLA clock**: `scap_results.first_failed_at` is carried while a rule keeps failing on
+  the same image. The column was added to 0007 after that migration had been pushed but before
+  it was deployed anywhere.
+- **Real-image findings (grace, worker image with openscap 1.3.7)**:
+  - Debian's rpm macros put the rpmdb in `~/.rpmdb`. Without `/etc/rpm/macros.posture-oscap`
+    (`%_dbpath /var/lib/rpm`), UBI 9 read as "not RHEL" and all 477 rules came back
+    notapplicable.
+  - Debian container images set `Dir::Cache::pkgcache ""` (docker-clean). libapt-pkg with
+    `RootDir=<rootfs>` then fails, and OpenSCAP silently treats every package as absent, so
+    package rules become false fails. Fix: an apt.conf.d drop-in, the apt directories and dpkg
+    arch tables in the scratch rootfs, and a `var/lib/dpkg/status` built from `status.d` for
+    distroless. Probe init failures OpenSCAP swallows are now surfaced on the summary.
+  - skopeo converts Docker schema 2 manifests and configs to OCI when writing an OCI layout. The
+    local image cache now verifies such copies by identical layers plus identical `diff_ids` of
+    a hash-checked source config. Before this fix every Docker-v2 single-arch image failed with
+    "not part of source", in local mirror mode too.
+- **preferDisa on grace = false**: on UBI 9 keycloak the DISA RHEL 9 V2R9 benchmark gives 253
+  fail / 68 pass. It has no container applicability, so host-only rules (services, kernel,
+  boot, audit) fail inside an image. The SSG STIG profile marks those notapplicable and gives
+  14 fail / 67 pass. The chart default stays `true` per §14. DISA content is still used where
+  SSG has none (PostgreSQL manual STIG).
+- **Not covered**:
+  - Alpine has no SCAP content anywhere, so Alpine images are `notApplicable`.
+  - SSG's Debian profiles are CIS / ANSSI / standard: there is no DISA Debian STIG, and
+    Debian rules have no V-IDs.
+  - The DISA PostgreSQL STIG is for 9.x and manual only.
+  - SSG references the Debian security OVAL feed remotely. It is not fetched (no
+    `--fetch-remote-resources`), so that one rule is `unknown`.

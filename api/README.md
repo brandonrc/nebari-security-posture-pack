@@ -7,8 +7,9 @@ Python 3.12 package `posture` (`src/posture/`) with two entrypoints:
 | API (FastAPI, `/api/v1`) | `uvicorn posture.main:app --host 0.0.0.0 --port 8000` | `Dockerfile.api` |
 | migrations | `python -m posture.migrate` (alembic upgrade head, retries until the DB is up) | api image |
 | worker (inventory + scans + scheduler) | `python -m posture.worker` (health on `:9000/healthz`) | `Dockerfile.worker` |
+| scap-worker (DESIGN §14, OpenSCAP) | `python -m posture.worker --stages scap` (root in its container in the chart) | `Dockerfile.worker` |
 
-The contract is `../docs/DESIGN.md` §4–§6, §11, §12 (`../docs/PROVENANCE.md`) and `../docs/SCORING.md`; deviations are in
+The contract is `../docs/DESIGN.md` §4–§6, §11, §12 (`../docs/PROVENANCE.md`), §14 (SCAP) and `../docs/SCORING.md`; deviations are in
 `../docs/DECISIONS.md`.
 
 ## Run locally (no compose)
@@ -57,6 +58,15 @@ TEST_DATABASE_URL=postgresql://posture:posture@127.0.0.1:55432/posture_test \
 ```
 
 Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the README there).
+`tests/scap/` uses a hand-written 3-rule SCAP 1.3 datastream (`tests/scap/fixtures/`); its OpenSCAP
+end-to-end test is skipped without `oscap` and runs in the worker image (as root, so the privileged
+rootfs test runs too):
+
+```bash
+docker run --rm -u 0 -v "$PWD":/src:ro -w /src --entrypoint sh security-posture-worker:dev -c \
+  'pip install -q --target /tmp/pt pytest==9.1.1 pytest-asyncio==1.4.0 &&
+   PYTHONPATH=src:/tmp/pt python -m pytest -q -p no:cacheprovider tests/scap'
+```
 `tests/provenance/` runs the supply-chain checks against an in-memory registry / cosign fake
 (`tests/provenance/fakes.py`), so no network is needed; its Postgres module
 (`test_integration_provenance.py`) is also gated on `TEST_DATABASE_URL`.
@@ -115,6 +125,18 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `PROVENANCE_HELM_MAX_RELEASE_BYTES` | `16777216` | worker | decompressed Helm release payload cap (larger releases are reported as corrupt) |
 | `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` (or `KEYCLOAK_CLIENT_SECRET_FILE`) | unset | worker | controls engine: dedicated view-only client (`client_credentials`); when set the Keycloak admin Secret is not read |
 | `KEYCLOAK_ALLOW_MASTER_FALLBACK` | `false` | worker | controls engine: with no pinned admin realm, also try the admin login against `master` |
+| `SCANNERS_SCAP_ENABLED` | `false` | both | default for settings `scanners.scap` (SCAP scanner, DESIGN §14) |
+| `SCAP_EMBEDDED` | `false` | worker | run the scap stage inside the scan worker instead of queueing it for `--stages scap` (dev; non-root -> `rootfsFidelity: degraded`) |
+| `SCAP_CONTENT_DIR` / `SCAP_WORK_DIR` | `CACHE_DIR/scap-content` / `CACHE_DIR/scap` | worker | datastreams (+ `index.json`, rule cache) / rootfs + oscap scratch |
+| `SCAP_CONTENT_SOURCES` | pinned SSG 0.1.82 zip | both | JSON `[{name, kind: ssg\|disa\|custom, url, sha256, include[]}]`; default for settings `scap.sources` |
+| `SCAP_DISA_URLS` | `[]` | both | JSON `[{url, sha256, name?, include?}]` (kind disa) appended to the sources |
+| `SCAP_CONTENT_OFFLINE` / `SCAP_CONTENT_REFRESH_HOURS` | `false` / `24` | worker | air-gapped (index only) / refresh interval |
+| `SCAP_PREFER_DISA` / `SCAP_TIMEOUT_SECONDS` | `true` / `900` | both | defaults for settings `scap.preferDisa` / `scap.timeoutSeconds` (per image) |
+| `SCAP_MAX_ROOTFS_GB` | `10` | worker | uncompressed rootfs cap |
+| `SCAP_FINALIZE_WAIT_SECONDS` | `600` | worker | privileged worker waits this long for a queued / running scap stage before the posture snapshot |
+| `SCAP_SKIP_VALIDATION` | `false` | worker | `oscap --skip-valid` |
+| `SCAP_BENCHMARKS_FILE` | empty | worker | extra os-release / product -> benchmark candidates (`scap/data/benchmarks.yaml` format) |
+| `OSCAP_BIN` / `OSCAP_CHROOT_BIN` | `oscap` / `oscap-chroot` | worker | OpenSCAP binaries (worker image: openscap-scanner 1.3.7) |
 | `COSIGN_BIN` | `cosign` | worker | cosign binary (pinned v3.1.3 in the worker image; TUF cache `TUF_ROOT=/cache/sigstore`) |
 
 ## Module map (`src/posture/`)
@@ -141,6 +163,8 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `controls.py` + `reports/data/controls.yaml` | NIST 800-53 tagging |
 | `reports/models.py`, `reports/snapshot.py` | `ReportSnapshot` + `build_snapshot(session, scan_id, scope)` for report generators |
 | `provenance/` | DESIGN §12: `registry` (async OCI client), `checks` (cosign / referrers / BuildKit / legacy-tag signature, SBOM, SLSA), `updates` (Masterminds-compatible semver update check), `helm` (release Secrets, chart updates), `stage` (worker stage, cache, persistence), `report` (their report JSON / CSV / Markdown), `scoring` (supply-chain score, controls), `models` (`image_provenance`, `helm_releases`, `images.provenance`) |
+| `scap/` | DESIGN §14: `rootfs` (OCI layers -> rootfs, whiteouts, confinement, fidelity), `detect` (os-release, products -> `data/benchmarks.yaml` candidates), `content` (sha256-pinned sources, datastream index, rule metadata), `oscap` (oscap-chroot adapter, ARF parser), `scoring` (STIG score, configuration score), `stage` (worker stage + persistence), `models` (`scap_content`, `scap_image_summary`, `scap_results`, `images.stig`) |
+| `routers/stig.py` | `/images/{id}/stig`, `/stig/benchmarks`, `/stig/benchmarks/{id}/rules`, `/summary.stig`, the `product` section of `/compliance/stig`, the `scap` scanner entry |
 | `worker.py` | Postgres queue (`FOR UPDATE SKIP LOCKED`), APScheduler jobs, scan pipeline (provenance stage concurrent with scanning), health server |
 
 ## Limitations (v0.1)

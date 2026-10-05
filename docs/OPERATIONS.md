@@ -218,6 +218,51 @@ Symptoms: `toomanyrequests` in mirror / scanner / provenance errors.
   the space to the OS after lowering the retention (locks the table; run between scans).
   hostpath provisioners do not enforce PVC sizes: watch node disk too.
 
+- **scap-worker PVCs** (`scanner.scap.enabled`): `persistence.scapWork` holds its OCI image
+  cache (LRU, `scanner.scap.imageCacheMaxBytes`) and one rootfs at a time under `/work/scap`
+  (removed after each image; leftovers of a crash are removed at start); an image whose rootfs
+  exceeds `scanner.scap.maxRootfsGB` is reported as `error`. `persistence.scapContent` holds the
+  datastreams (~150 MB with the default SSG include list).
+
+### SCAP content refresh and air-gapped installs
+
+The scap-worker owns the content volume (`/content`). At start and every
+`scanner.scap.content.refreshHours` (24) it fetches each configured source
+(`scanner.scap.content.sources[]`, `scanner.scap.disa.urls[]`, or settings `scap.sources`),
+**verifies the sha256 before unpacking**, keeps only the `include` members under
+`/content/sources/<name>/`, records a `.source.json` marker (an unchanged source is not
+downloaded again) and re-indexes every `*.xml` under `/content`. The catalogue is mirrored into
+the `scap_content` table (`GET /stig/benchmarks`, the `scap` entry of `GET /scanners`, whose
+`dbUpdatedAt` is the newest fetch); `scanner_status.scap.lastError` lists failed sources. A
+source without sha256 is refused.
+
+- **New SSG release**: take the asset URL and its `sha256:` digest from the GitHub release
+  (`gh release view vX.Y.Z -R ComplianceAsCode/content --json assets`), update the source, upgrade.
+- **DISA benchmarks**: `https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_<STIG>_SCAP_1-3_Benchmark.zip`
+  (no CAC needed for public STIGs); `sha256sum` the zip and add `{name, url, sha256}`. Manual STIG
+  zips work too (every rule `notchecked`): name the XCCDF with `include`.
+- **Air-gapped**: set `scanner.scap.content.offline: true` (`SCAP_CONTENT_OFFLINE`) and copy the
+  datastreams (`ssg-*-ds.xml`, `U_*Benchmark.xml`) into `/content/local/` of the content PVC
+  (`kubectl cp` into the scap-worker, or pre-populate the volume). Nothing is fetched; the
+  directory is re-indexed every refresh interval and at start (restart the pod to pick up new
+  files at once).
+- **Which benchmark an image gets**: `api/src/posture/scap/data/benchmarks.yaml` maps os-release
+  / detected products to candidates (DISA preferred per family with `preferDisa`); add your own in
+  a file named by `SCAP_BENCHMARKS_FILE` (same format), e.g. for a tailored datastream.
+
+### SCAP stage troubleshooting
+
+- A scan reads `scapStatus: queued` long after it finished: the scap-worker is not running or
+  is busy (one image at a time, ~5-20 s each on grace plus the image copy). Its log has
+  `scap.job.start` / `scap.job.done`; the scan's `scap_detail.log` the per-image lines.
+- `noContent` on an image: a benchmark applies but its datastream is not on the volume (see the
+  `scap` scanner card for the catalogue).
+- A benchmark summary whose `error` says "dpkginfo probe failed" / "rpm … unreliable": OpenSCAP
+  could not read the image's package database, so package rules are false fails; report it
+  with the image digest.
+- `rootfsFidelity: degraded`: the stage ran without root (embedded mode); owner / mode / setuid
+  rules may be wrong.
+
 ### Restore from backup
 
 1. Scale the api, workers and report-worker to 0.

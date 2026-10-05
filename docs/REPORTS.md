@@ -315,6 +315,46 @@ WARNING (eMASS asset import and HW/SW reconciliation need real identifiers). Rol
 UUIDs are deterministic (UUIDv5 of system, scope, scan and benchmark), so regenerating a
 report for the same scan produces an identical file.
 
+### Product / OS STIG checklists (SCAP scanner, DESIGN §14)
+
+With the SCAP scanner on, every image in scope that was evaluated has one checklist per
+benchmark (OS and, where content exists, products), filled with OpenSCAP's results:
+
+| OpenSCAP result | Checklist status |
+|---|---|
+| pass | NotAFinding |
+| fail | Open |
+| notapplicable | Not_Applicable |
+| notchecked, error, unknown, informational | Not_Reviewed |
+
+- Asset: `HOST_NAME` = the image reference (`registry/repo:tag`), `HOST_FQDN` = `ref@sha256:…`,
+  `TARGET_COMMENT` = benchmark, profile, evaluation time, scan / control evidence run and, when the
+  rootfs was extracted without root, a fidelity warning. STIG Viewer and STIG Manager import each
+  file as a separate asset.
+- Rules: `Vuln_Num` = V-ID (SSG STIG profiles and DISA benchmarks carry them; SSG CIS / standard
+  profiles have none, the XCCDF rule id is used), `Rule_ID` = SV-ID, `Rule_Ver` = STIG ID
+  (e.g. `RHEL-09-412035`), `Severity` from the CAT, `CCI_REF` = the rule's CCIs, `Fix_Text` from
+  DISA content. Check content and discussion are not stored (open the benchmark for them).
+- `FINDING_DETAILS` names the OpenSCAP result, profile and image; Not_Reviewed rules say they
+  need manual review (OpenSCAP cannot check a running system inside an image).
+- Formats: `format: zip` (`stig-bundle.zip`) = `kubernetes/<…>.ckl` + `.cklb` (the Kubernetes STIG
+  checklist above) and `products/<image>-<benchmark>-scan<N>-<date>.ckl` + `.cklb` per (image,
+  benchmark), plus `products/index.json` (score and counts per checklist, and the images with no
+  evaluated benchmark and why). `format: ckl|cklb` with options `imageId` and `benchmarkId`
+  (benchmarks.yaml key, e.g. `ssg-rhel9`) returns one product checklist.
+- POA&M: one item per failing (image, rule): Raw Severity from the CAT (I → High, II → Moderate,
+  III → Low), Security Checks = V-ID with its CCIs and STIG ID, controls from the DISA CCI list
+  (else the content's NIST references, else CM-6), Devices Affected = the image and its workloads,
+  Identification Source = the benchmark title and version, External UID `SP-STIG-<hash>`. The
+  SLA clock starts at the first evaluation that found the rule failing on that image
+  (`scap_results.first_failed_at`, carried across re-evaluations while it keeps failing).
+- SAR: "Product STIG results" table (per image and benchmark: pass / fail / N/A / not checked,
+  open CAT I/II/III, STIG score, degraded fidelity flag) and the count of images with no
+  evaluated benchmark by reason.
+- OSCAL AR: an `OpenSCAP` component, one observation per (image, benchmark) with failing rules
+  (subject = the image inventory item, failing V-IDs in the description), one risk per such
+  observation and findings on the objectives of the CCI-derived controls.
+
 ## Automated Assessment Summary, input to the SAR (`sar`)
 
 The Security Assessment Report is the SCA's deliverable (NIST SP 800-37 Rev. 2, task A-4). This
