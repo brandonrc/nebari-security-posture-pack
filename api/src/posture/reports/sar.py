@@ -111,7 +111,8 @@ def context(v: View) -> dict[str, Any]:
         rs = [r for r in v.posture_results if r.check_id == c]
         failed = [r for r in rs if r.status == "fail"]
         passed = [r for r in rs if r.status == "pass"]
-        checks.append(SimpleNamespace(
+        accepted = [r for r in rs if r.status == "accepted-risk"]
+        checks.append(SimpleNamespace(accepted=len(accepted),
             id=c, title=chk.title, severity=chk.severity, controls=chk.controls, remediation=chk.remediation,
             description=chk.description, passed=len(passed) if rs else chk.passed,
             failed=len(failed) if rs else chk.failed, offenders=sorted({r.key for r in failed}),
@@ -182,6 +183,7 @@ def context(v: View) -> dict[str, Any]:
         "logo_svg": (TEMPLATES / "nebari-logo.svg").read_text(encoding="utf-8").split("?>", 1)[-1],
         "freshness_hours": FRESHNESS_HOURS,
         "include_system": v.options.get("includeSystemNamespaces", True),
+        "risk_acceptances": v.risk_acceptances,
     }
 
 

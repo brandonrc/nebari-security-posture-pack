@@ -27,4 +27,6 @@ async def attach(session: AsyncSession, snapshot: Any, scan_id: Any = None) -> N
         "parameters": ce.parameters.effective(ce.baseline),
         "parameterExtra": {"adminSubjects": list(ce.admin_subjects), "approvedIssuers": list(ce.approved_issuers),
                            "slaDays": st.remediation_sla_days.model_dump()},
+        # risk acceptances (exceptions.py): POA&M / SAR "Risk acceptance" rows, CRM sheet
+        "exceptions": [e.as_dict() for e in ce.exceptions],
     }

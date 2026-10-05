@@ -280,6 +280,44 @@ class View:
     def failed_results(self) -> list[SimpleNamespace]:
         return [r for r in self.posture_results if r.status == "fail"]
 
+    @property
+    def accepted_results(self) -> list[SimpleNamespace]:
+        """Posture results covered by an active risk acceptance (controlsEngine.exceptions)."""
+        return [r for r in self.posture_results if r.status == "accepted-risk"]
+
+    @property
+    def risk_acceptances(self) -> list[SimpleNamespace]:
+        """Configured risk acceptances (controls_engine/exceptions.py) with what they cover in this
+        snapshot: accepted posture results and accepted-risk assertion workloads. `active` and
+        `review_overdue` are judged at the report's `now`."""
+        from ..controls_engine.exceptions import coerce
+
+        today = self.now.date()
+        out = []
+        for e in coerce(self.engine.get("exceptions") or []):
+            results = [r for r in self.accepted_results if e.covers(r.kind, r.namespace, r.name, check=r.check_id)]
+            lapsed = [r for r in self.failed_results if not e.active(today)
+                      and e.covers(r.kind, r.namespace, r.name, check=r.check_id)]
+            assertions = []
+            for a in self.engine_results:
+                if a.get("id") not in e.assertions:
+                    continue
+                for w in (a.get("evidence") or {}).get("acceptedRisk") or []:
+                    ns, _, rest = str(w.get("workload", "")).partition("/")
+                    kind, _, name = rest.partition("/")
+                    if e.matches(kind, ns, name):
+                        assertions.append(a)
+                        break
+            sevs = [r.severity for r in results] + [sev(a.get("severity") or "medium") for a in assertions]
+            controls = list(dict.fromkeys([*(c for r in results for c in self.check(r.check_id).controls),
+                                           *(c for a in assertions for c in a.get("controls") or [])]))
+            out.append(SimpleNamespace(
+                exception=e, key=e.key, active=e.active(today), review_overdue=e.review_overdue(today),
+                results=results, lapsed=lapsed, assertions=assertions,
+                checks=sorted({r.check_id for r in results}), assertion_ids=sorted({a.get("id", "") for a in assertions}),
+                severity=max(sevs, key=sev_rank) if sevs else "medium", controls=controls))
+        return out
+
     def severity_counts(self, findings: Iterable[SimpleNamespace] | None = None) -> dict[str, int]:
         c = {s: 0 for s in SEVERITIES}
         for f in self.open_findings if findings is None else findings:

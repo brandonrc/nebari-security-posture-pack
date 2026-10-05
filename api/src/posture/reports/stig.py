@@ -94,8 +94,11 @@ def evaluate_rule(rule: dict[str, Any], v: View) -> SimpleNamespace:
 
     if method == "posture":
         checks = ev.get("checks", [])
-        evaluated = [r for r in v.posture_results if r.check_id in checks and r.status in ("pass", "fail")]
-        failed = [r for r in evaluated if r.status == "fail"]
+        # accepted-risk (controlsEngine.exceptions) stays a finding in the checklist (never NotAFinding);
+        # its detail carries the acceptance
+        evaluated = [r for r in v.posture_results if r.check_id in checks
+                     and r.status in ("pass", "fail", "accepted-risk")]
+        failed = [r for r in evaluated if r.status != "pass"]
         if not evaluated:
             status, details = "Not_Reviewed", f"No workloads in scope were evaluated for checks: {', '.join(checks)}."
         elif failed:

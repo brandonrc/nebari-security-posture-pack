@@ -352,6 +352,48 @@ def _assertion_items(v: View) -> list[SimpleNamespace]:
     return items
 
 
+def _risk_items(v: View) -> list[SimpleNamespace]:
+    """Risk acceptances (controlsEngine.exceptions) that cover findings in this snapshot: one
+    "Risk acceptance" item each, POA&M status "Risk Accepted", the expiry as the requested risk
+    acceptance expiration date (else the review date). Lapsed acceptances produce no item: their
+    findings are failing again and appear as ordinary configuration items."""
+    from datetime import UTC
+    from datetime import datetime as _dt
+    from datetime import time as _time
+
+    items = []
+    for ra in v.risk_acceptances:
+        if not ra.active or not (ra.results or ra.assertions):
+            continue
+        e = ra.exception
+        uid = f"SP-RA-{short_hash(e.key, *e.checks, *e.assertions, n=10)}"
+        end = e.expires_at or e.review_by
+        due = _dt.combine(end, _time(), UTC) if end else None
+        covered = [*(f"posture check {c}" for c in ra.checks), *(f"control assertion {a}" for a in ra.assertion_ids)]
+        assets = sorted({r.key + (f" [{r.container}]" if r.container else "") for r in ra.results}) or [e.key]
+        terms = e.terms()
+        items.append(SimpleNamespace(
+            kind="risk", poam_id=uid, source_id=", ".join([*ra.checks, *ra.assertion_ids]),
+            security_checks="; ".join(covered), kev=False, kev_due=None,
+            name=f"Risk acceptance: {e.key}", title=f"Risk acceptance: {e.key}",
+            description=f"Risk acceptance for {e.kind} {e.namespace}/{e.name}: {', '.join(covered)}. "
+                        f"Reason: {e.reason}",
+            controls=ra.controls or ["CM-6"], ccis=[], severity=ra.severity, first_seen=v.scan.started_at or v.generated_at,
+            due=due, overdue=False, assets=assets, workloads=[e.key], scanners=[],
+            detector=f"{TOOL_NAME} risk acceptance (controlsEngine.exceptions, source {e.source})",
+            plan=f"Risk accepted by {e.approved_by}. Re-review by {(e.review_by or e.expires_at or 'the next assessment')}.",
+            mitigation=e.reason, fixable=True, vendor_product="", agreement=None, cvss=None, url="",
+            identification_source=f"Risk acceptance - {TOOL_NAME}", impact="",
+            poam_status="Risk Accepted", review_by=e.review_by,
+            risk_expiration=_dt.combine(e.expires_at, _time(), UTC) if e.expires_at else None,
+            comments=" ".join(filter(None, [
+                f"[External UID {uid}]", f"Risk acceptance: {e.reason}.", f"{terms}.",
+                "REVIEW OVERDUE." if ra.review_overdue else "",
+                f"Covers {len(ra.results)} posture result(s)." if ra.results else ""])),
+        ))
+    return items
+
+
 def poam_baseline(v: View) -> str:
     return str(v.options.get("baseline") or v.engine.get("baseline") or v.engine_run.get("baseline")
                or "moderate").lower()
@@ -380,7 +422,8 @@ def _to_baseline(v: View, items: list[SimpleNamespace]) -> list[SimpleNamespace]
 
 
 def build_items(v: View) -> list[SimpleNamespace]:
-    items = _vuln_items(v, granularity(v)) + _posture_items(v) + _stig_items(v) + _assertion_items(v)
+    items = (_vuln_items(v, granularity(v)) + _posture_items(v) + _stig_items(v) + _assertion_items(v)
+             + _risk_items(v))
     items = _to_baseline(v, items)
     items.sort(key=lambda i: (-sev_rank(i.severity), i.kind != "vulnerability", i.due or v.generated_at,
                               i.source_id))
@@ -403,6 +446,8 @@ def _milestone(i: SimpleNamespace, v: View) -> str:
         return f"Correct the platform configuration and confirm by re-running the control assertions by {mdy(i.due)}."
     if i.kind == "stig":
         return f"Harden the image build for this STIG rule and confirm by re-evaluation (SCAP scan) by {mdy(i.due)}."
+    if i.kind == "risk":
+        return f"Review the risk acceptance (re-approve, or remediate and remove the exception) by {mdy(i.due)}."
     return f"Remediate workload configuration and confirm by rescan by {mdy(i.due)}."
 
 
@@ -448,15 +493,15 @@ def emass_row(i: SimpleNamespace, v: View, as_date: bool) -> list[Any]:
         _cut(i.description),
         i.controls[0] if i.controls else "",  # one Control / AP per item: the primary in-baseline control
         _cut(i.security_checks, 30000),
-        "Ongoing",
-        d(i.due), "", "",
+        getattr(i, "poam_status", "Ongoing"),
+        d(i.due), d(i.risk_expiration) if getattr(i, "risk_expiration", None) else "", "",
         1, _milestone(i, v), "Pending", _overdue_note(i), d(i.due), "",
         i.identification_source, _cut(i.detector), poc,
         _resources(i),
         _cut(i.comments + extra),
         lvl,                                  # Raw Severity (tool); Severity below is left for the ISSO
         _assets_text(i),
-        "",                                   # Mitigations: compensating measures already in place (ISSO)
+        i.mitigation if i.kind == "risk" else "",  # Mitigations: compensating measures in place (ISSO)
         "", "",                               # Predisposing Conditions, Severity (assessed, after mitigations)
         "", "", "", "",                       # Relevance of Threat, Threat Description, Likelihood, Impact
         "", "", _cut(_milestone(i, v)), "",   # Impact Description, Residual Risk Level, Recommendations, Resulting
@@ -475,7 +520,8 @@ def generic_row(i: SimpleNamespace, v: View, as_date: bool) -> list[Any]:
         _cut(i.plan), d(i.first_seen), d(i.due), _milestone(i, v), _overdue_note(i), d(v.generated_at),
         "No" if i.fixable else "Yes",
         d(max(db_dates)) if (db_dates and not i.fixable) else ("" if as_date else ""),
-        i.vendor_product, FEDRAMP_RISK[i.severity], "", "No", "No", "No", "",
+        i.vendor_product, FEDRAMP_RISK[i.severity], "", "No", "No",
+        "Yes" if i.kind == "risk" else "No", _cut(i.mitigation) if i.kind == "risk" else "",
         f"{TOOL_NAME} {v.run_stamp} (assessment summary / vuln-export)", _cut(i.comments), "No",
         *_tool_cols(i, as_date),
     ]
@@ -486,7 +532,8 @@ def legacy_row(i: SimpleNamespace, v: View, as_date: bool) -> list[Any]:
     org = ", ".join(filter(None, [v.system.organization, v.system.poc_name, v.system.poc_email]))
     return [
         _cut(i.description), ", ".join(i.controls), org, _cut(i.security_checks, 30000), _resources(i),
-        d(i.due), f"1: {_milestone(i, v)}", _overdue_note(i), i.identification_source, "Ongoing", _cut(i.comments),
+        d(i.due), f"1: {_milestone(i, v)}", _overdue_note(i), i.identification_source,
+        getattr(i, "poam_status", "Ongoing"), _cut(i.comments),
         CAT[i.severity], _assets_text(i), "", "", "",
         "", "", "", "", "", "", _cut(_milestone(i, v)), "",
     ]
@@ -527,6 +574,7 @@ def _xlsx(v: View, items: list) -> bytes:
     bold = Font(bold=True)
     wrap = Alignment(wrap_text=True, vertical="top")
     date_cols = {"POA&M Scheduled Completion Date", "Milestone Scheduled Completion Date",
+                 "POA&M Requested Risk Accepted Expiration Date",
                  "Original Detection Date", "Scheduled Completion Date", "Status Date",
                  "Last Vendor Check-in Date", "KEV Due Date"}
     wide = {"Control Vulnerability Description", "Weakness Description", "Devices Affected", "Asset Identifier",
@@ -592,6 +640,7 @@ def _xlsx(v: View, items: list) -> bytes:
         ("Generated", v.generated_at.replace(tzinfo=None)),
         ("Generated by", TOOL_NAME),
         ("POA&M items", len(items)),
+        ("Risk acceptance items", sum(1 for i in items if i.kind == "risk")),
         ("Granularity", {"repository": "one item per image repository (remediation unit)",
                          "cve": "one item per vulnerability (Devices Affected lists the images)",
                          "finding": "one item per image x vulnerability x package"}[granularity(v)]),

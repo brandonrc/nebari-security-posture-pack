@@ -244,15 +244,35 @@
 
   <h2 class="page-break">5. Configuration (posture) results</h2>
   <table>
-    <thead><tr><th>Check</th><th>Severity</th><th>Controls</th><th>STIG / SRG</th><th class="num">Pass</th><th class="num">Fail</th></tr></thead>
+    <thead><tr><th>Check</th><th>Severity</th><th>Controls</th><th>STIG / SRG</th><th class="num">Pass</th><th class="num">Fail</th><th class="num">Accepted risk</th></tr></thead>
     <tbody>
     {% for c in checks %}
       <tr><td><strong>{{ c.title }}</strong><br><span class="mono muted">{{ c.id }}</span></td><td><span class="sev sev-{{ c.severity }}">{{ c.severity }}</span></td>
       <td>{{ c.controls | join(', ') }}</td><td class="small">{{ c.stig | join(', ') or '-' }}</td>
-      <td class="num">{{ c.passed }}</td><td class="num {% if c.failed %}warn{% endif %}">{{ c.failed }}{% if c.system_only %}<br><span class="small muted">system ns</span>{% endif %}</td></tr>
+      <td class="num">{{ c.passed }}</td><td class="num {% if c.failed %}warn{% endif %}">{{ c.failed }}{% if c.system_only %}<br><span class="small muted">system ns</span>{% endif %}</td>
+      <td class="num">{{ c.accepted or 0 }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  {% if risk_acceptances %}
+  <div class="avoid">
+    <h3>Risk acceptances</h3>
+    <p class="small">Findings covered by an AO-approved risk acceptance (<span class="mono">controlsEngine.exceptions</span>) stay listed with status <em>accepted-risk</em>; they carry no score penalty and never count as passing. An expired acceptance reverts the findings to failing.</p>
+    <table>
+      <thead><tr><th>Workload</th><th>Covers</th><th>Reason</th><th>Approved by</th><th>Expires / review</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for ra in risk_acceptances %}
+        <tr><td class="mono">{{ ra.key }}</td>
+        <td class="small">{{ (ra.exception.checks + ra.exception.assertions) | join(', ') }}{% if ra.results %}<br><span class="muted">{{ ra.results | length }} accepted result(s)</span>{% endif %}</td>
+        <td class="small">{{ ra.exception.reason }}{% if ra.exception.ticket %}<br><span class="muted">ticket {{ ra.exception.ticket }}</span>{% endif %}</td>
+        <td class="small">{{ ra.exception.approved_by }}</td>
+        <td class="small">{% if ra.exception.expires_at %}expires {{ ra.exception.expires_at }}{% else %}no expiry{% endif %}{% if ra.exception.review_by %}<br>review by {{ ra.exception.review_by }}{% endif %}</td>
+        <td class="small {% if not ra.active or ra.review_overdue %}warn{% endif %}">{% if not ra.active %}expired ({{ ra.lapsed | length }} result(s) failing again){% elif ra.review_overdue %}active, review overdue{% else %}active{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
   {% for c in checks if c.failed %}
   <div class="avoid">
     <h3>{{ c.title }} <span class="sev sev-{{ c.severity }}">{{ c.severity }}</span></h3>
