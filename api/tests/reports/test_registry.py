@@ -14,7 +14,7 @@ def test_catalogue_shape():
     for t in REPORT_TYPES:
         assert t["formats"] and t["description"]
         assert t["scopes"] == (["cluster"] if t["type"] in system_level else ["cluster", "namespace", "workload"])
-    assert types["stig-checklist"]["formats"] == ["ckl", "cklb"]
+    assert types["stig-checklist"]["formats"] == ["ckl", "cklb", "zip"]  # zip: stig-bundle.zip (DESIGN §14)
     assert types["poam"]["formats"] == ["xlsx", "csv"]
 
 

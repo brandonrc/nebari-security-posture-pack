@@ -8,12 +8,21 @@ complete and importable.
 
 ``stig_rollup(snapshot, options)`` returns the per-rule status list used by
 ``GET /compliance/stig``.
+
+Product / OS STIGs (DESIGN §14): every (image, benchmark) evaluated by the SCAP stage becomes its
+own checklist with OpenSCAP's real results (pass -> NotAFinding, fail -> Open, notapplicable ->
+Not_Applicable, notchecked / error / unknown / informational -> Not_Reviewed); the asset is the
+image (ref + digest). Format ``zip`` returns ``stig-bundle.zip``: the Kubernetes checklist plus one
+.ckl and one .cklb per (image, benchmark); options ``imageId`` + ``benchmarkId`` with ckl / cklb
+return that single product checklist.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import uuid
+import zipfile
 import xml.etree.ElementTree as ET
 from datetime import timedelta
 from functools import lru_cache
@@ -24,7 +33,7 @@ from typing import Any
 import yaml
 
 from ..logs import get_logger
-from ._common import TOOL_NAME, View, filename, image_label, iso, normalize, sev_rank
+from ._common import CAT_SEVERITY, TOOL_NAME, View, filename, image_label, iso, normalize, sev_rank, slug
 from .registry import GeneratedReport
 
 log = get_logger(__name__)
@@ -411,10 +420,167 @@ def _cklb(v: View) -> bytes:
     return json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8")
 
 
+# --------------------------------------------------------------------------- product checklists (§14)
+PRODUCT_STATUS = {"pass": "NotAFinding", "fail": "Open", "notapplicable": "Not_Applicable"}
+
+
+def product_status(result: str) -> str:
+    return PRODUCT_STATUS.get(result, "Not_Reviewed")
+
+
+def _p_uuid(v: View, b: Any) -> str:
+    return str(uuid.uuid5(NS_UUID, f"{v.system.name}|image|{b.image_id}|{b.benchmark_key}|{v.scan.id}"))
+
+
+def _p_host(b: Any) -> str:
+    return b.image.ref.split("@", 1)[0]
+
+
+def _p_comment(v: View, b: Any) -> str:
+    fid = (" Rootfs extracted without root (degraded fidelity): owner / mode / setuid rules may be inaccurate."
+           if b.rootfs_fidelity == "degraded" else "")
+    return (f"Container image {image_label(b.image)}. {b.title} ({b.profile_title or b.profile_id}) evaluated by "
+            f"OpenSCAP in offline (chroot) mode on {iso(b.evaluated_at) or 'unknown date'} by {TOOL_NAME} ({v.run_stamp})."
+            " Rules that need a running system are Not_Reviewed / Not_Applicable." + fid)
+
+
+def _p_rule(v: View, b: Any, r: Any) -> dict[str, Any]:
+    status = product_status(r.result)
+    detail = (f"OpenSCAP result: {r.result} (profile {b.profile_id}) for image {image_label(b.image)}, "
+              f"evaluated {iso(b.evaluated_at)}.")
+    if r.result in ("notchecked", "error", "unknown", "informational"):
+        detail += " Not evaluable automatically in a container image; review manually."
+    return {"vuln": r.vuln_id or r.stig_id or r.rule_id, "rule": r.sv_id or r.rule_id, "ver": r.rule_version or "",
+            "group": r.group_title or r.vuln_id or "", "severity": CAT_SEVERITY.get(r.severity, "low"),
+            "title": r.title or r.rule_id, "fix": r.fix_text or "", "ccis": list(r.cci or []), "status": status,
+            "details": detail, "comments": f"Evaluated automatically by {TOOL_NAME} (OpenSCAP) from scan {v.scan.id}."}
+
+
+def _product_ckl(v: View, b: Any) -> bytes:
+    root = ET.Element("CHECKLIST")
+    asset = _sub(root, "ASSET")
+    for tag, val in [("ROLE", "None"), ("ASSET_TYPE", "Computing"), ("MARKING", v.system.marking),
+                     ("HOST_NAME", _p_host(b)), ("HOST_IP", ""), ("HOST_MAC", ""),
+                     ("HOST_FQDN", image_label(b.image)), ("TARGET_COMMENT", _p_comment(v, b)), ("TECH_AREA", ""),
+                     ("TARGET_KEY", ""), ("WEB_OR_DATABASE", "false"), ("WEB_DB_SITE", ""), ("WEB_DB_INSTANCE", "")]:
+        _sub(asset, tag, val)
+    istig = _sub(_sub(root, "STIGS"), "iSTIG")
+    info = _sub(istig, "STIG_INFO")
+    su = _p_uuid(v, b)
+    for name, val in [("version", b.version), ("classification", "UNCLASSIFIED"), ("customname", ""),
+                      ("stigid", b.benchmark_id or b.benchmark_key), ("description", b.profile_title or ""),
+                      ("filename", b.content_file or ""), ("releaseinfo", b.release_info), ("title", b.title),
+                      ("uuid", su), ("notice", "terms-of-use"), ("source", b.source or "")]:
+        si = _sub(info, "SI_DATA")
+        _sub(si, "SID_NAME", name)
+        if val:
+            _sub(si, "SID_DATA", val)
+    ref = f"{b.title} :: Version {b.version}" + (f", {b.release_info}" if b.release_info else "")
+    for r in b.rules:
+        x = _p_rule(v, b, r)
+        vuln = _sub(istig, "VULN")
+        attrs = [("Vuln_Num", x["vuln"]), ("Severity", x["severity"]), ("Group_Title", x["group"]),
+                 ("Rule_ID", x["rule"]), ("Rule_Ver", x["ver"]), ("Rule_Title", x["title"]), ("Vuln_Discuss", ""),
+                 ("IA_Controls", ""), ("Check_Content", ""), ("Fix_Text", x["fix"]), ("False_Positives", ""),
+                 ("False_Negatives", ""), ("Documentable", "false"), ("Mitigations", ""), ("Potential_Impact", ""),
+                 ("Third_Party_Tools", ""), ("Mitigation_Control", ""), ("Responsibility", ""),
+                 ("Security_Override_Guidance", ""), ("Check_Content_Ref", "M"), ("Weight", "10.0"),
+                 ("Class", "Unclass"), ("STIGRef", ref), ("TargetKey", ""), ("STIG_UUID", su),
+                 *[("CCI_REF", c) for c in x["ccis"]]]
+        for a, val in attrs:
+            sd = _sub(vuln, "STIG_DATA")
+            _sub(sd, "VULN_ATTRIBUTE", a)
+            _sub(sd, "ATTRIBUTE_DATA", val)
+        _sub(vuln, "STATUS", x["status"])
+        _sub(vuln, "FINDING_DETAILS", x["details"])
+        _sub(vuln, "COMMENTS", x["comments"])
+        _sub(vuln, "SEVERITY_OVERRIDE", "")
+        _sub(vuln, "SEVERITY_JUSTIFICATION", "")
+    ET.indent(root, space="\t")
+    body = ET.tostring(root, encoding="unicode", short_empty_elements=False)
+    return (f'<?xml version="1.0" encoding="UTF-8"?>\n<!--DISA STIG Viewer :: {STIG_VIEWER_VERSION}-->\n'
+            + body + "\n").encode("utf-8")
+
+
+def _product_cklb(v: View, b: Any) -> bytes:
+    now = iso(v.generated_at)
+    su = _p_uuid(v, b)
+    rules = []
+    for r in b.rules:
+        x = _p_rule(v, b, r)
+        rules.append({
+            "uuid": str(uuid.uuid5(NS_UUID, f"{su}|{r.rule_id}")), "stig_uuid": su, "target_key": None,
+            "stig_ref": None, "group_id": x["vuln"], "group_id_src": x["vuln"],
+            "rule_id": x["rule"][:-5] if x["rule"].endswith("_rule") else x["rule"], "rule_id_src": x["rule"],
+            "weight": "10.0", "classification": "Unclassified", "severity": x["severity"], "rule_version": x["ver"],
+            "group_title": x["group"], "rule_title": x["title"], "fix_text": x["fix"], "false_positives": "",
+            "false_negatives": "", "discussion": "", "check_content": "", "documentable": "false",
+            "mitigations": "", "potential_impacts": "", "third_party_tools": "", "mitigation_control": "",
+            "responsibility": "", "security_override_guidance": "", "ia_controls": "",
+            "check_content_ref": {"href": b.content_file or "", "name": "M"}, "legacy_ids": [],
+            "ccis": x["ccis"], "group_tree": [{"id": x["vuln"], "title": x["group"],
+                                               "description": "<GroupDescription></GroupDescription>"}],
+            "reference_identifier": "", "srg_id": x["group"] if x["group"].startswith("SRG-") else "",
+            "createdAt": now, "updatedAt": now, "STIGUuid": su, "status": CKLB_STATUS[x["status"]],
+            "overrides": {}, "comments": x["comments"], "finding_details": x["details"]})
+    doc = {
+        "title": f"{_p_host(b)} - {b.title} - scan {v.scan.id}",
+        "id": str(uuid.uuid5(NS_UUID, f"{su}|cklb")), "active": False, "mode": 2, "has_path": True,
+        "target_data": {"target_type": "Computing", "host_name": _p_host(b), "ip_address": "", "mac_address": "",
+                        "fqdn": image_label(b.image), "comments": _p_comment(v, b), "role": "None",
+                        "is_web_database": False, "technology_area": "", "web_db_site": "", "web_db_instance": "",
+                        "classification": None},
+        "stigs": [{"stig_name": b.title, "display_name": b.title, "stig_id": b.benchmark_id or b.benchmark_key,
+                   "release_info": b.release_info, "version": str(b.version), "uuid": su, "reference_identifier": "",
+                   "size": len(rules), "rules": rules}],
+        "cklb_version": "1.0",
+    }
+    return json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8")
+
+
+def product_filename(v: View, b: Any, ext: str) -> str:
+    stamp = (v.scan.finished_at or v.generated_at).strftime("%Y%m%d")
+    return f"{slug(_p_host(b))[:80]}-{b.benchmark_key}-scan{v.scan.id}-{stamp}.{ext}"
+
+
+def _bundle(v: View) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"kubernetes/{filename(v, 'stig-checklist', 'ckl')}", _ckl(v))
+        zf.writestr(f"kubernetes/{filename(v, 'stig-checklist', 'cklb')}", _cklb(v))
+        index = []
+        for b in v.stig_evaluated:
+            for ext, fn in (("ckl", _product_ckl), ("cklb", _product_cklb)):
+                zf.writestr(f"products/{product_filename(v, b, ext)}", fn(v, b))
+            index.append({"image": image_label(b.image), "benchmark": b.benchmark_key, "title": b.title,
+                          "profile": b.profile_id, "score": b.score, **{k: int((b.counts or {}).get(k, 0))
+                                                                        for k in ("pass", "fail", "notapplicable",
+                                                                                  "notchecked")},
+                          "file": product_filename(v, b, "ckl")})
+        skipped = [{"image": image_label(b.image), "status": b.status, "reason": b.error}
+                   for b in v.stig_benchmarks if not (b.status == "evaluated" and b.benchmark_key)]
+        zf.writestr("products/index.json", json.dumps({"scan": v.scan.id, "generatedAt": iso(v.generated_at),
+                                                       "checklists": index, "notEvaluated": skipped}, indent=2))
+    return buf.getvalue()
+
+
 def generate(fmt: str, snapshot: Any, options: dict[str, Any]) -> GeneratedReport:
     v = normalize(snapshot, options)
     for w in asset_warnings(v):
         log.warning("stig.asset_identifiers_missing", warning=w)
+    if fmt == "zip":
+        return GeneratedReport(_bundle(v), filename(v, "stig-bundle", "zip"), "application/zip")
+    if options.get("imageId") is not None or options.get("benchmarkId"):
+        want_img, want_b = str(options.get("imageId")), options.get("benchmarkId")
+        b = next((b for b in v.stig_evaluated if str(b.image_id) == want_img
+                  and (not want_b or b.benchmark_key == want_b)), None)
+        if b is None:
+            from .registry import UnsupportedReport
+
+            raise UnsupportedReport(f"no evaluated product STIG for image {want_img} / benchmark {want_b or 'any'}")
+        if fmt == "ckl":
+            return GeneratedReport(_product_ckl(v, b), product_filename(v, b, "ckl"), "application/xml")
+        return GeneratedReport(_product_cklb(v, b), product_filename(v, b, "cklb"), "application/json")
     if fmt == "ckl":
         return GeneratedReport(_ckl(v), filename(v, "stig-checklist", "ckl"), "application/xml")
     return GeneratedReport(_cklb(v), filename(v, "stig-checklist", "cklb"), "application/json")

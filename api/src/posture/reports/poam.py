@@ -26,8 +26,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from ._common import (SEVERITIES, TOOL_NAME, View, as_dt, cci_controls, filename, image_label, in_baseline, mdy,
-                      normalize, sev, sev_rank, short_hash)
+from ._common import (CAT_SEVERITY, SEVERITIES, TOOL_NAME, View, as_dt, cci_controls, filename, image_label,
+                      in_baseline, mdy, normalize, sev, sev_rank, short_hash)
 from .cells import safe_row
 from .registry import GeneratedReport
 
@@ -282,6 +282,42 @@ def _posture_items(v: View) -> list[SimpleNamespace]:
     return items
 
 
+def _stig_items(v: View) -> list[SimpleNamespace]:
+    """Failing product / OS STIG rules (DESIGN §14), one item per (image, rule): CAT -> raw severity,
+    Security Checks = V-ID (CCIs), controls from the DISA CCI map (else the content's NIST 800-53
+    references, else CM-6), SLA clock from the first evaluation that found the rule failing."""
+    items = []
+    for b, r in v.stig_failures:
+        img = b.image
+        severity = CAT_SEVERITY.get(r.severity, "low")
+        first_seen = r.first_failed_at or b.evaluated_at or v.scan.started_at or v.generated_at
+        due, overdue = v.sla_due(severity, first_seen), v.overdue(severity, first_seen)
+        vid = r.vuln_id or r.stig_id or r.rule_version or r.rule_id
+        controls = cci_controls(r.cci) or list(dict.fromkeys(r.nist or [])) or ["CM-6"]
+        uid = f"SP-STIG-{short_hash(img.digest or img.ref, b.benchmark_key, r.rule_id, n=10)}"
+        stig_ref = f"{b.title} :: Version {b.version}" + (f", {b.release_info}" if b.release_info else "")
+        checks = f"{vid}" + (f" ({', '.join(r.cci)})" if r.cci else "") + (
+            f" [{r.rule_version}]" if r.rule_version and r.rule_version != vid else "")
+        fid = " Evaluated on a rootfs extracted without root (degraded fidelity)." if b.rootfs_fidelity == "degraded" else ""
+        items.append(SimpleNamespace(
+            kind="stig", poam_id=uid, source_id=vid, security_checks=checks, kev=False, kev_due=None,
+            name=f"Product STIG: {r.title}", title=r.title,
+            description=f"{r.title} ({b.title}, profile {b.profile_title or b.profile_id}) fails in container image "
+                        f"{image_label(img)}.",
+            controls=controls, ccis=list(r.cci or []), severity=severity, first_seen=first_seen, due=due,
+            overdue=overdue, assets=[image_label(img)], workloads=list(img.workloads or []), scanners=[],
+            detector=f"OpenSCAP ({TOOL_NAME}) {b.benchmark_id or b.benchmark_key} profile {b.profile_id}",
+            plan=r.fix_text or f"Remediate {vid} in the image build (Dockerfile / base image) and rebuild.",
+            mitigation="", fixable=True, vendor_product=img.ref, agreement=None, cvss=None, url="",
+            identification_source=stig_ref, impact="",
+            comments=" ".join(filter(None, [
+                f"[External UID {uid}]", f"CAT {'I' * {'cat1': 1, 'cat2': 2, 'cat3': 3}.get(r.severity, 3)}.",
+                f"Rule {r.rule_id}.", f"SLA {v.sla_days.get(severity)}d from first failure {first_seen:%Y-%m-%d}.",
+                "OVERDUE." if overdue else "", fid.strip()])),
+        ))
+    return items
+
+
 def _assertion_items(v: View) -> list[SimpleNamespace]:
     """Failing platform control assertions of the attached control evidence run (M3): the same run
     the SSP / AR / SAR use, so every failing control has a POA&M item."""
@@ -343,7 +379,7 @@ def _to_baseline(v: View, items: list[SimpleNamespace]) -> list[SimpleNamespace]
 
 
 def build_items(v: View) -> list[SimpleNamespace]:
-    items = _vuln_items(v, granularity(v)) + _posture_items(v) + _assertion_items(v)
+    items = _vuln_items(v, granularity(v)) + _posture_items(v) + _stig_items(v) + _assertion_items(v)
     items = _to_baseline(v, items)
     items.sort(key=lambda i: (-sev_rank(i.severity), i.kind != "vulnerability", i.due or v.generated_at,
                               i.source_id))
@@ -353,7 +389,7 @@ def build_items(v: View) -> list[SimpleNamespace]:
 # --------------------------------------------------------------------------- rows
 def _assets_text(i: SimpleNamespace) -> str:
     txt = "\n".join(i.assets)
-    if i.kind == "vulnerability" and i.workloads:
+    if i.kind in ("vulnerability", "stig") and i.workloads:
         txt += "\nUsed by: " + ", ".join(i.workloads)
     return _cut(txt)
 
@@ -364,6 +400,8 @@ def _milestone(i: SimpleNamespace, v: View) -> str:
         return f"{i.plan} Target: {mdy(i.due)}."
     if i.kind == "assertion":
         return f"Correct the platform configuration and confirm by re-running the control assertions by {mdy(i.due)}."
+    if i.kind == "stig":
+        return f"Harden the image build for this STIG rule and confirm by re-evaluation (SCAP scan) by {mdy(i.due)}."
     return f"Remediate workload configuration and confirm by rescan by {mdy(i.due)}."
 
 

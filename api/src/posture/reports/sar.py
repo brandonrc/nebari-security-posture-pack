@@ -131,6 +131,7 @@ def context(v: View) -> dict[str, Any]:
                 controls[c].checks += 1
 
     stig = stig_summary(v)
+    product_stig = product_stig_summary(v)
     in_b = [s for s in v.engine_statuses if s.get("inBaseline", True)]
     engine_counts = []
     if in_b:
@@ -169,6 +170,7 @@ def context(v: View) -> dict[str, Any]:
         "checks": checks,
         "controls": sorted(controls.values(), key=lambda c: c.id),
         "stig": stig,
+        "product_stig": product_stig,
         "engine_run": v.engine_run,
         "engine_counts": engine_counts,
         "engine_baseline": v.engine.get("baseline") or v.engine_run.get("baseline") or "selected",
@@ -196,6 +198,26 @@ def stig_summary(v: View) -> dict[str, Any]:
             open_rules.append(SimpleNamespace(vuln_id=r["vulnId"], cat=r["cat"], title=r["ruleTitle"],
                                               benchmark=r["benchmark"], offenders=len(e.offenders)))
     return {"by_status": by_status, "open": open_rules}
+
+
+def product_stig_summary(v: View) -> dict[str, Any]:
+    """DESIGN §14: per (image, benchmark) OpenSCAP results for the SAR's product STIG section."""
+    rows = []
+    for b in sorted(v.stig_evaluated, key=lambda b: (-b.cat1_open, b.score if b.score is not None else 101,
+                                                    b.image.ref)):
+        c = b.counts or {}
+        rows.append(SimpleNamespace(image=image_label(b.image), title=b.title, version=b.version,
+                                    profile=b.profile_title or b.profile_id or "", pass_=int(c.get("pass", 0)),
+                                    fail=int(c.get("fail", 0)), na=int(c.get("notapplicable", 0)),
+                                    notchecked=int(c.get("notchecked", 0)), cat1=b.cat1_open, cat2=b.cat2_open,
+                                    cat3=b.cat3_open, score=b.score, degraded=b.rootfs_fidelity == "degraded"))
+        rows[-1].__dict__["pass"] = rows[-1].pass_
+    evaluated_imgs = {b.image_id for b in v.stig_evaluated}
+    other = [b for b in v.stig_benchmarks if b.image_id not in evaluated_imgs]
+    by_status: dict[str, int] = {}
+    for b in other:
+        by_status[b.status] = by_status.get(b.status, 0) + 1
+    return {"rows": rows, "not_evaluated": other, "by_status": sorted(by_status.items())}
 
 
 def render_html(v: View) -> str:

@@ -249,6 +249,58 @@ def build(v: View) -> dict[str, Any]:
             for o in objectives_for(c, "posture"):
                 touch(o, bad=True, obs=o_uuid, risk=r_uuid)
 
+    # ---- product / OS STIG observations (DESIGN §14): one per (image, benchmark) with failing rules,
+    # subject = the image; a risk per observation; findings via the rules' CCI -> 800-53 controls
+    if v.stig_evaluated:
+        oscap_uuid = uid("component", "openscap")
+        components.append({"uuid": oscap_uuid, "type": "software", "title": "OpenSCAP",
+                           "description": "OpenSCAP offline (chroot) evaluation of DISA SCAP benchmarks and "
+                                          "ComplianceAsCode profiles against container image root filesystems.",
+                           "status": {"state": "operational"}})
+    for b in sorted(v.stig_evaluated, key=lambda b: (str(b.image_id), b.benchmark_key)):
+        fails = [r for r in b.rules if r.result == "fail"]
+        if not fails:
+            continue
+        o_uuid, r_uuid = uid("obs-stig", b.image_id, b.benchmark_key), uid("risk-stig", b.image_id, b.benchmark_key)
+        worst = min((r.severity for r in fails), default="cat3")
+        severity = {"cat1": "high", "cat2": "medium", "cat3": "low"}.get(worst, "low")
+        c = b.counts or {}
+        ids = [r.vuln_id or r.rule_version or r.rule_id for r in sorted(fails, key=lambda r: (r.severity, r.rule_id))]
+        observations.append({
+            "uuid": o_uuid, "title": f"STIG failures: {b.title} on {image_label(b.image)}",
+            "description": (f"OpenSCAP profile {b.profile_id}: {c.get('pass', 0)} pass, {len(fails)} fail "
+                            f"(CAT I {b.cat1_open}, CAT II {b.cat2_open}, CAT III {b.cat3_open}), "
+                            f"{c.get('notapplicable', 0)} not applicable, {c.get('notchecked', 0)} not checked. "
+                            f"Failing: {', '.join(ids[:60])}{' ...' if len(ids) > 60 else ''}."),
+            "props": [_prop("benchmark", b.benchmark_id or b.benchmark_key), _prop("benchmark-version", b.version or "-"),
+                      _prop("profile", b.profile_id or "-"), _prop("failed-rules", len(fails)),
+                      _prop("stig-score", b.score if b.score is not None else "n/a"),
+                      _prop("rootfs-fidelity", b.rootfs_fidelity or "unknown")],
+            "methods": ["TEST"], "types": ["finding"],
+            "origins": [{"actors": [{"type": "tool", "actor-uuid": oscap_uuid}]}],
+            "subjects": [{"subject-uuid": img_uuid[b.image_id], "type": "inventory-item"}],
+            "collected": iso(b.evaluated_at) or collected,
+        })
+        first = min((r.first_failed_at for r in fails if r.first_failed_at), default=b.evaluated_at or v.generated_at)
+        risks.append({
+            "uuid": r_uuid, "title": f"Image hardening: {b.title}",
+            "description": f"{len(fails)} {b.title} rule(s) fail in {image_label(b.image)}.",
+            "statement": f"Highest open category CAT {'I' * int(worst[-1])} ({severity}).",
+            "props": [_prop("severity", severity)], "status": "open",
+            "characterizations": [{"origin": {"actors": [{"type": "tool", "actor-uuid": oscap_uuid}]},
+                                   "facets": [{"name": "severity", "system": NS, "value": severity},
+                                              {"name": "likelihood", "system": NS, "value": "not-assessed"},
+                                              {"name": "impact", "system": NS, "value": "not-assessed"}]}],
+            "deadline": iso(v.sla_due(severity, first)),
+            "related-observations": [{"observation-uuid": o_uuid}],
+        })
+        from ._common import cci_controls
+
+        controls = {c_ for r in fails for c_ in (cci_controls(r.cci) or r.nist or ["CM-6"])}
+        for ctl in sorted(controls):
+            for o in objectives_for(ctl, "posture"):
+                touch(o, bad=True, obs=o_uuid, risk=r_uuid)
+
     # ---- control assertion observations (M3: the same control evidence run as the SSP / POA&M)
     run = v.engine_run
     assertion_obs: dict[str, str] = {}

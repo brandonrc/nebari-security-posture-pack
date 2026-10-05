@@ -70,7 +70,7 @@ async def test_01_before_any_scan(env):
     assert {t["type"] for t in types} == {"poam", "stig-checklist", "sar", "oscal-ar", "inventory", "vuln-export",
                                          "oscal-ssp", "oscal-component-definition", "crm", "oscal-poam"}
     t = next(x for x in types if x["type"] == "stig-checklist")
-    assert t["formats"] == ["ckl", "cklb"] and t["scopes"] == ["cluster", "namespace", "workload"]
+    assert t["formats"] == ["ckl", "cklb", "zip"] and t["scopes"] == ["cluster", "namespace", "workload"]
     assert t["defaultFormat"] == "cklb" and t["description"]
     assert (await c.get("/reports")).json() == []
     st = (await c.get("/compliance/stig")).json()  # DESIGN §14: {items: k8s rules, product: {...}}

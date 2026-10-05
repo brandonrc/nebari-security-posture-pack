@@ -41,7 +41,7 @@ def rule_dict(r: ScapResultRow) -> dict[str, Any]:
     return {"ruleId": r.rule_id, "stigId": r.stig_id, "vulnId": r.vuln_id, "svId": r.sv_id,
             "ruleVersion": r.rule_version, "cci": list(r.cci or []), "nist": list(r.nist or []),
             "severity": r.severity, "result": r.result, "title": r.title, "fixText": r.fix_text,
-            "groupTitle": r.group_title, "checkedAt": iso(r.checked_at)}
+            "groupTitle": r.group_title, "checkedAt": iso(r.checked_at), "firstFailedAt": iso(r.first_failed_at)}
 
 
 def _filters(result: str | None, severity: str | None, q: str | None) -> list[Any]:

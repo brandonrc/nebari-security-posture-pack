@@ -107,6 +107,9 @@ class ScapResultRow(Base):
     fix_text: Mapped[str | None] = mapped_column(Text)
     group_title: Mapped[str | None] = mapped_column(Text)
     checked_at: Mapped[datetime] = _now_col()
+    # first evaluation that found this rule failing on this image (kept across re-evaluations while it
+    # keeps failing; the POA&M SLA clock), null for non-failing rows
+    first_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # Denormalised per-image STIG summary (scoring.image_stig), added by migration 0007.

@@ -295,6 +295,21 @@
   {% endif %}
   <p class="small muted">Not_Reviewed rules are control-plane or host-level requirements this tool cannot observe; they require manual review in STIG Viewer.</p>
 
+  <h3>Product STIG results (OS and product STIGs inside images, OpenSCAP)</h3>
+  {% if product_stig.rows %}
+  <p class="small">Each image's root filesystem was evaluated offline with OpenSCAP against the applicable DISA SCAP benchmark or ComplianceAsCode (SSG) profile. Rules that need a running system are notchecked / not applicable in this mode. STIG score = 100 &times; (1 &minus; failed weight / evaluated weight), CAT I/II/III = 10/4/1, pass and fail rules only.</p>
+  <table>
+    <thead><tr><th>Image</th><th>Benchmark / profile</th><th class="num">Pass</th><th class="num">Fail</th><th class="num">N/A</th><th class="num">Not checked</th><th class="num">CAT I open</th><th class="num">CAT II open</th><th class="num">CAT III open</th><th class="num">Score</th></tr></thead>
+    <tbody>{% for r in product_stig.rows %}<tr><td class="mono small">{{ r.image }}</td><td class="small">{{ r.title }} {{ r.version }}<br><span class="muted">{{ r.profile }}</span>{% if r.degraded %} <span class="warn">(degraded fidelity)</span>{% endif %}</td><td class="num">{{ r.pass }}</td><td class="num">{{ r.fail }}</td><td class="num">{{ r.na }}</td><td class="num">{{ r.notchecked }}</td><td class="num {% if r.cat1 %}warn{% endif %}">{{ r.cat1 }}</td><td class="num">{{ r.cat2 }}</td><td class="num">{{ r.cat3 }}</td><td class="num">{{ r.score | num }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% endif %}
+  {% if product_stig.not_evaluated %}
+  <p class="small">{{ product_stig.not_evaluated | length }} image(s) have no evaluated product STIG:
+    {% for k, n in product_stig.by_status %}{{ n }} {{ k }}{% if not loop.last %}, {% endif %}{% endfor %}
+    (notApplicable = no SCAP benchmark exists for the image's OS or products, e.g. Alpine, distroless or scratch images).</p>
+  {% endif %}
+  {% if not product_stig.rows and not product_stig.not_evaluated %}<p class="muted small">The SCAP scanner is not enabled or has not evaluated the images in scope.</p>{% endif %}
+
   <h2>7. Scanner versions and database freshness</h2>
   <table class="avoid">
     <thead><tr><th>Scanner</th><th>Version</th><th>Vulnerability DB updated</th><th class="num">DB age (days)</th><th>Status</th></tr></thead>

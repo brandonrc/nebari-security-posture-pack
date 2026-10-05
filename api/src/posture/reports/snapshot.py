@@ -33,6 +33,8 @@ from .models import (
     PostureResult,
     ReportSnapshot,
     ScanInfo,
+    StigBenchmarkRecord,
+    StigRuleRecord,
     ScannerStatus,
     Scope,
     SystemInfo,
@@ -202,6 +204,7 @@ async def build_snapshot(session: AsyncSession, scan_id: int | None, scope: Any 
         "workloads": len(workloads), "namespaces": len({w.namespace for w in workloads}),
     }
 
+    stig_results = await _stig_results(session, [i.id for i in imgs])
     snap = ReportSnapshot(
         generated_at=now,
         system=SystemInfo(name=settings.system_name or "Nebari cluster", organization=settings.organization,
@@ -215,6 +218,7 @@ async def build_snapshot(session: AsyncSession, scan_id: int | None, scope: Any 
                       grade=scan.grade or "?", vuln_score=scan.vuln_score, posture_score=scan.posture_score),
         scope=sc, sla_days=sla, scanners=scanners, images=images, findings=findings, workloads=workloads,
         namespaces=namespaces, checks=checks, posture_results=posture, trend=trend, summary=summary,
+        stig_results=stig_results,
     )
     # M3: every report is generated from the same control evidence run (stamped with its id)
     try:
@@ -224,3 +228,39 @@ async def build_snapshot(session: AsyncSession, scan_id: int | None, scope: Any 
     except Exception:  # noqa: BLE001  (engine tables missing / unreadable: reports still generate)
         snap.controls_engine = {}
     return snap
+
+
+async def _stig_results(session: AsyncSession, image_ids: list[int]) -> list[StigBenchmarkRecord]:
+    """Latest SCAP evaluation per (image, benchmark) of the images in scope (DESIGN §14)."""
+    from ..scap.models import ScapContent, ScapImageSummary, ScapResultRow
+
+    if not image_ids:
+        return []
+    try:
+        summaries = (await session.execute(select(ScapImageSummary).where(
+            ScapImageSummary.image_id.in_(image_ids)).order_by(ScapImageSummary.image_id,
+                                                               ScapImageSummary.benchmark_key))).scalars().all()
+    except Exception:  # noqa: BLE001  (tables missing before migration 0007)
+        return []
+    if not summaries:
+        return []
+    release = {(c.path, c.benchmark_id): c.release_info for c in (await session.execute(select(ScapContent))).scalars()}
+    rules: dict[int, list[StigRuleRecord]] = defaultdict(list)
+    for r in (await session.execute(select(ScapResultRow).where(
+            ScapResultRow.summary_id.in_([s.id for s in summaries])).order_by(ScapResultRow.id))).scalars():
+        rules[r.summary_id].append(StigRuleRecord(
+            rule_id=r.rule_id, result=r.result, severity=r.severity, title=r.title, stig_id=r.stig_id,
+            vuln_id=r.vuln_id, sv_id=r.sv_id, rule_version=r.rule_version, cci=list(r.cci or []),
+            nist=list(r.nist or []), fix_text=r.fix_text, group_title=r.group_title,
+            first_failed_at=r.first_failed_at))
+    out = []
+    for s in summaries:
+        out.append(StigBenchmarkRecord(
+            image_id=s.image_id, benchmark_key=s.benchmark_key, benchmark_id=s.benchmark_id, title=s.title,
+            version=s.version, release_info=release.get((s.content_path, s.benchmark_id), "") or "",
+            source=s.source, profile_id=s.profile_id, profile_title=s.profile_title,
+            content_file=(s.content_path or "").rsplit("/", 1)[-1] or None, status=s.status,
+            counts=dict(s.counts or {}), score=s.score, cat1_open=s.cat1_open, cat2_open=s.cat2_open,
+            cat3_open=s.cat3_open, rootfs_fidelity=s.rootfs_fidelity, evaluated_at=s.evaluated_at, error=s.error,
+            os=((s.detected or {}).get("os") or {}).get("prettyName"), rules=rules.get(s.id, [])))
+    return out

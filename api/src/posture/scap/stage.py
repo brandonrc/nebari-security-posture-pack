@@ -290,6 +290,9 @@ class ScapStage:
         fidelity = out.rootfs.get("fidelity") if out.rootfs else None
         summaries: list[dict[str, Any]] = []
         async with self.sm() as s, s.begin():
+            first_failed = {(k, rid): t for k, rid, t in (await s.execute(
+                select(ScapResultRow.benchmark_key, ScapResultRow.rule_id, ScapResultRow.first_failed_at).where(
+                    ScapResultRow.image_id == out.image_id, ScapResultRow.result == "fail"))).all()}
             await s.execute(delete(ScapImageSummary).where(ScapImageSummary.image_id == out.image_id))
             evaluated = [b for b in out.benchmarks if b.result.status in ("evaluated", "notApplicable")]
             if out.status != "evaluated" or not evaluated:
@@ -327,7 +330,9 @@ class ScapStage:
                         "sv_id": (x.sv_id or None) and x.sv_id[:64],
                         "rule_version": (x.rule_version or None) and x.rule_version[:64], "cci": x.cci, "nist": x.nist,
                         "severity": x.severity, "result": x.result, "title": x.title or x.rule_id,
-                        "fix_text": x.fix_text, "group_title": x.group_title, "checked_at": ts} for x in r.rules])
+                        "fix_text": x.fix_text, "group_title": x.group_title, "checked_at": ts,
+                        "first_failed_at": (first_failed.get((b.candidate["key"], x.rule_id)) or ts)
+                        if x.result == "fail" else None} for x in r.rules])
                 summaries.append({"status": status, "benchmarkKey": b.candidate["key"],
                                   "evaluatedWeight": ev_w, "failedWeight": fl_w, "rootfsFidelity": fidelity,
                                   **(r.counts or {}), **opened})

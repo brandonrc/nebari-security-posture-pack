@@ -205,6 +205,17 @@ class View:
     checks_by_id: dict[str, SimpleNamespace] = field(default_factory=dict)
     # control evidence engine run attached to the snapshot (M3: every report of a scan uses the same run)
     engine: dict[str, Any] = field(default_factory=dict)
+    # DESIGN §14: OpenSCAP results per (image, benchmark) of the images in scope
+    stig_benchmarks: list[SimpleNamespace] = field(default_factory=list)
+
+    @property
+    def stig_evaluated(self) -> list[SimpleNamespace]:
+        return [b for b in self.stig_benchmarks if b.status == "evaluated" and b.benchmark_key]
+
+    @property
+    def stig_failures(self) -> list[tuple[SimpleNamespace, SimpleNamespace]]:
+        """(benchmark, rule) for every failing product / OS STIG rule in scope."""
+        return [(b, r) for b in self.stig_evaluated for r in b.rules if r.result == "fail"]
 
     @property
     def engine_run(self) -> dict[str, Any]:
@@ -465,12 +476,35 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
     view.engine = dict(ce) if isinstance(ce, dict) else {}
     view.images_by_id = {i.id: i for i in images}
     view.checks_by_id = {c.id: c for c in checks}
+    view.stig_benchmarks = _stig_benchmarks(snapshot, view.images_by_id)
     for r in results:  # make sure every referenced check has a definition
         view.check(r.check_id)
         if not r.severity:
             r.severity = view.check(r.check_id).severity
         r.severity = sev(r.severity)
     return view
+
+
+CAT_SEVERITY = {"cat1": "high", "cat2": "medium", "cat3": "low"}  # DISA category -> raw severity
+
+
+def _stig_benchmarks(snapshot: Any, images_by_id: dict[Any, SimpleNamespace]) -> list[SimpleNamespace]:
+    out = []
+    for b in _list(snapshot, "stig_results"):
+        o = _dt_fields(_ns(b, {
+            "image_id": None, "benchmark_key": "", "benchmark_id": None, "title": "", "version": "",
+            "release_info": "", "source": None, "profile_id": None, "profile_title": None, "content_file": None,
+            "status": "evaluated", "counts": dict, "score": None, "cat1_open": 0, "cat2_open": 0, "cat3_open": 0,
+            "rootfs_fidelity": None, "evaluated_at": None, "error": None, "os": None, "rules": list}), "evaluated_at")
+        if o.image_id not in images_by_id:  # scope filter: only images of the report's scope
+            continue
+        o.image = images_by_id[o.image_id]
+        o.rules = [_dt_fields(_ns(r, {"rule_id": "", "result": "unknown", "severity": "cat2", "title": "",
+                                      "stig_id": None, "vuln_id": None, "sv_id": None, "rule_version": None,
+                                      "cci": list, "nist": list, "fix_text": None, "group_title": None,
+                                      "first_failed_at": None}), "first_failed_at") for r in (o.rules or [])]
+        out.append(o)
+    return out
 
 
 def filename(view: View, report: str, ext: str) -> str:

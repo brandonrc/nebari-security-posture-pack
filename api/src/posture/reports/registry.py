@@ -46,12 +46,14 @@ REPORT_TYPES: list[dict[str, Any]] = [
     },
     {
         "type": "stig-checklist",
-        "title": "STIG checklist (Kubernetes STIG; Container Platform SRG optional)",
-        "formats": ["ckl", "cklb"],
+        "title": "STIG checklist (Kubernetes STIG; Container Platform SRG optional; product STIGs)",
+        "formats": ["ckl", "cklb", "zip"],
         "scopes": SCOPES,
-        "options": ["systemName", "includeSystemNamespaces", "includeSrg"],
+        "options": ["systemName", "includeSystemNamespaces", "includeSrg", "imageId", "benchmarkId"],
         "description": "STIG Viewer checklist (.ckl for 2.x, .cklb for 3.x). Posture checks mapped to Kubernetes "
-                       "STIG V2R6 / Container Platform SRG V2R4 rules; unmapped rules are Not_Reviewed.",
+                       "STIG V2R6 / Container Platform SRG V2R4 rules; unmapped rules are Not_Reviewed. zip = "
+                       "stig-bundle.zip: that checklist plus one .ckl/.cklb per (image, product/OS benchmark) "
+                       "with OpenSCAP results (DESIGN §14); imageId + benchmarkId select one product checklist.",
     },
     {
         "type": "sar",

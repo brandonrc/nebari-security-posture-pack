@@ -178,6 +178,51 @@ class TrendPoint(_M):
     high: int = 0
 
 
+class StigRuleRecord(_M):
+    """One OpenSCAP rule result of a product / OS benchmark (DESIGN §14)."""
+
+    rule_id: str
+    result: str  # pass | fail | notapplicable | notchecked | error | unknown | informational
+    severity: str = "cat2"  # cat1 | cat2 | cat3
+    title: str = ""
+    stig_id: str | None = None
+    vuln_id: str | None = None
+    sv_id: str | None = None
+    rule_version: str | None = None
+    cci: list[str] = Field(default_factory=list)
+    nist: list[str] = Field(default_factory=list)
+    fix_text: str | None = None
+    group_title: str | None = None
+    first_failed_at: datetime | None = None
+
+
+class StigBenchmarkRecord(_M):
+    """Latest SCAP evaluation of one (image, benchmark); status notApplicable / noContent / error /
+    timeout rows (benchmark_key "") carry no rules."""
+
+    image_id: int | str
+    benchmark_key: str = ""
+    benchmark_id: str | None = None
+    title: str = ""
+    version: str = ""
+    release_info: str = ""
+    source: str | None = None
+    profile_id: str | None = None
+    profile_title: str | None = None
+    content_file: str | None = None
+    status: str = "evaluated"
+    counts: dict[str, int] = Field(default_factory=dict)
+    score: float | None = None
+    cat1_open: int = 0
+    cat2_open: int = 0
+    cat3_open: int = 0
+    rootfs_fidelity: str | None = None
+    evaluated_at: datetime | None = None
+    error: str | None = None
+    os: str | None = None
+    rules: list[StigRuleRecord] = Field(default_factory=list)
+
+
 class ReportSnapshot(_M):
     generated_at: datetime
     system: SystemInfo = Field(default_factory=SystemInfo)
@@ -193,3 +238,4 @@ class ReportSnapshot(_M):
     posture_results: list[PostureResult] = Field(default_factory=list)
     trend: list[TrendPoint] = Field(default_factory=list)
     summary: dict[str, Any] | None = None
+    stig_results: list[StigBenchmarkRecord] = Field(default_factory=list)  # DESIGN §14

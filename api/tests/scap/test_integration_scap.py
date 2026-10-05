@@ -211,3 +211,30 @@ async def test_04_scap_disabled_is_a_no_op(scap_env):
     assert (await c.get(f"/scans/{sid}")).json()["scapStatus"] is None
     assert await worker(se, "provenance,controls,reports").poll_once()
     await c.put("/settings", json={"scanners": {"scap": True}})
+
+
+async def test_05_reports_from_the_database(scap_env):
+    """build_snapshot carries the STIG rows; the bundle, POA&M, SAR and OSCAL AR use them."""
+    import io
+    import zipfile
+
+    from posture.reports.registry import generate
+    from posture.reports.snapshot import build_snapshot
+
+    se = scap_env
+    async with se["sm"]() as s:
+        snap = await build_snapshot(s, None, None)
+    ev = [b for b in snap.stig_results if b.status == "evaluated"]
+    assert len(ev) == 1 and ev[0].benchmark_key == "test-posture" and ev[0].release_info.startswith("Release: 1")
+    assert {r.result for r in ev[0].rules} == {"pass", "fail"}
+    fail = next(r for r in ev[0].rules if r.result == "fail")
+    assert fail.first_failed_at is not None  # carried across re-evaluations (SLA clock)
+    zf = zipfile.ZipFile(io.BytesIO(generate("stig-checklist", "zip", snap, {}).content))
+    assert any(n.startswith("products/") and n.endswith("-test-posture-scan" + str(snap.scan.id) + "-"
+                                                        + snap.scan.finished_at.strftime("%Y%m%d") + ".ckl")
+               for n in zf.namelist())
+    csv = generate("poam", "csv", snap, {}).content.decode()
+    assert "SP-STIG-" in csv and "V-90003" in csv
+    async with se["sm"]() as s:  # namespace scope without the web image: no STIG rows
+        scoped = await build_snapshot(s, None, {"kind": "namespace", "name": "batch"})
+    assert all(b.image_id != ev[0].image_id for b in scoped.stig_results)

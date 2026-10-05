@@ -99,6 +99,7 @@ def upgrade() -> None:
         sa.Column("fix_text", sa.Text(), nullable=True),
         sa.Column("group_title", sa.Text(), nullable=True),
         sa.Column("checked_at", sa.DateTime(timezone=True), server_default=NOW, nullable=False),
+        sa.Column("first_failed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["image_id"], ["images.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["summary_id"], ["scap_image_summary.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
