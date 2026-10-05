@@ -98,7 +98,69 @@
   `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
   never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
 
-## Grace deployment status (2026-10-03, hardened pack)
+## Grace deployment status (2026-10-05, scan accounting)
+
+- Deployed: helm revision 17 (2026-10-05 01:42:59 UTC), images `065cc06-1791164424` (api, worker,
+  ui; built from a clean worktree of 065cc06: 297f923 scan accounting / scoped post-scan stages /
+  event-scan hygiene, 6bc0547 chart `scanner.events.*`, 065cc06 docs). Chart `scanner.events`
+  defaults (debounce 300 s, min pod age 120 s, Jobs ignored); values unchanged. Hooks: ensure-secrets
+  and migrate Jobs completed; `alembic_version` = `0006_scan_accounting`; the api `migrate` init
+  container then found nothing to apply (`migrate.done`). All pods rolled, 0 restarts, no
+  warning/error log lines in api, worker, worker-privileged, report-worker 37 min after rollout.
+- Rollout side effect: the old pod watcher queued event scan #35 for the new pack pods and it was
+  failed by the shutdown (`worker shutting down`); the new watcher queued #36 at 01:45:37, ~2 min
+  after the new pods started (min pod age).
+- Scheduler before the upgrade: scheduled scans 20, 21, 24, 25, 29 each ran 6 h apart
+  (23:23:55 ... 23:24:02, drift = previous scan's start). After manual scan #37 the next due is
+  `2026-10-05T07:50:01Z` (= #37 start + 6 h).
+- Scan rows (`/api/v1/scans`) carry the new counts; rows before 0006 show null and the Scans page
+  falls back to "done/total". Observed:
+  - #36 event (rollout, ns security-posture): 6 targeted · 3 rescanned · 3 fresh, 88 inventoried;
+    provenance 4 checked / 84 carried; controls ran (previous scan had no posture hash); reports
+    skipped ("event scan (targeted)").
+  - #37 manual, not forced (the scheduled scan was 3.5 h away): 0 rescanned · 88 fresh · 88 in
+    inventory, `imagesTotal` 0, 3m13s; provenance 1 checked (the image whose last check errored)
+    / 87 carried; controls ran (full scan); 6 reports auto-queued and done (SAR 124 s, others
+    8-18 s) because the previous full scan (#29) predates 0006 and has no `inventory_hash` (unknown
+    counts as changed; the image set had also changed by the three new pack tags). The
+    "0 rescanned, inventory unchanged -> reports skipped" path of a full scan was not observed yet
+    (next chance: the 07:50 scheduled scan).
+  - Scans page: "0 rescanned · 88 fresh · 88 in inventory", "6 targeted · 3 rescanned · 3 fresh",
+    "2 targeted · 2 rescanned · 0 fresh", "2 targeted · 1 rescanned · 1 fresh"; while #36 ran it
+    showed "6 targeted · 3/3 rescanned · 3 fresh".
+- Churn test (ns default):
+  - `busybox:1.37` pod: no event scan in 5.5 min. Correct: the watcher only reacts to digests no
+    scan has seen, and that digest is image 7 (scanned 2026-10-04 20:46). New digests were built
+    instead (`localhost:32000/churn-test:1..4`, `FROM alpine:3.20` + a label).
+  - `churn-test` (churn-test:1) created 02:00:11 -> #38 queued 02:02:21 (130 s, min age 120 s).
+    `churn-test2` (churn-test:2) created 02:00:56 was still younger than 120 s, but #38 is
+    namespace-targeted and its inventory scanned both new images: 2 targeted · 2 rescanned ·
+    0 fresh; no second scan was queued for churn-test2. Provenance 3 checked / 87 carried; controls
+    ran (two new workloads changed the posture hash, as designed); reports skipped.
+  - `churn-test` replaced (same pod/container name, churn-test:3) at 02:09:59 -> #39 queued
+    02:12:09 (130 s; 9m48s after #38): 2 targeted · 1 rescanned · 1 fresh (only churn-test:3
+    scanned); provenance 1 checked / 89 carried (stage 51 s); `controls engine skipped: targeted
+    scan; workloads and security contexts unchanged`; reports skipped.
+  - Jobs: `churn-job` (sleep 200) and `churn-job2` (sleep 600) with the new digest churn-test:4,
+    created 02:13:28/02:13:41: no event scan by 02:20:55 (past min age and the debounce window).
+    The 03:17 backup CronJob was not observed under the new watcher.
+  - No reports were queued after 01:53:14 (only #37's six). Pods and Jobs deleted afterwards.
+- Metrics (port-forward to :9000): scan worker `posture_scan_image_selection_total`
+  {event: rescanned 6, skipped_fresh 4; manual: rescanned 0, skipped_fresh 88};
+  worker-privileged `posture_post_scan_stage_total` {controls run 3, skipped 1; reports run 1,
+  skipped 3}, `posture_provenance_images_total` {checked 9, carried 347};
+  `posture_scan_images{status=inventoried|rescanned|skipped_fresh}` 88/0/88 (latest full scan
+  #37). Each counter lives on the pod that runs that stage (selection on the scan worker, post-scan
+  stages and provenance on worker-privileged). Prometheus-side scrape of the new series not checked.
+- Known issues: the provenance stage still takes 51-193 s with 1-4 images checked (#36 190 s,
+  #37 182 s, #38 193 s, #39 51 s), so "finish the stage in seconds" (scan-accounting entry) does
+  not hold on grace. Not timed per step; the likely cost is the Helm chart update check, which
+  runs every scan with a fresh `ChartRepos` (every `index.yaml` re-downloaded and parsed) and, for
+  the charts no repo publishes, walks every repo down to the `oci://docker.io` tag list (429). The pack's own images score 0.0 (F) (api 320, ui 225, worker 495 findings). Docker Hub
+  429 remains (1 provenance registry error on #36/#37). Items from the section below not
+  re-checked here are unchanged.
+
+## Grace deployment status (2026-10-03, hardened pack; superseded by the section above)
 
 - Deployed: chart `nebari-security-posture-pack-0.1.0` (this repo), helm revision 16, images
   `cc63640-1791050439` (api, worker, ui; the report-worker and the hook Jobs run the api image).
