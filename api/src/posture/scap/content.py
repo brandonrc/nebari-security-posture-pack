@@ -19,6 +19,14 @@ The index (`<dir>/index.json`) lists every datastream / XCCDF file with its benc
 profiles, parsed from the XML (streaming; files are 5-30 MB). Rule metadata (title, severity,
 V-/SV- ids, CCIs, NIST references, fix text) is parsed on first use and cached per file sha256
 in `<dir>/rules/`.
+
+CCIs for SSG content (grace, 2026-10-05): SSG datastreams reference the DISA STIG by V-ID,
+SV- rule id and STIG rule version (`RHEL-09-211010`) but carry no `CCI-` idents. When a DISA
+benchmark for the same product is on the content volume, `rule_metadata` joins each SSG rule to
+it (SV- base id without the revision, then V-ID, then rule version) and takes that DISA rule's
+CCIs (`cciSource: "disa"`, `cciFrom`); otherwise the rule keeps no CCI and carries `cciNote`.
+The derived metadata is cached under a key that includes every DISA file's sha256, so adding,
+removing or updating a DISA benchmark invalidates it.
 """
 
 from __future__ import annotations
@@ -57,6 +65,9 @@ _V = re.compile(r"^V-\d+$")
 _CCI = re.compile(r"^CCI-\d{6}$")
 _SRG = re.compile(r"^SRG-[A-Z]+-\d{6}")
 _NIST = re.compile(r"^([A-Z]{2})-(\d+)(\((\d+)\))?")
+_STIG_VER = re.compile(r"^[A-Z0-9]+(-[A-Z0-9]+)+-\d{5,6}$")
+_SV_BASE = re.compile(r"^(SV-\d+)")
+RULE_META_VERSION = 2  # bump when parse_rules / derive_ccis output changes (cache key)
 
 
 class ContentError(RuntimeError):
@@ -457,6 +468,7 @@ def parse_rules(path: Path, benchmark_id: str | None = None) -> dict[str, dict[s
                 rid = el.get("id", "")
                 cur = {"title": "", "severity": el.get("severity") or "unknown", "version": "", "vulnId": None,
                        "svId": None, "stigId": None, "cci": [], "nist": [], "srg": [], "fixText": None,
+                       "stigRefs": {"v": [], "sv": [], "ver": []},
                        "groupId": groups[-1]["id"] if groups else "", "groupTitle": groups[-1]["title"] if groups else ""}
                 rules[rid] = cur
                 m = _SV.search(rid)
@@ -496,8 +508,10 @@ def parse_rules(path: Path, benchmark_id: str | None = None) -> dict[str, dict[s
                 cur["cci"].append(val)
             elif _V.match(val):
                 cur["vulnId"] = cur["vulnId"] or val
+                _add(cur["stigRefs"]["v"], val)
             elif _SV.fullmatch(val):
                 cur["svId"] = cur["svId"] or val
+                _add(cur["stigRefs"]["sv"], val)
             elif _SRG.match(val):
                 if val not in cur["srg"]:
                     cur["srg"].append(val)
@@ -505,32 +519,185 @@ def parse_rules(path: Path, benchmark_id: str | None = None) -> dict[str, dict[s
                 n = _norm_nist(val)
                 if n and n not in cur["nist"]:
                     cur["nist"].append(n)
-            elif ("cyber.mil" in href or "iase.disa.mil" in href) and re.match(r"^[A-Z0-9]+(-[A-Z0-9]+)+-\d{5,6}$", val):
+            elif ("cyber.mil" in href or "iase.disa.mil" in href) and _STIG_VER.match(val):
                 cur["stigId"] = cur["stigId"] or val
+                _add(cur["stigRefs"]["ver"], val)
     for r in rules.values():
         if r["groupTitle"] and _SRG.match(r["groupTitle"]) and r["groupTitle"] not in r["srg"]:
             r["srg"].append(r["groupTitle"])
-        if not r["stigId"] and r["version"] and re.match(r"^[A-Z0-9]+(-[A-Z0-9]+)+-\d{5,6}$", r["version"]):
+        if not r["stigId"] and r["version"] and _STIG_VER.match(r["version"]):
             r["stigId"] = r["version"]
+        refs = r["stigRefs"]
+        for key, val in (("v", r["vulnId"]), ("sv", r["svId"]), ("ver", r["stigId"])):
+            if val:
+                _add(refs[key], val)
         r["cci"] = sorted(set(r["cci"]))
+        r["cciSource"] = "content" if r["cci"] else None
     return rules
 
 
-def rule_metadata(content_dir: Path, path: Path, sha256: str, benchmark_id: str) -> dict[str, dict[str, Any]]:
-    cache = Path(content_dir) / "rules" / f"{sha256}-{hashlib.sha1(benchmark_id.encode()).hexdigest()[:10]}.json"
+def _add(lst: list[str], val: str) -> None:
+    if val not in lst:
+        lst.append(val)
+
+
+def _sv_base(sv: str) -> str:
+    m = _SV_BASE.match(sv)
+    return m.group(1) if m else sv
+
+
+def _parse_cached(content_dir: Path, path: Path, sha256: str, benchmark_id: str) -> dict[str, dict[str, Any]]:
+    """parse_rules of one benchmark, cached per file sha256 + benchmark id (+ RULE_META_VERSION)."""
+    cache = (Path(content_dir) / "rules"
+             / f"{sha256}-{hashlib.sha1(benchmark_id.encode()).hexdigest()[:10]}-v{RULE_META_VERSION}.json")
     try:
         return json.loads(cache.read_text())
     except (OSError, ValueError):
         pass
     rules = parse_rules(path, benchmark_id)
+    _write_cache(cache, rules)
+    return rules
+
+
+def _write_cache(cache: Path, data: Any) -> None:
     try:
         cache.parent.mkdir(parents=True, exist_ok=True)
         tmp = cache.with_suffix(".tmp")
-        tmp.write_text(json.dumps(rules))
+        tmp.write_text(json.dumps(data))
         os.replace(tmp, cache)
     except OSError:
         pass
+
+
+@dataclass
+class DisaTable:
+    """Join keys of one DISA benchmark -> its rules' CCIs."""
+    benchmark_id: str
+    title: str
+    version: str
+    by_sv: dict[str, list[str]] = field(default_factory=dict)
+    by_v: dict[str, list[str]] = field(default_factory=dict)
+    by_ver: dict[str, list[str]] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, benchmark_id: str, title: str, version: str, rules: dict[str, dict[str, Any]]) -> DisaTable:
+        t = cls(benchmark_id, title, version)
+        for r in rules.values():
+            ccis = list(r.get("cci") or [])
+            if not ccis:
+                continue
+            if r.get("svId"):
+                t.by_sv.setdefault(_sv_base(r["svId"]), ccis)
+            if r.get("vulnId"):
+                t.by_v.setdefault(r["vulnId"], ccis)
+            ver = r.get("stigId") or r.get("version")
+            if ver and _STIG_VER.match(ver):
+                t.by_ver.setdefault(ver, ccis)
+        return t
+
+    def lookup(self, refs: dict[str, list[str]]) -> tuple[list[str], str] | None:
+        """CCIs for an SSG rule's STIG references: SV- base id (revision ignored), V-ID, rule version."""
+        for sv in refs.get("sv") or []:
+            if (c := self.by_sv.get(_sv_base(sv))) is not None:
+                return c, sv
+        for v in refs.get("v") or []:
+            if (c := self.by_v.get(v)) is not None:
+                return c, v
+        for ver in refs.get("ver") or []:
+            if (c := self.by_ver.get(ver)) is not None:
+                return c, ver
+        return None
+
+
+def derive_ccis(rules: dict[str, dict[str, Any]], tables: list[DisaTable], product: str = "") -> dict[str, int]:
+    """Fill `cci` of rules that carry STIG references but no CCI from the DISA tables (in place).
+    Rules left without a CCI get `cciNote`. Returns {derived, unmatched, noRefs}."""
+    stats = {"derived": 0, "unmatched": 0, "noRefs": 0}
+    what = f" for {product}" if product else ""
+    for r in rules.values():
+        if r.get("cci"):
+            continue
+        refs = r.get("stigRefs") or {}
+        if not any(refs.get(k) for k in ("v", "sv", "ver")):
+            stats["noRefs"] += 1
+            r["cciNote"] = "no CCI: the rule references no DISA STIG id"
+            continue
+        hit = None
+        for t in tables:
+            got = t.lookup(refs)
+            if got is not None:
+                hit = (t, *got)
+                break
+        if hit is None:
+            stats["unmatched"] += 1
+            r["cciNote"] = ("no CCI: the SCAP content carries none and "
+                            + (f"no DISA benchmark{what} on the content volume lists this STIG id"
+                               if tables else f"no DISA benchmark{what} is on the content volume"))
+            continue
+        t, ccis, key = hit
+        r["cci"] = sorted(set(ccis))
+        r["cciSource"] = "disa"
+        r["cciFrom"] = f"{t.benchmark_id} {t.version}".strip() + f" ({key})"
+        stats["derived"] += 1
+    return stats
+
+
+def _disa_benchmarks(content_dir: Path, exclude_path: Path) -> list[tuple[Path, str, dict[str, Any]]]:
+    """(path, file sha256, benchmark) of every DISA benchmark in the index except `exclude_path`'s."""
+    idx = load_index(content_dir)
+    out = []
+    try:
+        excl = Path(exclude_path).resolve()
+    except OSError:
+        excl = Path(exclude_path)
+    for rel, f in sorted((idx.get("files") or {}).items()):
+        p = Path(content_dir) / rel
+        if not f.get("sha256") or p.resolve() == excl:
+            continue
+        for b in f.get("benchmarks") or []:
+            if b.get("source") == "disa" or str(b.get("id", "")).startswith("xccdf_mil.disa.stig"):
+                out.append((p, f["sha256"], b))
+    return out
+
+
+def rule_metadata(content_dir: Path, path: Path, sha256: str, benchmark_id: str) -> dict[str, dict[str, Any]]:
+    """Rule metadata of one benchmark (cached). Non-DISA benchmarks (SSG, custom) whose rules carry
+    DISA STIG ids but no CCIs get them from the DISA benchmarks on the content volume
+    (derive_ccis); the cache key then includes those DISA files' sha256."""
+    rules = _parse_cached(content_dir, path, sha256, benchmark_id)
+    if benchmark_id.startswith("xccdf_mil.disa.stig") or not any(
+            not r.get("cci") and any((r.get("stigRefs") or {}).get(k) for k in ("v", "sv", "ver"))
+            for r in rules.values()):
+        return rules
+    disa = _disa_benchmarks(content_dir, path)
+    key = hashlib.sha1("|".join(sorted(f"{sha}:{b['id']}" for _p, sha, b in disa)).encode()).hexdigest()[:10]
+    cache = (Path(content_dir) / "rules"
+             / f"{sha256}-{hashlib.sha1(benchmark_id.encode()).hexdigest()[:10]}-v{RULE_META_VERSION}-cci{key}.json")
+    try:
+        return json.loads(cache.read_text())
+    except (OSError, ValueError):
+        pass
+    tables = []
+    for p, sha, b in disa:
+        try:
+            drules = _parse_cached(content_dir, p, sha, b["id"])
+        except (ET.ParseError, OSError) as e:
+            log.warning("scap.content.disa_unreadable", path=str(p), error=str(e)[:200])
+            continue
+        tables.append(DisaTable.build(b["id"], b.get("title", ""), b.get("version", ""), drules))
+    product = _benchmark_title(content_dir, path, benchmark_id)
+    stats = derive_ccis(rules, tables, product)
+    log.info("scap.content.cci_derived", benchmark=benchmark_id, disa=len(tables), **stats)
+    _write_cache(cache, rules)
     return rules
+
+
+def _benchmark_title(content_dir: Path, path: Path, benchmark_id: str) -> str:
+    for rel, f in (load_index(content_dir).get("files") or {}).items():
+        for b in f.get("benchmarks") or []:
+            if b.get("id") == benchmark_id and (Path(content_dir) / rel).name == Path(path).name:
+                return b.get("title") or ""
+    return ""
 
 
 # --------------------------------------------------------------------------- refresh

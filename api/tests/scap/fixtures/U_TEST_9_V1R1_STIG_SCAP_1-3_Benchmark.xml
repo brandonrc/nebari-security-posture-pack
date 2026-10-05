@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimal DISA-style XCCDF 1.1 benchmark (layout of U_RHEL_9_V2R9_STIG_SCAP_1-3_Benchmark):
+     Group id V-, Rule id SV-..rN_rule, <version> = STIG rule version, CCI idents. Made-up ids. -->
+<xccdf:Benchmark xmlns:xccdf="http://checklists.nist.gov/xccdf/1.1" xmlns:dc="http://purl.org/dc/elements/1.1/"
+    id="xccdf_mil.disa.stig_benchmark_TEST_9_STIG" resolved="1" xml:lang="en">
+  <xccdf:status date="2026-07-01">accepted</xccdf:status>
+  <xccdf:title>Test Linux 9 Security Technical Implementation Guide</xccdf:title>
+  <xccdf:reference href="https://cyber.mil"><dc:publisher>DISA</dc:publisher></xccdf:reference>
+  <xccdf:version>001.001</xccdf:version>
+  <xccdf:Profile id="xccdf_mil.disa.stig_profile_MAC-1_Classified">
+    <xccdf:title>I - Mission Critical Classified</xccdf:title>
+    <xccdf:select idref="xccdf_mil.disa.stig_group_V-100001" selected="true"/>
+  </xccdf:Profile>
+  <xccdf:Group id="xccdf_mil.disa.stig_group_V-100001">
+    <xccdf:title>SRG-OS-000001-GPOS-00001</xccdf:title>
+    <xccdf:Rule id="xccdf_mil.disa.stig_rule_SV-100001r5_rule" severity="high" weight="10.0">
+      <xccdf:version>TEST-09-000010</xccdf:version>
+      <xccdf:title>Test 1</xccdf:title>
+      <xccdf:ident system="http://cyber.mil/cci">CCI-000366</xccdf:ident>
+    </xccdf:Rule>
+  </xccdf:Group>
+  <xccdf:Group id="xccdf_mil.disa.stig_group_V-100002">
+    <xccdf:title>SRG-OS-000002-GPOS-00002</xccdf:title>
+    <xccdf:Rule id="xccdf_mil.disa.stig_rule_SV-100002r3_rule" severity="medium" weight="10.0">
+      <xccdf:version>TEST-09-000020</xccdf:version>
+      <xccdf:title>Test 2</xccdf:title>
+      <xccdf:ident system="http://cyber.mil/cci">CCI-001494</xccdf:ident>
+      <xccdf:ident system="http://cyber.mil/cci">CCI-001493</xccdf:ident>
+    </xccdf:Rule>
+  </xccdf:Group>
+  <xccdf:Group id="xccdf_mil.disa.stig_group_V-100003">
+    <xccdf:title>SRG-OS-000003-GPOS-00003</xccdf:title>
+    <xccdf:Rule id="xccdf_mil.disa.stig_rule_SV-100003r1_rule" severity="low" weight="10.0">
+      <xccdf:version>TEST-09-000030</xccdf:version>
+      <xccdf:title>Test 3</xccdf:title>
+      <xccdf:ident system="http://cyber.mil/cci">CCI-000048</xccdf:ident>
+    </xccdf:Rule>
+  </xccdf:Group>
+</xccdf:Benchmark>
