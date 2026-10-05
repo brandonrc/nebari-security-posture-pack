@@ -20,7 +20,7 @@
     "build:mock-provenance": "VITE_API_MOCK=provenance vite build --outDir dist-mock-provenance"
   },
   "dependencies": {
-    "@base-ui/react": "~1.6.0",
+    "@base-ui/react": "~1.8.0",
     "@fontsource-variable/geist": "^5.2.9",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@tanstack/react-query": "^5.104.1",
