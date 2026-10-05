@@ -98,7 +98,142 @@
   `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
   never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
 
-## Grace deployment status (2026-10-05, scan accounting)
+## Grace deployment status (2026-10-05, SCAP scanner, hardened images, Helm-index cache)
+
+- **Deployed**: helm revision 19 (2026-10-05 04:10:46 UTC), images `01cb9a1-1791172442` (api, worker,
+  ui), built from a clean worktree of origin/master 01cb9a1. The build took 62 s because every
+  layer, including the Go builds of clairctl/cosign/skopeo, was already in the local BuildKit
+  cache from the hardening work, so a cold build was not timed. eb40ea9 (generic VEX, migration
+  0008) and later commits are **not** deployed.
+- **Revision 18 failed** (pre-upgrade hook `ensure-secrets` hit DeadlineExceeded): grace was at 99 %
+  of allocatable memory *requests* (another agent's `test-w3-integration` namespace had just
+  started), so the 128Mi hook pod could not schedule. The hostpath-provisioner helper pods were
+  Pending for the same reason. Nothing changed (rev 17 kept running). For revision 19,
+  `deploy/grace/values.yaml` lowers the worker request from 1Gi to 768Mi and the scap-worker
+  request from 512Mi to 128Mi (limits unchanged). With Recreate rollouts, that release made room
+  instead of needing more.
+- **Rollout**: hooks ensure-secrets and migrate completed; `alembic_version` = `0007_scap`. All pods
+  are Running with 0 restarts, and there were no warning/error lines. New `security-posture-scap-worker`
+  (1 replica, Recreate); PVCs `-scap-worker-content` (2Gi) and `-scap-worker-work` (20Gi) Bound
+  (microk8s-hostpath).
+- **scap-worker privilege, as running**:
+  - Container `runAsUser: 0`, `privileged: false`, `allowPrivilegeEscalation: false`, read-only
+    root fs, seccomp RuntimeDefault, drop ALL + add CHOWN, FOWNER, DAC_OVERRIDE, FSETID, SETFCAP,
+    SYS_CHROOT.
+  - `/proc/1/status`: Uid/Gid 0, CapEff `0x8004001b`, which decodes to exactly those six. CapInh
+    and CapAmb are 0, NoNewPrivs 1, Seccomp 2.
+  - SA `security-posture-scap`, `automountServiceAccountToken: false`; `/var/run/secrets` is
+    absent in the container. Init containers run as 10001 with drop ALL.
+  - No host namespaces and no hostPath.
+- **Content**: fetched on start in 7 s (04:11:38-41). `ssg` 8 files, `disa-rhel9` 1, `disa-postgresql` 1.
+  `scap.content.indexed benchmarks=10 errors=0`, 139 MB on `/content`. `/scanners` lists `scap` 1.4.2,
+  healthy, with 10 content entries (SSG 0.1.82 x8, DISA RHEL 9 `002.009`, DISA PostgreSQL 9.x `2`).
+- **Scans**:
+  - The rollout event scan #42 (ns security-posture, not forced) queued **all 89 inventory images**
+    for SCAP, because none had been evaluated yet. SCAP ran 04:13:57-04:39:45 (26 min), so #42
+    finished with "scap pending" after the 600 s wait.
+  - Forced full scan **#43** (the only forced scan): 04:40:03 → 05:07:21 (27m18s).
+    - 83 inventoried / 83 rescanned, imagesFailed 0; trivy/grype/clair each ok 83, error 0.
+      Score 31.5 (F), vuln 8.8, posture 78.9.
+    - SCAP 04:54:58 → 05:23:04 (28 min for 83 images; the summed oscap time is 430 s; the rest
+      is image copy and flattening). So #43 also finished "scap pending", and its auto-reports
+      (05:07) used a partly updated STIG set.
+    - **On grace every full or forced scan outlasts `SCAP_FINALIZE_WAIT_SECONDS` (600).**
+    - Per-image SCAP status, #43: **evaluated 43 / notApplicable 31 / noContent 5 / error 4 /
+      timeout 0**. All 79 non-error images have rootfsFidelity `full`, oscap 1.4.2.
+    - noContent: 4 nginx-alpine UIs (`disa-nginx`, which is not configured, including our own ui)
+      and opensearch (Amazon Linux, `ssg-al2023`, not in `include`).
+    - error: ray 2.56.0 and node-exporter v1.10.2 (Pending pods; "image has no digest"), and
+      `alpine:3.20` / `postgres:16-alpine`. The scan worker's mirror check reported "mirror copy
+      did not match source digest; re-copied" for those two, the re-copy hit Docker Hub 429, and
+      the scap-worker's copy then failed with 429. Their good #42 results (alpine notApplicable,
+      postgres DISA PostgreSQL evaluated) were **replaced** by the error.
+  - `summary.stig` after #43: evaluated 43, pass 3774, fail 537, CAT I/II/III open 20/390/127,
+    coverage 51.8, notApplicable 31, noContent 5, errors 4, pending 0, score 86.5.
+- **Keycloak 26.6.4 (UBI 9.8)**, SSG RHEL 9 STIG profile:
+  - **68 pass / 14 fail / 393 n/a / 2 notchecked**, CAT I/II/III 2/7/5, score 85.3, fidelity full,
+    4.3 s.
+  - The backend validation had 67/14/394/2 with 1.3.7. Re-running both worker images on the same
+    rootfs locally shows exactly one difference: `accounts_password_all_shadowed_sha512` is
+    notapplicable under 1.3.7 and pass under 1.4.2. Grace matches local 1.4.2 rule for rule.
+  - The DISA RHEL 9 V2R9 benchmark moves further the wrong way under 1.4.2: 68 pass / 287 fail /
+    24 n/a (1.3.7: 253 fail / 58 n/a). 34 rules (SV-257797…SV-258042) go notapplicable → fail,
+    which supports `preferDisa: false`.
+- **Other images**:
+  - coredns 1.13.1: ssg-debian12 CIS L1 123/13/266, 1 unknown, score 91.4.
+  - Our api `01cb9a1`: ssg-debian13 130/18/255, score 88.7. The worker has the same counts.
+  - curl 8.10.1 (Alpine): notApplicable. `postgres@sha256:7218…` (Alpine): DISA PostgreSQL
+    110 notchecked, score null.
+  - SSG RHEL 9 rules carry V-IDs (476/477) but **no CCIs**: SSG 0.1.82's rhel9 datastream has no
+    `CCI-` references. The DISA PostgreSQL rules carry V-IDs and CCIs (110/110). Debian rules
+    (CIS profile) have no V-IDs.
+- **`/stig/benchmarks`** (#43; images evaluated, pass/fail/n/a, CAT I/II/III, mean score):
+  - ssg-rhel9: 6, 408/84/2358, 7/45/32, 87.0
+  - ssg-rhel8: 2, 100/34/648, 3/21/10, 78.3
+  - ssg-ubuntu2404: 3, 71/37/603, 6/28/3, 64.6
+  - ssg-ubuntu2204: 2, 48/20/388, 4/14/2, 68.2
+  - ssg-debian11: 1, 17/5/21, 0/0/5, 94.1
+  - ssg-debian12: 15, 1851/197/3982, 0/152/45, 91.3
+  - ssg-debian13: 10, 1279/160/2590, 0/130/30, 89.9
+  - disa-postgresql: 4, 440 notchecked
+  - Two content-only rows (`id: null`), which the UI hides.
+  - `/compliance/stig` serves `{items (92 Kubernetes rules), product}`, where `product` equals
+    `summary.stig` plus the 8 benchmarks.
+- **Hardened images** (#43, consensus counts C/H/M/L, fixable C/H in brackets):
+  - api: 0/59/57/58 (0/0)
+  - worker: 9/107/71/107 (0/0)
+  - ui: 0/1/3/0 (0/0), score 90.0 (A)
+  - Previous build 065cc06: api 10/84 (0/1), worker 16/150 (6/61), ui 21/90 (12/66).
+  - api and worker still score 0.0 (F), because the score counts unfixed HIGHs. VEX is not applied
+    to the worker's own scans (registry mirror refs, not `security-posture-*`). `summary.vexSuppressed`
+    is absent: eb40ea9 is not deployed.
+- **Provenance / Helm** (DECISIONS "provenance stage, chart update check cached and carried"):
+  - #42, cold cache after the rollout, 3 images checked / 86 carried:
+    `load_ms=33 images_ms=271 helm_discovery_ms=3050 helm_updates_ms=12191 carry_ms=5 persist_ms=219
+    collector_ms=15779`, 18 requests. Index parses (libyaml): prometheus-community 6.5 MB 3671 ms,
+    grafana 4.1 MB 3229 ms, others < 200 ms.
+  - #43, forced, so every image and release is re-checked: `images_ms=137669 helm_discovery_ms=357
+    helm_updates_ms=2671 carry_ms=0 persist_ms=246 collector_ms=140973` (83 checked, 25 registry
+    errors = Docker Hub 429).
+  - The forced scan's 141 s is image checks, not Helm. The steady-state 5-15 s case (non-forced,
+    warm cache) was not observed in this session.
+  - Scan line #43: "chart update checks: **12 checked, 0 carried, 0 not configured, 5 error(s)**,
+    6 request(s)". gateway-helm is checked via `oci://docker.io/envoyproxy/gateway-helm`
+    (v1.2.4 → v1.9.2).
+  - The 5 errors are the unpublished charts (artifact-keeper, bifrost-pack, nebari-checkmaite-pack,
+    dask-gateway-pack, nebari-security-posture-pack). quay.io answers 401 UNAUTHORIZED, not 404,
+    for a repository that does not exist under `oci://quay.io/nebari/charts`. The check counts that
+    as an error, so these releases are retried every scan instead of being `not-configured`.
+- **Reports** (queued after SCAP finished, scan 43):
+  - stig-checklist cklb (12 s) and zip (28 s). The bundle has `kubernetes/*.ckl|cklb` plus
+    `products/index.json` and **43 per-image product checklists** (.ckl + .cklb each), for
+    example `products/quay-io-keycloak-keycloak-26-6-4-ssg-rhel9-scan43-…cklb` (477 rules:
+    not_a_finding 68, open 14, not_applicable 393, not_reviewed 2).
+  - poam xlsx (40 s): 639 rows, of which **535 `SP-STIG-*` product-STIG rows** (Debian 12 197,
+    Debian 13 160, RHEL 9 84, Ubuntu 24.04 35, RHEL 8 34, Ubuntu 22.04 20, Debian 11 5). 138 carry
+    V-IDs, and the Ubuntu rows use `UBTU-24-*` rule versions. **0 product rows carry CCIs**, which
+    is a content gap (see above).
+  - OSCAL AR (58 s, 28 MB): an OpenSCAP component, **39 "STIG failures" observations** (one per
+    image × benchmark with failures; 43 evaluated minus the 4 failure-free PostgreSQL manual
+    checklists), 39 linked risks, 80 linked findings.
+- **Controls**:
+  - The scap-worker fails posture checks `added-capabilities` (high; none in DANGEROUS_CAPS) and
+    `run-as-root` (detail says "runAsNonRoot not set" although it is explicitly `false`).
+  - `k8s-workload-least-privilege` is **fail** for scan 43 and lists
+    `security-posture/Deployment/security-posture-scap-worker` among 28 workloads.
+  - There is **no allowlist / justification mechanism**: only `controlsEngine.systemNamespaces`,
+    which would exempt the whole namespace. The exception is justified in docs/CONTROLS.md only, so
+    the assertion keeps failing while the scap-worker is enabled.
+- **UI** (Playwright, logged in as admin; `deploy/grace/screenshots/`):
+  - `image-stig.png` (keycloak, B 85.3, CAT chips, 477 rules)
+  - `compliance-stig.png` (Kubernetes STIG + Product STIGs)
+  - `stig-benchmark.png` (ssg-rhel9: 6 images, 83 %, 16 failing rules)
+  - `overview.png` (Product STIGs tile: 43 evaluated, 52 % coverage, CAT I 20; OpenSCAP card)
+  - `images.png` (STIG column)
+  - Images that were never evaluated (old, not running tags) show "n/a" in the STIG column, the
+    same label as notApplicable.
+
+## Grace deployment status (2026-10-05, scan accounting; superseded by the section above)
 
 - Deployed: helm revision 17 (2026-10-05 01:42:59 UTC), images `065cc06-1791164424` (api, worker,
   ui; built from a clean worktree of 065cc06: 297f923 scan accounting / scoped post-scan stages /

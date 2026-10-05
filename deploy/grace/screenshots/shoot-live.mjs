@@ -9,6 +9,9 @@ const OUT = process.env.OUT_DIR ?? '/out';
 const IMAGE_ID = process.env.IMAGE_ID ?? '28';
 const SC_IMAGE_ID = process.env.SC_IMAGE_ID ?? IMAGE_ID;
 const CONTROL = process.env.CONTROL ?? 'AC-3';
+// SCAP views (DESIGN §14): an image with product STIG results and a benchmark id from /stig/benchmarks.
+const STIG_IMAGE_ID = process.env.STIG_IMAGE_ID ?? IMAGE_ID;
+const BENCHMARK = process.env.BENCHMARK ?? 'ssg-rhel9';
 const ONLY = (process.env.ONLY ?? '').split(',').filter(Boolean);
 const ALL_PAGES = [
   { name: 'overview', path: '/', ready: 'table[aria-label="Top 10 riskiest images"] tbody tr' },
@@ -23,6 +26,10 @@ const ALL_PAGES = [
       await page.click(`button[aria-label="Show evidence for ${CONTROL}"]`);
       await page.waitForSelector(`ul[aria-label="Assertions for ${CONTROL}"]`, { timeout: 15000 });
     } },
+  { name: 'image-stig', path: `/images/${STIG_IMAGE_ID}?tab=stig`, ready: 'main table tbody tr' },
+  { name: 'compliance-stig', path: '/compliance?tab=stig', ready: '#product-stigs table tbody tr',
+    action: async (page) => { await page.locator('#product-stigs').scrollIntoViewIfNeeded(); } },
+  { name: 'stig-benchmark', path: `/stig/benchmarks/${BENCHMARK}`, ready: 'main table tbody tr' },
   { name: 'image-supply-chain', path: `/images/${SC_IMAGE_ID}?tab=supply-chain`, ready: 'table[aria-label="Supply-chain score deductions"], [aria-label^="supply-chain grade"]' },
 ];
 const PAGES = ONLY.length ? ALL_PAGES.filter((p) => ONLY.includes(p.name)) : ALL_PAGES;
