@@ -99,7 +99,14 @@ class Manifest:
 
 
 class RegistryError(Exception):
-    """Registry unreachable / auth failure / unexpected status (not "not found")."""
+    """Registry unreachable / auth failure / unexpected status (not "not found").
+
+    `status`: the HTTP status of the registry (or token endpoint) answer, when there was one;
+    None for transport errors (connection refused, DNS, timeout, oversized response)."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 class Registry(Protocol):
@@ -314,7 +321,7 @@ class HttpRegistry:
         except BodyTooLarge as e:
             raise RegistryError(f"token endpoint {realm}: response too large") from e
         if resp.status_code != 200:
-            raise RegistryError(f"token endpoint {realm} returned {resp.status_code}")
+            raise RegistryError(f"token endpoint {realm} returned {resp.status_code}", status=resp.status_code)
         try:
             data = json.loads(body)
         except ValueError as e:
@@ -430,7 +437,7 @@ class HttpRegistry:
             if resp.status_code == 404:
                 return tags
             if resp.status_code != 200:
-                raise RegistryError(f"list tags {registry}/{repository} -> {_status(resp)}")
+                raise RegistryError(f"list tags {registry}/{repository} -> {_status(resp)}", status=resp.status_code)
             try:
                 data = json.loads(body) or {}
             except ValueError as e:

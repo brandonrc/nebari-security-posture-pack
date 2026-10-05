@@ -195,6 +195,8 @@ async def discover(excluded_namespaces: list[str] | None = None) -> tuple[list[H
 # ---------------------------------------------------------------- chart update check
 DOCKER_HUB_HOSTS = ("docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com")
 DEFAULT_INDEX_TTL_HOURS = 12.0
+# OCI answers for a configured source that mean "this chart is not published here"
+OCI_NOT_FOUND_STATUSES = (401, 403, 404)
 
 # `HelmRelease.update_check` values
 CHECK_DONE = "checked"  # found in a configured source; `update` set when one is flagged
@@ -216,7 +218,9 @@ class HelmIndexCache:
       server sent validators; a 304 only refreshes `fetchedAt`). A failed refresh falls back to the
       stale copy.
     * `oci-<h>.json`: an OCI tag list (an empty list = repository not found), same TTL; errors are
-      not cached.
+      not cached. 401 / 403 / 404 count as "not found" (`denied` records the status): quay.io answers
+      401 UNAUTHORIZED for a repository that does not exist (grace, 2026-10-05: five unpublished pack
+      charts under `oci://quay.io/nebari/charts` were errors and retried every scan).
     * `checks.json`: the last update-check result per release (see `check_chart_updates`).
 
     `root=None` (or an unwritable directory) keeps everything in memory for this process.
@@ -399,6 +403,16 @@ class ChartRepos:
             tags: list[str] | None = list(await registry.list_tags(host, repo) or [])
             self.cache.put(name, {"ref": f"{host}/{repo}", "fetchedAt": _utcnow(), "tags": tags})
         except Exception as e:  # noqa: BLE001
+            status = getattr(e, "status", None)
+            if status in OCI_NOT_FOUND_STATUSES:
+                # a configured source that does not (anonymously) publish this chart: not-configured
+                # for the chart, cached for the TTL like a 404; transport errors, 429 and 5xx stay errors
+                log.info("provenance.helm_oci_not_found", repo=f"{host}/{repo}", status=status)
+                tags = []
+                self.cache.put(name, {"ref": f"{host}/{repo}", "fetchedAt": _utcnow(), "tags": tags,
+                                      "denied": status})
+                self._oci[key] = tags
+                return tags
             log.debug("provenance.helm_oci_failed", repo=f"{host}/{repo}", error=str(e)[:200])
             tags = list(entry.get("tags") or []) if entry is not None and entry.get("ref") == f"{host}/{repo}" else None
         self._oci[key] = tags

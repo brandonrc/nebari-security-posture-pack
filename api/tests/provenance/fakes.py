@@ -21,6 +21,7 @@ class FakeRegistry:
         self.tags: dict[tuple[str, str], list[str]] = {}
         self.referrers_api: dict[tuple[str, str, str], list[dict]] = {}
         self.fail: set[str] = set()  # registries that raise RegistryError
+        self.tag_status: dict[tuple[str, str], int] = {}  # tag list answers with this HTTP status
         self.calls: list[tuple[str, ...]] = []
         self.closed = False
 
@@ -108,6 +109,9 @@ class FakeRegistry:
     async def list_tags(self, registry, repository):
         self.calls.append(("tags", registry, repository))
         self._check(registry)
+        status = self.tag_status.get((registry, repository))
+        if status is not None:
+            raise RegistryError(f"list tags {registry}/{repository} -> {status}", status=status)
         return list(self.tags.get((registry, repository), []))
 
     async def referrers(self, registry, repository, digest):

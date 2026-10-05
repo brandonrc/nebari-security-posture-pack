@@ -203,3 +203,31 @@ async def test_token_response_not_json_is_registry_error():
     async with make(handler) as r:
         with pytest.raises(RegistryError, match="invalid JSON"):
             await r.get_manifest("reg.example.com", "a", "1")
+
+
+@pytest.mark.parametrize("where,status", [("tags", 401), ("tags", 403), ("tags", 429), ("token", 401),
+                                          ("token", 403)])
+async def test_registry_error_carries_http_status(where, status):
+    """Helm chart update checks map 401/403/404 to `not-configured` and keep the rest as errors."""
+    def handler(req):
+        if req.url.host == "auth.example.com":
+            return httpx.Response(status if where == "token" else 200, json={"token": "t"})
+        if where == "tags" and req.headers.get("authorization"):
+            return httpx.Response(status)
+        return httpx.Response(401, headers={"www-authenticate":
+                                            'Bearer realm="https://auth.example.com/token",service="reg"'})
+
+    async with make(handler, realm_hosts=["auth.example.com"]) as r:
+        with pytest.raises(RegistryError) as ei:
+            await r.list_tags("reg.example.com", "nebari/charts/missing")
+    assert ei.value.status == status
+
+
+async def test_registry_transport_error_has_no_status():
+    def handler(req):
+        raise httpx.ConnectError("refused")
+
+    async with make(handler) as r:
+        with pytest.raises(RegistryError) as ei:
+            await r.list_tags("reg.example.com", "a")
+    assert ei.value.status is None

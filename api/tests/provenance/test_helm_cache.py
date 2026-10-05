@@ -273,3 +273,53 @@ async def test_stage_helm_timing_and_carry(tmp_path, clock):
         rows, _ = await stage._helm(ps, FakeRegistry(), 24.0, False, timing, stats)
         assert stats["carried"] == 1 and stats["requests"] == 0 and len(srv.requests) == 1
         assert rows[0].update.newest_available == "v1.17.1"
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+async def test_oci_401_403_404_is_not_configured_and_cached(tmp_path, clock, status):
+    """quay.io answers 401 UNAUTHORIZED for a repository that does not exist (grace scan #43: five
+    unpublished pack charts were errors and retried every scan)."""
+    reg = FakeRegistry()
+    reg.tag_status[("quay.io", "nebari/charts/artifact-keeper")] = status
+    urls = ["oci://quay.io/nebari/charts"]
+    r = [rel("artifact-keeper", "0.3.0")]
+    stats = await run(ChartRepos(urls, cache=HelmIndexCache(str(tmp_path), ttl_hours=12)), r, reg)
+    assert r[0].update_check == CHECK_NOT_CONFIGURED and r[0].update is None
+    assert stats["notConfigured"] == 1 and stats["errors"] == 0
+    assert len(reg.calls) == 1
+    # next scan: carried (no request); a forced scan re-checks against the cached tag list (no request)
+    r = [rel("artifact-keeper", "0.3.0")]
+    stats = await run(ChartRepos(urls, cache=HelmIndexCache(str(tmp_path), ttl_hours=12)), r, reg)
+    assert stats["carried"] == 1 and r[0].update_check == CHECK_NOT_CONFIGURED
+    stats = await run(ChartRepos(urls, cache=HelmIndexCache(str(tmp_path), ttl_hours=12)), r, reg, force=True)
+    assert stats["notConfigured"] == 1 and len(reg.calls) == 1
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+async def test_oci_rate_limit_and_server_errors_stay_errors(tmp_path, clock, status):
+    reg = FakeRegistry()
+    reg.tag_status[("quay.io", "nebari/charts/artifact-keeper")] = status
+    urls = ["oci://quay.io/nebari/charts"]
+    for _ in range(2):  # not cached, not carried: retried next scan
+        r = [rel("artifact-keeper", "0.3.0")]
+        stats = await run(ChartRepos(urls, cache=HelmIndexCache(str(tmp_path), ttl_hours=12)), r, reg)
+        assert r[0].update_check == CHECK_ERROR and stats["errors"] == 1
+    assert len(reg.calls) == 2
+
+
+async def test_oci_connection_error_stays_error(tmp_path, clock):
+    reg = FakeRegistry()
+    reg.fail.add("quay.io")
+    r = [rel("artifact-keeper", "0.3.0")]
+    stats = await run(ChartRepos(["oci://quay.io/nebari/charts"], cache=HelmIndexCache(str(tmp_path))), r, reg)
+    assert r[0].update_check == CHECK_ERROR and stats["errors"] == 1
+
+
+async def test_oci_denied_on_first_source_falls_through_to_next(tmp_path, clock):
+    reg = FakeRegistry()
+    reg.tag_status[("quay.io", "nebari/charts/gateway-helm")] = 401
+    reg.tags[("docker.io", "envoyproxy/gateway-helm")] = ["v1.2.0", "v1.2.1"]
+    r = [rel("gateway-helm", "v1.2.0")]
+    urls = ["oci://quay.io/nebari/charts", "oci://docker.io/envoyproxy/gateway-helm"]
+    stats = await run(ChartRepos(urls, cache=HelmIndexCache(str(tmp_path))), r, reg)
+    assert stats["checked"] == 1 and r[0].chart_source == urls[1] and r[0].update.newest_available == "v1.2.1"
