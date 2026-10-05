@@ -98,7 +98,132 @@
   `tests/conftest.py` sets `CONTROLS_ENGINE_ENABLED=false` by default so the shared worker harness
   never reaches a live cluster; `tests/controls_engine` enables it with fake clients.
 
-## Grace deployment status (2026-10-05, SCAP scanner, hardened images, Helm-index cache)
+## Grace deployment status (2026-10-05, SCAP operations, generic VEX, risk acceptances)
+
+- **Deployed**: helm revision 22 (2026-10-05 07:47:29 UTC), images `645d39d-1791186398` (api, worker,
+  ui), built from a clean worktree of origin/master. Revisions 20 (`3770549`, 06:06) and 21
+  (`1d8ffb0`, 06:33) were steps on the way (below). `alembic_version` = `0010_posture_status_len`.
+  Build 242 s cold for the new layers (rev 20), 50 s / ~60 s for the fix rebuilds; each helm upgrade
+  ~60 s. All pods Running, 0 restarts. No values change was needed: the `test-w3-integration`
+  namespace is gone, node memory requests were 99 % (about 600 Mi free), and the hooks (128 Mi)
+  scheduled. scap-worker resources as rendered: requests 100m / 128Mi (grace values), limits
+  3 CPU / 4Gi; `SCAP_PARALLELISM=3` (the log says "3 at a time"), `SCAP_FINALIZE_WAIT_SECONDS=0`.
+- **Revision 20 bug, fixed in 1d8ffb0**: the first scan (#44, event) failed in finalize with "value
+  too long for type character varying(8)". `posture_results.status` was varchar(8) and
+  `accepted-risk` is 13 characters. The SQLite-backed tests do not enforce lengths, and no Postgres
+  test persisted an accepted result. Migration `0010_posture_status_len` widens it to 16, and a
+  static test pins the column lengths. #44's SCAP stage still ran to completion.
+- **Revision 21 finding, fixed in 645d39d**: per-scan mirror warnings ("mirror copy … did not match
+  source digest; re-copied") stayed on 20 images after scan #46 had verified their copies. The
+  merge kept every old warning except "mirror failed …". Now "mirror copy …" warnings are replaced
+  by each rescan. The 20 rows clear when they are next rescanned (rescanAfterHours or a forced
+  scan); this was not observed live.
+
+**Scans after the rollout**
+
+| scan | trigger | rescanned | status, duration | SCAP stage | scapPending cleared | post-scan |
+|---|---|---|---|---|---|---|
+| #44 | event (rev 20) | 3 | **failed** 3m09s (varchar bug) | 83 queued (no content fingerprint yet), 06:09:31-06:32:24 (22m53s): 38 evaluated, 21 n/a, 5 noContent, 19 error (17 Docker Hub 429 kept **stale**, 2 "no digest") | n/a | none |
+| #45 | event (rev 21) | 3 | done **49 s**, scapPending | 20 (3 rescanned, 17 retried), 06:36:17-06:45:46: 2 evaluated, 1 noContent, 17 error -> 17 stale (Hub 429 again) | 06:45:49 | score 30.0 -> 29.9; "auto-reports skipped: event scan (targeted)"; controls run 38 06:45:50 |
+| #46 | **manual, forced (the one forced scan)** | 83 | done **12m31s** (07:01:37-07:14:08), scapPending | 83, 07:11:43-07:30:04 (**18m21s**): 44 evaluated, 32 n/a, 5 noContent, 2 error (ray / node-exporter, "no digest", not running), 0 stale | 07:30:07 | score re-aggregated 30.0; 6 reports queued 07:30:07.535-.573; controls run 39 07:30:07.676 |
+| #47 | manual, **not forced** (stands in for a scheduled scan) | 0 (83 fresh) | done 10 s | nothing to evaluate | - | "auto-reports skipped: no image rescanned and inventory unchanged" (same inventory hash as #46); controls run 40 |
+| #48 | event (rev 22) | 2 | done 1m42s | 2 evaluated, 07:52:08 | 07:52:13 | reports skipped (event) |
+
+- The next scheduled scan is due 10:40 UTC (`scheduler.next_scan`: #43 started 04:40 + 6 h; the
+  07:50 estimate predates #43). That was too far to wait, so #47 (manual, unforced) checked the
+  skip rule. `post_scan_plan` treats it exactly like a scheduled full scan.
+- #46 scanners: trivy, grype and clair each ok 83, error 0. Score 30.0 (F), vuln 9.4, posture 79.5.
+  The Scans list showed "STIG evaluation in progress (15/83)" under #46 and "(0/20)" under #45
+  (`scans-stig-in-progress.png`).
+- **SCAP wall time at parallelism 3: 18m21s for 83 images, not the ~10 min predicted** (rev 19: 28 min).
+  Summed `duration_ms` is 586 s (max 110 s, jupyterlab-sized images), rootfs written 42.1 GB. The
+  scap-worker used about 1.4 of 3 CPUs and 0.5 GiB. The longest gaps (2-3 min) are image copies
+  of the multi-GB images into the 8 GiB OCI cache, which evicts most layouts during a full pass.
+  The stage is I/O bound (copy and flatten), not oscap bound. The cache limit
+  (`scanner.scap.imageCacheMaxBytes`) and the hostpath disk are the levers; not tuned.
+
+**SCAP results**
+- **Stale instead of replaced**: in #44 and #45, 17 docker.io images failed to copy with 429 and kept
+  their previous result (`stats.stale` 17, "previous result kept, marked stale"). They included
+  `postgres@sha256:7218…` (DISA PostgreSQL) and bitnami/postgresql. All were genuinely
+  re-evaluated in #46. `summary.stig.stale` is 0 now.
+- The alpine:3.20 / postgres:16-alpine
+  results are good: alpine notApplicable and postgres:16-alpine DISA PostgreSQL evaluated, never
+  overwritten by an error.
+- **Why the scap-worker hit Docker Hub**: rev 19 left 20 docker.io images `mirrored=false` (#43's
+  mismatch loop). The SCAP stage copies from the mirror only for `mirrored` images, and from
+  upstream otherwise. Event scans #44 and #45 did not rescan those images, so the flag stayed stale
+  until #46. The Docker Hub limit on this host is `100;w=3600` and was at 0 from 06:46 until the
+  07:00 window reset. #46 was started at 07:01, at 100 remaining.
+- **Mirror**: #46 verified every copy. There were no "did not match" or "could not be verified"
+  verdicts in #44-#48. `mirror-verified.json` holds 67 records, and all 32 running docker.io images
+  are now `mirrored=true`, so later SCAP copies stay in-cluster.
+- **CCIs**: keycloak 26.6.4 (image 38, ssg-rhel9 STIG profile) has 68 pass / 14 fail / 393 n/a /
+  2 notchecked, score 85.3, as before.
+  - **420 of the 476 rules with a V-ID carry CCIs** (rule-level view of the content-level 424/480).
+    The others, such as V-258241 configure_crypto_policy and V-258134, have no CCI.
+  - The keycloak product checklist (`products/…keycloak…-scan48-….cklb`) has 420/477 rules with
+    CCIs. The rest say "No CCI: the SCAP content carries none for this rule and no DISA benchmark
+    on the content volume maps its STIG id".
+  - POA&M: 77 of 535 `SP-STIG-*` rows carry CCIs (0 in rev 19).
+- `summary.stig` reads: evaluated 44, pass 3774, fail 537, CAT I/II/III 20/390/127, coverage 53.0,
+  notApplicable 32, noContent 5, errors 2, stale 0, score 86.5.
+- **Helm**: #45 and #46: "chart update checks: 12 checked, 0 carried, **5 not configured, 0 error(s)**";
+  #47: "0 checked, 17 carried". #46 provenance took 142 s, 0 registry errors.
+
+**VEX** (pack statements, images `645d39d`; the same numbers on `3770549` and `1d8ffb0`)
+
+| image | score | open C/H/M/L | `findingsSummary.vexSuppressed` | justifications |
+|---|---|---|---|---|
+| security-posture-api | 12.2 F (was 0.0) | 0 / 4 / 57 / 58 | **55** | 43 not_in_execute_path, 8 not_present, 4 cannot_be_controlled |
+| security-posture-worker | 1.2 F (was 0.0) | 1 / 19 / 71 / 107 | **96** | 66 / 26 / 4 |
+
+- The numbers match the offline prediction in the VEX entry exactly. `/summary.vexSuppressed` is
+  151.
+- `findingsSummary` is only on `/images/{id}`. `/images?q=security-posture` rows carry the updated
+  score and counts, but no `findingsSummary`.
+- `/images/{id}?vex=suppressed` lists the 55 / 96 with `vexStatus`, `vexJustification`, `vexSource`
+  (posture-images.vex.json) and `vexDetail`. `vex=open` gives 124 for the api (69 distinct CVEs).
+- POA&M (#46): the api and worker repository rows list 69 / 123 CVEs and none of the suppressed ones.
+- vuln-export csv: api 55 and worker 96 rows `VEX Status not_affected` (Status `not_affected`, with
+  the impact statement), plus 4 / 19 `under_investigation` rows.
+
+**Controls and risk acceptance**
+- Posture results `added-capabilities` and `run-as-root` of the scap-worker are `accepted-risk`.
+  The run-as-root detail reads "runAsNonRoot is false and runAsUser is 0; accepted risk: …".
+  `/summary.checks` reads failed 515, acceptedRisk 2.
+- `k8s-workload-least-privilege` (runs 38-41) stays **fail** for the other workloads (27-28 as pods
+  churn). The scap-worker is in `evidence.acceptedRisk`, not in `evidence.workloads`. The detail
+  ends "1 workload(s) with accepted risk (security-posture/Deployment/security-posture-scap-worker)".
+  AC-6 and CM-7 stay failing because of the other workloads.
+- **POA&M** row `SP-RA-ad9dffd94c`: "Risk acceptance: security-posture/Deployment/security-posture-scap-worker".
+  - Controls AC-6, CM-7, SC-39; Operational Requirement Yes.
+  - Deviation Rationale is the reason; scheduled completion and review date are 2027-04-03.
+- **CRM** "Risk acceptances" sheet: covers added-capabilities, run-as-root and
+  k8s-workload-least-privilege; reason, approver, "no expiry", review by 2027-04-03, status active,
+  3 accepted results, source values.
+- Reports #46: poam 13 s, stig-checklist cklb 10 s, sar pdf 114 s, oscal-ar 18 s (28 MB),
+  inventory 9 s, vuln-export 10 s. The manual stig-checklist zip has 91 entries.
+
+**UI** (`deploy/grace/screenshots/`):
+- `scans-stig-in-progress.png` (#46 "STIG evaluation in progress (15/83)")
+- `image-stig.png` (keycloak STIG tab, CCIs column)
+- `compliance-controls.png` (AC-6 expanded: least-privilege fail with the accepted-risk note)
+- `check-accepted-risk.png` (`/checks/added-capabilities`: scap-worker "Accepted Risk" with reason
+  and review date; "126 / 3 + 1 accepted risk")
+
+**Not verified / open**
+- The SCAP stage is not ~10 min. It took 18m21s, and is I/O bound (see above).
+- A real *scheduled* scan with 0 rescanned was not observed (due 10:40 UTC). The unforced manual
+  #47 exercised the same rule.
+- The cleanup of the 20 sticky mirror warnings has not been observed yet (it happens on the next
+  rescan of each image).
+- The SAR and OSCAL AR contents (risk-acceptance table, VEX exclusion) were not opened. Only the
+  POA&M, CRM, vuln-export and checklist were checked.
+- Docker Hub is still unauthenticated (`registryAuth.existingSecret` unset). Any scan that needs
+  upstream manifests can exhaust the 100/h limit.
+
+## Grace deployment status (2026-10-05, SCAP scanner, hardened images, Helm-index cache; superseded by the section above)
 
 - **Deployed**: helm revision 19 (2026-10-05 04:10:46 UTC), images `01cb9a1-1791172442` (api, worker,
   ui), built from a clean worktree of origin/master 01cb9a1. The build took 62 s because every
@@ -1234,10 +1359,11 @@ columns, CycloneDX merge, POA&M and `open_findings`), `tests/test_vex_integratio
 local mirror mode, `/images` filter and summary, `/summary`, `/vulnerabilities`, control
 coverage, `/export`, report snapshot -> CycloneDX and POA&M, statement removal reopens).
 
-## 2026-10-05: SCAP operations after grace revision 19 (not deployed)
+## 2026-10-05: SCAP operations after grace revision 19 (deployed in revisions 20-22)
 
-Fixes for what "Grace deployment status (2026-10-05, SCAP scanner ...)" observed. None of this is
-deployed; the effects below are what revision 19's numbers predict.
+Fixes for what "Grace deployment status (2026-10-05, SCAP scanner ...)" observed. Deployed in
+revisions 20-22; the effects below were predicted from revision 19's numbers. For the measured
+results, see "Grace deployment status (2026-10-05, SCAP operations, generic VEX, risk acceptances)".
 
 **SCAP duration and "scap pending".**
 - The scap stage evaluates `SCAP_PARALLELISM` images at a time (chart `scanner.scap.parallelism`, 3).

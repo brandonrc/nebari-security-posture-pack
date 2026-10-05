@@ -12,6 +12,8 @@ const CONTROL = process.env.CONTROL ?? 'AC-3';
 // SCAP views (DESIGN §14): an image with product STIG results and a benchmark id from /stig/benchmarks.
 const STIG_IMAGE_ID = process.env.STIG_IMAGE_ID ?? IMAGE_ID;
 const BENCHMARK = process.env.BENCHMARK ?? 'ssg-rhel9';
+// A posture check whose results include a risk acceptance (controlsEngine.exceptions).
+const CHECK = process.env.CHECK ?? 'added-capabilities';
 const ONLY = (process.env.ONLY ?? '').split(',').filter(Boolean);
 const ALL_PAGES = [
   { name: 'overview', path: '/', ready: 'table[aria-label="Top 10 riskiest images"] tbody tr' },
@@ -30,6 +32,7 @@ const ALL_PAGES = [
   { name: 'compliance-stig', path: '/compliance?tab=stig', ready: '#product-stigs table tbody tr',
     action: async (page) => { await page.locator('#product-stigs').scrollIntoViewIfNeeded(); } },
   { name: 'stig-benchmark', path: `/stig/benchmarks/${BENCHMARK}`, ready: 'main table tbody tr' },
+  { name: 'check-accepted-risk', path: `/checks/${CHECK}`, ready: 'main table tbody tr' },
   { name: 'image-supply-chain', path: `/images/${SC_IMAGE_ID}?tab=supply-chain`, ready: 'table[aria-label="Supply-chain score deductions"], [aria-label^="supply-chain grade"]' },
 ];
 const PAGES = ONLY.length ? ALL_PAGES.filter((p) => ONLY.includes(p.name)) : ALL_PAGES;
