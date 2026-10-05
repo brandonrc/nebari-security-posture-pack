@@ -17,14 +17,21 @@ updates:
     schedule: { interval: weekly, day: monday }
     open-pull-requests-limit: 10
     groups:
-      # vitest and its coverage provider must move in lockstep (same version)
-      vitest:
-        patterns: ["vitest", "@vitest/*"]
+      # Lockstep pairs (issue #12), all update types incl. majors; listed before npm-minor because
+      # Dependabot puts a dependency into the first group that matches.
+      vite:                            # the React plugin's peer range follows vite majors
+        patterns: ["vite", "@vitejs/plugin-react"]
+      vitest:                          # the coverage provider must be the exact same version
+        patterns: ["vitest", "@vitest/coverage-v8"]
       npm-minor:
         update-types: [minor, patch]
     ignore:
       # must match the mcr.microsoft.com/playwright:v1.63.0-noble CI image; bump both together
       - dependency-name: "@playwright/test"
+      # pinned ~1.6.0: 1.8 changes the toast types the vendored toast relies on (ui/README.md);
+      # patch updates within 1.6.x still come through npm-minor
+      - dependency-name: "@base-ui/react"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   - package-ecosystem: docker        # python:3.12-slim-bookworm, node:22-alpine, nginx-unprivileged
     directories: [/api, /ui]
