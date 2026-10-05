@@ -1233,3 +1233,104 @@ grype flags and suppressed-finding recovery), `tests/reports/test_vex_reports.py
 columns, CycloneDX merge, POA&M and `open_findings`), `tests/test_vex_integration.py` (Postgres:
 local mirror mode, `/images` filter and summary, `/summary`, `/vulnerabilities`, control
 coverage, `/export`, report snapshot -> CycloneDX and POA&M, statement removal reopens).
+
+## 2026-10-05: SCAP operations after grace revision 19 (not deployed)
+
+Fixes for what "Grace deployment status (2026-10-05, SCAP scanner ...)" observed. None of this is
+deployed; the effects below are what revision 19's numbers predict.
+
+**SCAP duration and "scap pending".**
+- The scap stage evaluates `SCAP_PARALLELISM` images at a time (chart `scanner.scap.parallelism`, 3).
+  oscap is single-threaded and peaks at ~1.1 GiB, so the stage caps the parallelism at what the
+  cgroup memory limit holds: `(limit - 384 MiB) / SCAP_MEMORY_PER_EVAL_MB (1152)`. The chart's
+  scap-worker limit goes from 3Gi to 4Gi (3 evaluations; cpu limit 2 -> 3), requests unchanged
+  (grace is at 99 % of requested memory, limits are not). Each evaluation gets its own rootfs tree
+  (`<digest>-<image id>`); the OCI layout cache already locked per digest.
+- `SCAP_FINALIZE_WAIT_SECONDS` defaults to 0: the privileged worker does not wait. It finalizes
+  the scores with the STIG results stored so far, marks the scan `scapPending` (migration 0009:
+  `scans.scap_pending`, `scap_deferred`), keeps the inventory and supply-chain inputs
+  (`scan_snapshots` level `scap-inventory`) and defers the auto-reports and the controls run. When
+  the scap stage completes, the privileged worker claims that `scap_completed` event: it recomputes
+  the STIG-dependent part of the scan (workload rows, workload / namespace / cluster snapshots, scan
+  score), clears `scapPending`, then runs the deferred stages (auto-reports also run when the scan
+  rescanned nothing but STIG-evaluated images). With no live scap-worker nothing is deferred (the
+  old behaviour); `SCAP_DEFERRED_MAX_HOURS` (12) bounds the wait for a stuck stage.
+- Scan rows carry `scapProgress {done, total}` (written per image by the process running the stage)
+  and `scapPending`; the UI shows "STIG evaluation in progress (n/m)" on the Scans list and the
+  scan page (with a progress bar; the page keeps polling).
+- Selection (`needs_evaluation`): images rescanned by the scan, never evaluated, whose last attempt
+  failed (stale, or error / timeout other than "image has no digest"), or evaluated against other
+  content. The content fingerprint hashes the catalogue (path, benchmark, sha256, size) plus
+  `content.RULE_META_VERSION`; it is stored in `images.stig.content`. A forced full scan
+  re-evaluates everything. Images evaluated before this change have no fingerprint, so the first
+  scan after the rollout re-evaluates every image once (which also stores the derived CCIs).
+
+**Good results are never replaced by an error.** An error / timeout outcome (image copy 429 or
+timeout, oscap timeout, internal error) over a genuine stored result (evaluated / notApplicable /
+noContent) keeps that result and its rule rows and sets `images.stig.stale`, `staleError`,
+`staleSince`; the next scan retries it, and only a genuine evaluation replaces it. `scapStats.stale`,
+`/summary.stig.stale`, `ImageSummary.stig.stale*`; the UI marks the score "stale" and the STIG tab
+says "Showing the previous STIG evaluation".
+
+**Mirror digest mismatch loop** (alpine:3.20, postgres:16-alpine). Not a conversion problem:
+kubelet reports the multi-arch *index* digest, skopeo (without `--all`) stores the amd64 platform
+manifest under `posture-mirror/...:sha256-<index hex>` (on grace `sha256:c64c687c...` for alpine).
+The check could never match the source digest directly and re-fetched the index from Docker Hub on
+every scan to confirm the copy is a child; a 429 on that fetch was reported as "did not match source
+digest; re-copied", and the re-copy hit the same 429. Now the worker records source digest -> copy
+digest on its cache volume (`CACHE_DIR/skopeo/mirror-verified.json`) when skopeo copied by digest or
+the copy was found in the index, and reuses a cached copy that hashes to the record without an
+upstream request; a different manifest at the tag is still a mismatch, and an unreachable source is
+reported as "could not be verified", not as a mismatch. Regression tests use a Docker manifest list
+with schema-2 platform manifests. The first scan after the rollout still needs Docker Hub once per
+existing multi-arch copy to create the record.
+
+**Helm update check.** A 401 / 403 / 404 from a configured OCI chart source (quay.io answers 401
+for repositories that do not exist under `oci://quay.io/nebari/charts`) means "chart not published
+there": the lookup moves to the next source, the result is cached for the index TTL, and a chart no
+source publishes is `not-configured`, not an error, and not re-requested every scan. Connection
+errors, timeouts, 429 and 5xx stay errors. Scan #43's line would read "12 checked, 0 carried,
+5 not configured, 0 error(s)".
+
+**CCIs for SSG content.** SSG 0.1.82 RHEL 9 rules carry STIG ids but no CCIs. `content.rule_metadata`
+now joins an SSG rule's references against the DISA benchmark for the same product on the content
+volume: SV- base id (revision ignored), then V-ID, then rule version (`RHEL-09-xxxxxx`), and sets
+`cci`, `cciSource: disa` and `cciFrom`. Rules without a match get `cciNote` (no DISA benchmark for
+the product on the volume / not listed / no STIG id), which the product checklists and POA&M rows
+print. Cached with the rule metadata (key includes the DISA files' sha256). On grace's content:
+424 of 480 SSG RHEL 9 STIG rules get CCIs (the other 56 are not in DISA's 392 automated rules);
+Ubuntu rules get the note (no DISA Ubuntu benchmark on the volume).
+
+**Least-privilege exceptions (risk acceptances).** `controlsEngine.exceptions` entries
+`{kind, namespace, name (glob), checks[], assertions[], reason, approvedBy, expiresAt?, reviewBy?,
+ticket?}` (chart values -> `CONTROLS_EXCEPTIONS`, read-only in settings; settings may add more).
+A covered failing posture result becomes `accepted-risk`: never pass, weight 0 (no posture /
+workload / cluster penalty), the finding and the acceptance (reason, approver, expiry, review) in
+the detail; `/checks` and `/summary` count `acceptedRisk`; a control with only accepted issues is
+`risk_accepted`, never satisfied. The controls engine has an `accepted-risk` assertion status
+(objectives `risk-accepted`, the control at most `partial`); `k8s-workload-least-privilege` is
+`accepted-risk` when only accepted workloads remain, otherwise fail with the accepted ones named.
+POA&M gets one "Risk acceptance" item per active acceptance (status Risk Accepted, expiration =
+`expiresAt`, reason as deviation rationale), the SAR a "Risk acceptances" table (active / review
+overdue / expired), the CRM a sheet; the Kubernetes checklist keeps accepted findings Open.
+`expiresAt` is the last day; afterwards the results fail again. The chart ships the scap-worker's
+own acceptance (`controlsEngine.exceptions.scapWorker.enabled`, default true, rendered only with
+the scap-worker; checks `added-capabilities`, `run-as-root`, assertion
+`k8s-workload-least-privilege`; reason from CONTROLS.md; no expiry; `reviewBy: 2027-04-03`, a fixed
+value so `helm template` is deterministic, bumped at each review). On grace the scap-worker leaves
+the failing list; `k8s-workload-least-privilege` stays fail for the 27 other workloads.
+`run-as-root` now says "runAsNonRoot is false" when it is explicitly false.
+
+**UI labels.** The API serves `stig: null` for never evaluated; the Images STIG column, the image
+STIG tab label and the overview tile now say "not yet" (not evaluated), "n/a" (no applicable
+benchmark), "no content", "not scored", "error", "timeout", each with a tooltip.
+
+**Expected effect on grace.** Revision 19 spent 26-28 min of SCAP wall time on 83-89 images, of
+which oscap was 430 s (the rest image copy and flattening, both per image and parallel now); with 3
+concurrent evaluations that is roughly 9-10 min for a full set. Scan status flow: a forced full
+scan ends "done" as soon as provenance and the snapshot are written (#43: ~17 min instead of
+27m18s, the 600 s wait gone), with "STIG evaluation in progress (n/83)"; about 10 min later the
+`scap_completed` re-aggregation updates its score, clears `scapPending` and queues the six
+auto-reports and the controls run, which now see the complete STIG set. Unforced scheduled scans
+evaluate only the rescanned / never-evaluated / retried images (usually a handful) and finish their
+SCAP stage within minutes.
