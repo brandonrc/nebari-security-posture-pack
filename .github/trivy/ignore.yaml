@@ -17,8 +17,3 @@ vulnerabilities:
     paths: ["usr/local/bin/clairctl"]
     statement: pgx in the upstream clairctl binary; client-only use, no database connection
     expired_at: 2026-11-15
-  # ui: nginxinc/nginx-unprivileged:1.27-alpine ships alpine 3.21.3 with openssl 3.3.3; fixed by
-  # moving ui/Dockerfile to a current nginx-unprivileged tag (or `apk upgrade` in the image).
-  - id: CVE-2026-31789
-    statement: openssl in the nginx-unprivileged 1.27-alpine base; fix is a base-image bump
-    expired_at: 2026-11-15

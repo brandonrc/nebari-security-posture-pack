@@ -10,7 +10,7 @@ engine) and `../docs/SCORING.md`.
 
 | Item | Value |
 |---|---|
-| Base image | `nginxinc/nginx-unprivileged:1.27-alpine` |
+| Base image | `nginxinc/nginx-unprivileged:1.31-alpine-slim` (digest-pinned, `apk upgrade` at build) |
 | User | uid/gid **101** (`nginx`); works with `runAsNonRoot`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]` |
 | Listen port | **8080** (`NGINX_PORT`, default 8080). The chart Service maps **80 → 8080** (`targetPort: http`). |
 | Writable paths | `/tmp` only (pid, temp dirs, rendered config in `/tmp/nginx/conf.d`). Mount emptyDirs at `/tmp` and `/var/cache/nginx`. |
