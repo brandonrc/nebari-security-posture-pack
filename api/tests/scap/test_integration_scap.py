@@ -190,10 +190,14 @@ async def test_02_finalize_does_not_wait_without_scap_worker(scap_env):
     assert await worker(se, "provenance,controls,reports").poll_once()
     s = (await c.get(f"/scans/{sid}")).json()
     assert s["status"] == "done" and s["scapStatus"] == "queued"  # scan finished with scap pending
-    assert any("scap pending" in line for line in s["log"])
+    assert any("scap pending: no scap-worker heartbeat" in line for line in s["log"])
+    assert s["scapPending"] is True and s["scapDeferred"] == []  # nothing waits for an absent scap-worker
     w = worker(se, "scap")
     assert await w.poll_once() is True
     assert (await c.get(f"/scans/{sid}")).json()["scapStatus"] == "done"
+    assert await worker(se, "provenance,controls,reports").poll_once() is True  # scap_completed
+    s = (await c.get(f"/scans/{sid}")).json()
+    assert s["scapPending"] is False and any("scap_completed" in line for line in s["log"])
 
 
 async def test_03_fresh_images_are_not_reevaluated_and_inline_mode(scap_env):
@@ -248,3 +252,211 @@ async def test_05_reports_from_the_database(scap_env):
     async with se["sm"]() as s:  # namespace scope without the web image: no STIG rows
         scoped = await build_snapshot(s, None, {"kind": "namespace", "name": "batch"})
     assert all(b.image_id != ev[0].image_id for b in scoped.stig_results)
+
+
+async def _scan(c, sid):
+    return (await c.get(f"/scans/{sid}")).json()
+
+
+def _final(se, wait=0.0, controls_calls=None):
+    """Privileged worker with SCAP_FINALIZE_WAIT_SECONDS=wait; controls runs recorded, not executed."""
+    w = worker(se, "provenance,controls,reports")
+    w.s = w.s.model_copy(update={"scap_finalize_wait_seconds": wait, "controls_engine_enabled": True})
+    calls = [] if controls_calls is None else controls_calls
+
+    async def run_controls(trigger="scan", scan_id=None, run_id=None):
+        calls.append(scan_id)
+
+    w.run_controls = run_controls
+    return w, calls
+
+
+async def _auto_reports(se, scan_id):
+    from sqlalchemy import func, select
+
+    from posture.db.models import Report
+
+    async with se["sm"]() as s:
+        return await s.scalar(select(func.count()).select_from(Report).where(
+            Report.scan_id == scan_id, Report.created_by == "auto"))
+
+
+async def test_06_finalize_does_not_wait_scap_completed_reaggregates_and_runs_deferred(scap_env):
+    """Default SCAP_FINALIZE_WAIT_SECONDS=0: the scan finalizes at once with scapPending; the
+    scap_completed event re-aggregates with the new STIG scores, then queues the auto-reports and
+    the controls run (DECISIONS: grace revision 19, 600 s finalize timeouts)."""
+    from sqlalchemy import delete, update
+
+    from posture.db.models import Image
+    from posture.posture_checks import evaluate_inventory
+    from posture.scap.models import ScapImageSummary
+    from posture.scap.scoring import configuration_score
+
+    se = scap_env
+    c = se["client"]
+    assert (await c.put("/settings", json={"reports": {"autoGenerate": ["inventory"]}})).status_code == 200
+    ids = await _ids(c)
+    async with se["sm"]() as s, s.begin():  # web never evaluated: its STIG score only exists after the stage
+        await s.execute(delete(ScapImageSummary).where(ScapImageSummary.image_id == ids["web"]))
+        await s.execute(update(Image).where(Image.id == ids["web"]).values(stig=None))
+    sid = (await c.post("/scans", json={})).json()["id"]
+    assert await worker(se, "inventory,scan").poll_once()
+    s = await _scan(c, sid)
+    assert s["scapStatus"] == "queued" and s["scapProgress"] == {"done": 0, "total": 1}  # only web is due
+    scap_w = worker(se, "scap")
+    await scap_w.heartbeat()
+    final_w, calls = _final(se)
+    assert await final_w.poll_once()  # finalize: no waiting at all
+    s = await _scan(c, sid)
+    assert s["status"] == "done" and s["scapPending"] is True and s["scapDeferred"] == ["reports", "controls"]
+    assert any("scap pending: STIG evaluation queued" in x for x in s["log"])
+    assert any("deferred until the STIG evaluation completes" in x for x in s["log"])
+    assert await _auto_reports(se, sid) == 0 and calls == []
+    raw = next(p for k, p in evaluate_inventory(inventory()).items() if k[2] == "web").score
+    wl = next(w for w in (await c.get("/workloads")).json() if w["name"] == "web")
+    assert wl["postureScore"] == raw  # no STIG score for web yet
+    assert await final_w.poll_once() is False  # nothing to complete while the stage is queued
+
+    assert await scap_w.poll_once()  # the scap-worker evaluates web
+    s = await _scan(c, sid)
+    assert s["scapStatus"] == "done" and s["scapProgress"] == {"done": 1, "total": 1} and s["scapPending"] is True
+    assert await final_w.poll_once()  # scap_completed
+    s = await _scan(c, sid)
+    assert s["scapPending"] is False and s["scapDeferred"] == []
+    assert any("scap_completed: STIG evaluation done" in x for x in s["log"])
+    assert any("with the new STIG results" in x for x in s["log"])
+    wl = next(w for w in (await c.get("/workloads")).json() if w["name"] == "web")
+    assert wl["postureScore"] == configuration_score(raw, [93.3])
+    assert await _auto_reports(se, sid) == 1 and calls == [sid]
+    assert await final_w.poll_once() is False  # handled once
+    await c.put("/settings", json={"reports": {"autoGenerate": []}})
+
+
+async def test_07_transient_failure_keeps_the_previous_result(scap_env):
+    """A registry 429 during the image copy never replaces a genuine evaluation: the result is
+    kept, flagged stale with the error, and the image is retried by the next (unforced) scan."""
+    from sqlalchemy import func, select
+
+    from posture.scap.models import ScapResultRow
+
+    se = scap_env
+    c = se["client"]
+    ids = await _ids(c)
+    before = (await c.get(f"/images/{ids['web']}")).json()["stig"]
+    assert before["status"] == "evaluated" and before["stale"] is False
+    async with se["sm"]() as s:
+        n_rules = await s.scalar(select(func.count()).select_from(ScapResultRow).where(
+            ScapResultRow.image_id == ids["web"]))
+    good = dict(se["layouts"])
+    se["layouts"].pop(D_APP)  # ScapMirror.ensure: "manifest unknown" ...
+    orig = ScapMirror.ensure
+
+    async def rate_limited(self, source, digest, insecure, timeout=900):
+        if digest == D_APP:
+            raise RuntimeError("toomanyrequests: 429 Too Many Requests")
+        return await orig(self, source, digest, insecure, timeout)
+
+    ScapMirror.ensure = rate_limited
+    try:
+        sid = (await c.post("/scans", json={"force": True})).json()["id"]
+        assert await worker(se, "all").poll_once()
+    finally:
+        ScapMirror.ensure = orig
+        se["layouts"].update(good)
+    s = await _scan(c, sid)
+    assert s["scapStats"]["error"] >= 1 and s["scapStats"]["stale"] == 1, s["scapStats"]
+    web = (await c.get(f"/images/{ids['web']}")).json()["stig"]
+    assert web["status"] == "evaluated" and web["score"] == before["score"] and web["stale"] is True
+    assert "429" in web["staleError"] and web["staleSince"]
+    st = (await c.get(f"/images/{ids['web']}/stig")).json()
+    assert st["status"] == "evaluated" and st["benchmarks"] and st["stig"]["stale"] is True
+    async with se["sm"]() as s:
+        assert await s.scalar(select(func.count()).select_from(ScapResultRow).where(
+            ScapResultRow.image_id == ids["web"])) == n_rules
+    assert (await c.get("/summary")).json()["stig"]["stale"] == 1
+
+    n_calls = len(se["calls"])
+    sid = (await c.post("/scans", json={})).json()["id"]  # not forced: web is retried
+    assert await worker(se, "all").poll_once()
+    s = await _scan(c, sid)
+    assert s["scapImages"] == 1 and len(se["calls"]) == n_calls + 1
+    assert any("1 retried after a failed attempt" in x for x in s["log"])
+    web = (await c.get(f"/images/{ids['web']}")).json()["stig"]
+    assert web["status"] == "evaluated" and web["stale"] is False and web["staleError"] is None
+
+
+async def test_08_content_change_reevaluates_everything(scap_env):
+    from sqlalchemy import update
+
+    from posture.scap.models import ScapContent
+    from posture.scap.stage import needs_evaluation
+
+    se = scap_env
+    c = se["client"]
+    ids = await _ids(c)
+    sid = (await c.post("/scans", json={})).json()["id"]
+    assert await worker(se, "all").poll_once()
+    assert (await _scan(c, sid))["scapImages"] == 0  # same content, nothing rescanned
+    async with se["sm"]() as s:
+        assert (await needs_evaluation(s, [ids["web"], ids["alpine"]]))["content"] == []
+    async with se["sm"]() as s, s.begin():  # a new content release (refresh) changes the fingerprint
+        await s.execute(update(ScapContent).values(sha256="f" * 64))
+    async with se["sm"]() as s:
+        due = await needs_evaluation(s, [ids["web"], ids["alpine"]])
+    assert sorted(due["content"]) == sorted([ids["web"], ids["alpine"]]) and due["never"] == due["retry"] == []
+    sid = (await c.post("/scans", json={})).json()["id"]
+    assert await worker(se, "all").poll_once()  # the inline stage re-indexes (real sha) and re-evaluates
+    s = await _scan(c, sid)
+    assert s["scapImages"] == 3 and any("3 evaluated against other content" in x for x in s["log"])  # + busybox
+    sid = (await c.post("/scans", json={})).json()["id"]
+    assert await worker(se, "all").poll_once()
+    assert (await _scan(c, sid))["scapImages"] == 0
+
+
+async def test_09_images_are_evaluated_concurrently(scap_env):
+    import asyncio
+
+    from posture.scap.stage import ScapStage
+
+    se = scap_env
+    ids = await _ids(se["client"])
+    active = {"now": 0, "max": 0}
+
+    async def slow_eval(rootfs, ds, profile, work, **kw):
+        active["now"] += 1
+        active["max"] = max(active["max"], active["now"])
+        await asyncio.sleep(0.2)
+        active["now"] -= 1
+        return await se["eval"](rootfs, ds, profile, work, **kw)
+
+    from sqlalchemy import delete
+
+    from posture.db.models import Image
+    from posture.scap.models import ScapImageSummary, ScapResultRow
+
+    async with se["sm"]() as s, s.begin():  # two more images with web's layout (same digest, other repos)
+        extra = [Image(key=f"registry.example/copy{n}@{D_APP}", ref=f"registry.example/copy{n}@{D_APP}",
+                       registry_host="registry.example", repository=f"copy{n}", digest=D_APP) for n in (1, 2)]
+        s.add_all(extra)
+    extra_ids = [i.id for i in extra]
+    settings = se["settings"].model_copy(update={"scap_parallelism": 3})
+    stage = ScapStage(settings, se["sm"], mirror=ScapMirror(se["layouts"]), evaluator=slow_eval, privileged=False)
+    progress = []
+
+    async def prog(done, total):
+        progress.append((done, total))
+
+    try:
+        stats = await stage.run(None, [ids["web"], *extra_ids, ids["web"]], settings, progress=prog)
+        assert stats["evaluated"] == 3 and active["max"] == 3
+        assert sorted(progress) == [(1, 3), (2, 3), (3, 3)]
+        assert not any((se["base"] / "work").iterdir())  # per-image trees, all removed
+        active["max"] = 0
+        stage.s = settings.model_copy(update={"scap_parallelism": 1})
+        stats = await stage.run(None, [ids["web"], *extra_ids], settings)
+        assert stats["evaluated"] == 3 and active["max"] == 1
+    finally:
+        async with se["sm"]() as s, s.begin():
+            await s.execute(delete(ScapResultRow).where(ScapResultRow.image_id.in_(extra_ids)))
+            await s.execute(delete(ScapImageSummary).where(ScapImageSummary.image_id.in_(extra_ids)))
+            await s.execute(delete(Image).where(Image.id.in_(extra_ids)))

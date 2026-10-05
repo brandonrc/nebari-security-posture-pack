@@ -215,16 +215,20 @@ async def benchmark_rules(
 
 async def stig_summary(session: AsyncSession, cur: set[int] | None) -> dict[str, Any]:
     """`/summary.stig`: over the latest done scan's images. coverage = evaluated / inventoried
-    images in percent; pending = images never evaluated (or not yet)."""
+    images in percent; pending = images not evaluated yet; stale = kept results whose last
+    re-evaluation failed transiently (retried next scan)."""
     stmt = select(Image.id, Image.stig)
     if cur is not None:
         stmt = stmt.where(Image.id.in_(cur or {-1}))
     rows = (await session.execute(stmt)).all()
     out = {"evaluated": 0, "pass": 0, "fail": 0, "cat1Open": 0, "cat2Open": 0, "cat3Open": 0, "coverage": None,
-           "notApplicable": 0, "noContent": 0, "errors": 0, "pending": 0, "images": len(rows), "score": None}
+           "notApplicable": 0, "noContent": 0, "errors": 0, "pending": 0, "stale": 0, "images": len(rows),
+           "score": None}
     scores = []
     for _id, stig in rows:
         st = (stig or {}).get("status")
+        if (stig or {}).get("stale"):
+            out["stale"] += 1  # counted under its kept status too
         if st == "evaluated":
             out["evaluated"] += 1
             for k in ("pass", "fail", "cat1Open", "cat2Open", "cat3Open"):

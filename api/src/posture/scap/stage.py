@@ -7,14 +7,25 @@ Who runs it:
 * the scan worker itself with SCAP_EMBEDDED=true (dev / single process; usually non-root, so
   `rootfsFidelity: degraded`), or when the worker runs every stage (`--stages all`).
 
-Scope per scan: the images (re)scanned by that scan plus inventory images never evaluated;
-a forced full scan evaluates everything (`scans.scap_image_ids`, computed by the scan worker).
+Scope per scan (`scans.scap_image_ids`, computed by the scan worker, `needs_evaluation`): the
+images (re)scanned by that scan plus inventory images never evaluated, whose last attempt left a
+stale result, or that were evaluated against other content (content fingerprint); a forced full
+scan evaluates everything.
+
+Images are evaluated SCAP_PARALLELISM at a time (oscap is single-threaded; each evaluation needs
+up to ~1.1 GiB, so the effective parallelism is capped by the container memory limit).
+
+A transient failure (image copy rate-limited / timed out, oscap timeout, internal error) never
+replaces a genuine stored result (evaluated / notApplicable / noContent): the previous result is
+kept and marked `stale` with the error, and the image is retried by the next scan.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -39,6 +50,41 @@ log = get_logger(__name__)
 
 SCANNER_NAME = "scap"
 LogFn = Callable[[str], Any]
+ProgressFn = Callable[[int, int], Awaitable[Any]]
+GENUINE = ("evaluated", "notApplicable", "noContent")  # outcomes that may replace a stored result
+CGROUP_MEMORY_MAX = Path("/sys/fs/cgroup/memory.max")
+NO_DIGEST = "image has no digest"  # permanent until the image row gets a digest: not retried every scan
+MEMORY_RESERVE_MB = 384  # the worker process itself (python, skopeo, rootfs flattening)
+
+
+def effective_parallelism(requested: int, memory_limit_bytes: int | None, per_eval_mb: int,
+                          reserve_mb: int = MEMORY_RESERVE_MB) -> int:
+    """SCAP_PARALLELISM capped by what the memory limit holds (`per_eval_mb` per oscap run)."""
+    n = max(1, int(requested or 1))
+    if memory_limit_bytes and per_eval_mb > 0:
+        fits = (memory_limit_bytes // (1024 * 1024) - reserve_mb) // per_eval_mb
+        n = min(n, max(1, int(fits)))
+    return n
+
+
+def memory_limit_bytes(path: Path = CGROUP_MEMORY_MAX) -> int | None:
+    """cgroup v2 memory limit of this container (None = unlimited / unknown)."""
+    try:
+        raw = path.read_text().strip()
+    except OSError:
+        return None
+    return int(raw) if raw.isdigit() else None
+
+
+def content_fingerprint(entries: list[dict[str, Any]]) -> str | None:
+    """Identity of the SCAP content set (catalogue entries or `scap_content` rows as dicts with
+    path / benchmarkId / sha256 / sizeBytes). None without content. A changed fingerprint makes
+    every image due for re-evaluation (DESIGN §14)."""
+    rows = sorted({(str(e.get("path") or ""), str(e.get("benchmarkId") or ""), str(e.get("sha256") or ""),
+                    str(e.get("sizeBytes") or "")) for e in entries})
+    if not rows:
+        return None
+    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()[:16]
 
 
 def now() -> datetime:
@@ -88,6 +134,7 @@ class ScapStage:
         self.evaluator = evaluator or oscap_mod.evaluate
         self.privileged = is_root() if privileged is None else privileged
         self.oscap_version: str | None = None
+        self.fingerprint: str | None = None  # content fingerprint of the current run
         self._last_refresh = 0.0
         self._refresh_lock = asyncio.Lock()
 
@@ -149,33 +196,55 @@ class ScapStage:
         return content_mod.catalogue(content_mod.load_index(self.content_dir))
 
     # ------------------------------------------------------------------ run
+    def parallelism(self) -> int:
+        return effective_parallelism(int(getattr(self.s, "scap_parallelism", 1) or 1), memory_limit_bytes(),
+                                     int(getattr(self.s, "scap_memory_per_eval_mb", 1152) or 0))
+
     async def run(self, scan_id: int | None, image_ids: list[int], app: Any, log_fn: LogFn | None = None,
-                  cancelled: Callable[[], bool] | None = None) -> dict[str, int]:
-        """Evaluate `image_ids` sequentially (each is CPU + disk heavy). Never raises for one image."""
+                  cancelled: Callable[[], bool] | None = None, progress: ProgressFn | None = None) -> dict[str, int]:
+        """Evaluate `image_ids`, `parallelism()` at a time (each is CPU + disk heavy; oscap itself
+        is single-threaded). Never raises for one image. `progress(done, total)` after each image."""
         emit = log_fn or (lambda _m: None)
         if not (content_mod.load_index(self.content_dir).get("files")):
             await self.refresh_content(app, force=True)
         else:
             await self.refresh_content(app)
         cat = self._catalogue()
+        self.fingerprint = content_fingerprint(cat)
         timeout = float(getattr(getattr(app, "scap", None), "timeout_seconds", None) or self.s.scap_timeout_seconds)
         prefer_disa = bool(getattr(getattr(app, "scap", None), "prefer_disa", self.s.scap_prefer_disa))
-        stats = {"evaluated": 0, "notApplicable": 0, "noContent": 0, "error": 0, "timeout": 0}
+        stats = {"evaluated": 0, "notApplicable": 0, "noContent": 0, "error": 0, "timeout": 0, "stale": 0}
+        image_ids = list(dict.fromkeys(image_ids))
         if not image_ids:
             return stats
-        emit(f"scap: evaluating {len(image_ids)} image(s) against {len(cat)} benchmark(s) "
+        par = min(self.parallelism(), len(image_ids))
+        emit(f"scap: evaluating {len(image_ids)} image(s) against {len(cat)} benchmark(s), {par} at a time "
              f"(rootfs fidelity {'full' if self.privileged else 'degraded: not root'})")
-        for image_id in image_ids:
-            if cancelled is not None and cancelled():
-                break
-            try:
-                out = await self.evaluate_image(image_id, cat, timeout, prefer_disa)
-            except Exception as e:  # noqa: BLE001  (one image never fails the stage)
-                log.exception("scap.image_failed", image_id=image_id)
-                out = ImageOutcome(image_id, "error", error=f"internal error: {e}"[:500])
-            await self.persist(scan_id, out)
+        sem = asyncio.Semaphore(par)
+        done = 0
+        total = len(image_ids)
+
+        async def one(image_id: int) -> None:
+            nonlocal done
+            async with sem:
+                if cancelled is not None and cancelled():
+                    return
+                try:
+                    out = await self.evaluate_image(image_id, cat, timeout, prefer_disa)
+                except Exception as e:  # noqa: BLE001  (one image never fails the stage)
+                    log.exception("scap.image_failed", image_id=image_id)
+                    out = ImageOutcome(image_id, "error", error=f"internal error: {e}"[:500])
+                kept = await self.persist(scan_id, out)
             stats[out.status] = stats.get(out.status, 0) + 1
-            emit(self._line(out))
+            if kept:
+                stats["stale"] += 1
+            done += 1
+            emit(self._line(out) + (" (previous result kept, marked stale)" if kept else ""))
+            if progress is not None:
+                with contextlib.suppress(Exception):
+                    await progress(done, total)
+
+        await asyncio.gather(*(one(i) for i in image_ids))
         await self._touch_status()
         return stats
 
@@ -223,7 +292,7 @@ class ScapStage:
         if img.tag and not ref.tag:
             ref = type(ref)(ref.registry, ref.repository, img.tag, ref.digest)
         if not ref.digest:
-            return ImageOutcome(image_id, "error", error="image has no digest (locally loaded / not started); "
+            return ImageOutcome(image_id, "error", error=f"{NO_DIGEST} (locally loaded / not started); "
                                                          "a rootfs is only built from digest-pinned images")
         source, source_digest, src_insecure = self._source(img, ref)
         try:
@@ -231,7 +300,7 @@ class ScapStage:
         except Exception as e:  # noqa: BLE001
             return ImageOutcome(image_id, "error", error=f"image copy failed: {str(e)[:300]}")
         hexd = ref.digest.split(":", 1)[-1]
-        base = self.work_dir / hexd[:32]
+        base = self.work_dir / f"{hexd[:32]}-{image_id}"  # concurrent evaluations never share a tree
         rootfs_dir = base / "rootfs"
         out = ImageOutcome(image_id, "error")
         try:
@@ -300,11 +369,15 @@ class ScapStage:
                 self.cache.release(str(layout))
 
     # ------------------------------------------------------------------ persistence
-    async def persist(self, scan_id: int | None, out: ImageOutcome) -> None:
+    async def persist(self, scan_id: int | None, out: ImageOutcome) -> bool:
+        """Store one outcome. Returns True when it was not genuine (error / timeout) and a genuine
+        previous result was kept instead (marked `stale` with this error; retried next scan)."""
         ts = now()
         det = out.detection.as_dict() if out.detection else {}
         fidelity = out.rootfs.get("fidelity") if out.rootfs else None
         summaries: list[dict[str, Any]] = []
+        if out.status not in GENUINE and await self._keep_previous(out, ts):
+            return True
         async with self.sm() as s, s.begin():
             first_failed = {(k, rid): t for k, rid, t in (await s.execute(
                 select(ScapResultRow.benchmark_key, ScapResultRow.rule_id, ScapResultRow.first_failed_at).where(
@@ -359,7 +432,28 @@ class ScapStage:
                 stig["evaluatedAt"] = ts.isoformat().replace("+00:00", "Z")
                 if out.detection:
                     stig["os"] = out.detection.os.get("prettyName") or out.detection.os.get("id")
+                if self.fingerprint:
+                    stig["content"] = self.fingerprint
                 img.stig = stig  # type: ignore[attr-defined]
+        return False
+
+    async def _keep_previous(self, out: ImageOutcome, ts: datetime) -> bool:
+        """A transient failure over a genuine stored result: keep that result, flag it stale."""
+        async with self.sm() as s, s.begin():
+            img = await s.get(Image, out.image_id, with_for_update=True)
+            prev = dict(getattr(img, "stig", None) or {}) if img is not None else {}
+            if prev.get("status") not in GENUINE:
+                return False
+            has_rows = await s.scalar(select(ScapImageSummary.id).where(
+                ScapImageSummary.image_id == out.image_id).limit(1))
+            if has_rows is None:
+                return False
+            prev.update({"stale": True, "staleError": (out.error or out.status)[:500],
+                         "staleStatus": out.status, "staleSince": prev.get("staleSince") or
+                         ts.isoformat().replace("+00:00", "Z")})
+            img.stig = prev  # type: ignore[union-attr]
+        log.warning("scap.result_kept_stale", image_id=out.image_id, status=out.status, error=(out.error or "")[:200])
+        return True
 
 
 def _dt(v: Any) -> datetime | None:
@@ -381,6 +475,36 @@ async def never_evaluated(session: AsyncSession, image_ids: list[int]) -> list[i
     seen = {i for (i,) in (await session.execute(
         select(ScapImageSummary.image_id).where(ScapImageSummary.image_id.in_(image_ids)).distinct())).all()}
     return [i for i in image_ids if i not in seen]
+
+
+async def db_content_fingerprint(session: AsyncSession) -> str | None:
+    """`content_fingerprint` of the catalogue the scap-worker mirrored into `scap_content`."""
+    rows = (await session.execute(select(ScapContent.path, ScapContent.benchmark_id, ScapContent.sha256,
+                                         ScapContent.size_bytes))).all()
+    return content_fingerprint([{"path": p, "benchmarkId": b, "sha256": h, "sizeBytes": n} for p, b, h, n in rows])
+
+
+async def needs_evaluation(session: AsyncSession, image_ids: list[int]) -> dict[str, list[int]]:
+    """Images of `image_ids` the scap stage must (re-)evaluate even when no scan rescanned them:
+    `never` (no stored result), `retry` (the last attempt failed: a stale kept result, or an error /
+    timeout with nothing better stored) and `content` (evaluated against a different content set
+    than the current one)."""
+    out: dict[str, list[int]] = {"never": [], "retry": [], "content": []}
+    if not image_ids:
+        return out
+    never = set(await never_evaluated(session, image_ids))
+    fp = await db_content_fingerprint(session)
+    rows = (await session.execute(select(Image.id, Image.stig).where(Image.id.in_(image_ids)))).all()
+    stig = {i: (d or {}) for i, d in rows}
+    for i in image_ids:
+        d = stig.get(i, {})
+        if i in never or not d:
+            out["never"].append(i)
+        elif d.get("stale") or (d.get("status") in ("error", "timeout") and NO_DIGEST not in str(d.get("error") or "")):
+            out["retry"].append(i)
+        elif fp is not None and d.get("content") != fp:
+            out["content"].append(i)
+    return out
 
 
 def cleanup_work_dir(work_dir: Path) -> None:

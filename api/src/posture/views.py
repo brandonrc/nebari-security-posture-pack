@@ -91,12 +91,26 @@ def scan_dict(s: Scan) -> dict[str, Any]:
         "targetImageIds": s.target_image_ids,
         "targetNamespaces": s.target_namespaces,
         "error": s.error,
-        # DESIGN §14: null (SCAP disabled) | queued | running | done | skipped | failed. A done scan
-        # whose scapStatus is still queued / running finished with "scap pending".
+        # DESIGN §14: null (SCAP disabled) | queued | running | done | skipped | failed. scapPending: the
+        # scan was finalized before its scap stage completed (scores without the new STIG results;
+        # auto-reports / controls deferred); cleared when the stage completes and the scores are
+        # re-aggregated. scapProgress: {done, total} images of the scap stage.
         "scapStatus": s.scap_status,
         "scapImages": len(s.scap_image_ids or []) if s.scap_image_ids is not None else None,
         "scapStats": (s.scap_detail or {}).get("stats") if s.scap_detail else None,
+        "scapPending": bool(getattr(s, "scap_pending", False)),
+        "scapDeferred": list(getattr(s, "scap_deferred", None) or []),
+        "scapProgress": scap_progress(s),
     }
+
+
+def scap_progress(s: Scan) -> dict[str, int] | None:
+    if s.scap_status is None:
+        return None
+    total = len(s.scap_image_ids or [])
+    p = (s.scap_detail or {}).get("progress") or {}
+    done = total if s.scap_status in ("done", "failed", "skipped") else int(p.get("done") or 0)
+    return {"done": min(done, int(p.get("total") or total) or total), "total": int(p.get("total") or total)}
 
 
 def scanner_run_summary(d: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -151,7 +165,10 @@ def stig_brief(d: dict[str, Any] | None) -> dict[str, Any] | None:
             "notchecked": int(d.get("notchecked") or 0), "cat1Open": int(d.get("cat1Open") or 0),
             "cat2Open": int(d.get("cat2Open") or 0), "cat3Open": int(d.get("cat3Open") or 0),
             "fidelity": d.get("fidelity"), "os": d.get("os"), "evaluatedAt": d.get("evaluatedAt"),
-            "error": d.get("error")}
+            "error": d.get("error"),
+            # the last attempt failed transiently (registry 429 / timeout ...): the result above is the
+            # previous genuine evaluation, retried by the next scan
+            "stale": bool(d.get("stale")), "staleError": d.get("staleError"), "staleSince": d.get("staleSince")}
 
 
 def sla_due(first_seen: datetime | None, severity: str, sla: dict[str, int]) -> datetime | None:

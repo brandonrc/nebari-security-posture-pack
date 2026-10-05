@@ -171,7 +171,17 @@ class Settings(BaseSettings):
     scap_prefer_disa: bool = True
     scap_timeout_seconds: int = 900  # per image (all its benchmarks)
     scap_max_rootfs_gb: float = 10
-    scap_finalize_wait_seconds: float = 600  # privileged worker waits this long for a queued scap stage
+    # privileged worker: seconds to wait for a scan's queued / running scap stage before the posture
+    # snapshot. 0 (default) = do not wait: finalize without the new STIG results, mark the scan
+    # scap_pending and run the STIG-dependent aggregation + deferred auto-reports / controls when the
+    # scap stage completes (worker.complete_scap)
+    scap_finalize_wait_seconds: float = 0
+    # images evaluated concurrently by the scap stage (oscap is single-threaded); capped by the
+    # container memory limit at SCAP_MEMORY_PER_EVAL_MB per evaluation (stage.effective_parallelism)
+    scap_parallelism: int = 3
+    scap_memory_per_eval_mb: int = 1152
+    # a scan whose deferred post-scan stages still wait for the scap stage after this long runs them anyway
+    scap_deferred_max_hours: float = 12
     scap_skip_validation: bool = False  # oscap --skip-valid
     scap_benchmarks_file: str = ""  # extra os-release/product -> benchmark candidates (benchmarks.yaml format)
     oscap_bin: str = "oscap"

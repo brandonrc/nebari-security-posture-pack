@@ -81,7 +81,12 @@ class Scan(Base):
     scap_status: Mapped[str | None] = mapped_column(String(16))
     scap_image_ids: Mapped[list[Any] | None] = mapped_column(JSONType)
     scap_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    scap_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONType)  # {stats, log[], worker}
+    scap_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONType)  # {stats, log[], worker, progress}
+    # 0009: the scan was finalized while its scap stage was still queued / running (scores without
+    # the new STIG results); scap_deferred = post-scan stages (reports, controls) that run when the
+    # scap stage completes (worker.complete_scap). Written by the privileged worker only.
+    scap_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    scap_deferred: Mapped[list[Any] | None] = mapped_column(JSONType)
 
 
 class Image(Base):

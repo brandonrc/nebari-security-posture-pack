@@ -13,9 +13,13 @@
 * SCAP (DESIGN §14, posture.scap): when settings `scanners.scap` is on, the scan worker
   queues the scan for the `scap-worker` (`--stages scap`: root in its container, claims
   `scans.scap_status = queued`) as soon as its CVE stage is done, the same hand-off as
-  `scanned` -> privileged worker. The privileged worker waits for it before the posture
-  snapshot (at most SCAP_FINALIZE_WAIT_SECONDS; then the scan finishes with `scap pending`).
-  A worker that runs the scan stages and `scap` (or SCAP_EMBEDDED=true) runs it inline.
+  `scanned` -> privileged worker. The privileged worker does not wait for it by default
+  (SCAP_FINALIZE_WAIT_SECONDS=0): it finalizes the scores with the STIG results stored so far and
+  marks the scan `scap_pending`, deferring auto-reports and the controls run. When the scap
+  stage completes, the privileged worker handles that `scap_completed` event (`complete_scap`):
+  it re-runs the STIG-dependent aggregation of the scan, clears `scap_pending` and runs the
+  deferred stages. A worker that runs the scan stages and `scap` (or SCAP_EMBEDDED=true) runs it
+  inline.
 * Scheduled scans are due `scan_interval_hours` after the newest `done` full scan
   started (computed from the DB on every loop, so worker restarts never reset it).
   APScheduler only drives grype DB updates and the scanner status refresh.
@@ -102,6 +106,8 @@ SCAP_LOG_LINES = 60
 STATUS_SCANNED = "scanned"  # scan stage done, waiting for the privileged worker
 STATUS_FINALIZING = "finalizing"  # claimed by the privileged worker
 INVENTORY_HANDOFF_LEVEL = "inventory"  # scan_snapshots row carrying the inventory between workers
+SCAP_PENDING_LEVEL = "scap-inventory"  # inventory + supply-chain inputs kept for the scap_completed re-aggregation
+AGGREGATE_LEVELS = ("workload", "namespace", "cluster")
 SCHEDULE_RETRY_HOURS = 1.0  # after a failed/cancelled full scan, wait at most this long before retrying
 
 
@@ -206,15 +212,16 @@ class PostScanPlan:
 
 def post_scan_plan(*, trigger: str, targeted: bool, rescanned: int | None, inventory_hash: str | None,
                    posture_hash: str | None, prev_full_inventory_hash: str | None,
-                   prev_posture_hash: str | None) -> PostScanPlan:
+                   prev_posture_hash: str | None, stig_evaluated: int = 0) -> PostScanPlan:
     """Which post-scan stages a done scan triggers (grace, 2026-10-05).
 
     * controls engine: after every full (untargeted) scan; after a targeted / event scan only when
       the posture-relevant inventory changed against the previous done scan (new workload, changed
       securityContext; unknown previous hash = changed).
     * `reports.autoGenerate`: never after targeted / event scans; after a full scan only when it
-      rescanned at least one image or its set of deployed images differs from the previous done
-      full scan's.
+      rescanned at least one image, its scap stage (re-)evaluated at least one image
+      (`stig_evaluated`: new STIG results), or its set of deployed images differs from the
+      previous done full scan's.
     """
     full = not targeted and trigger != "event"
     if full:
@@ -227,6 +234,8 @@ def post_scan_plan(*, trigger: str, targeted: bool, rescanned: int | None, inven
         reports, rreason = False, f"{trigger} scan (targeted)" if trigger == "event" else "targeted scan"
     elif rescanned:
         reports, rreason = True, f"{rescanned} image(s) rescanned"
+    elif stig_evaluated:
+        reports, rreason = True, f"{stig_evaluated} image(s) STIG-evaluated"
     elif inventory_hash is None or prev_full_inventory_hash is None or inventory_hash != prev_full_inventory_hash:
         reports, rreason = True, "inventory changed"
     else:
@@ -552,7 +561,7 @@ class Worker:
         log.info("scan.started", scan_id=scan_id, scanners=",".join(enabled), force=force)
         progress = asyncio.create_task(self._progress_loop(ctx))
         prov_task: asyncio.Task | None = None
-        completed = False
+        completed = pending = defer = False
         try:
             try:
                 inv = await self.inventory_fn(settings.excluded_namespaces)
@@ -630,8 +639,10 @@ class Worker:
                 await self._handoff(ctx, inv)
                 return
             ctx.supply_chain = await provenance_stage.finish(prov_task, ctx.add_log)
-            await self._await_scap(ctx)
+            pending, defer = await self._await_scap(ctx)
             await self._persist_snapshot(ctx, inv, key_to_id)
+            if pending:
+                await self._mark_scap_pending(ctx, inv, defer)
             await self._finish(ctx, "done")
             completed = True
         except asyncio.CancelledError:
@@ -645,7 +656,7 @@ class Worker:
             if prov_task is not None and not prov_task.done():
                 prov_task.cancel()
         if completed:
-            await self._after_done(scan_id, settings)
+            await self._after_done(scan_id, settings, defer=pending and defer)
 
     @staticmethod
     def _selection_line(sel: ImageSelection) -> str:
@@ -673,17 +684,27 @@ class Worker:
             prev_posture = await s.scalar(select(Scan.posture_hash).where(
                 Scan.status == "done", Scan.id < scan_id).order_by(Scan.id.desc()).limit(1))
         targeted = bool(scan.target_image_ids) or bool(scan.target_namespaces)
+        stats = ((scan.scap_detail or {}).get("stats") or {}) if scan.scap_status == "done" else {}
+        genuine = sum(int(stats.get(k) or 0) for k in ("evaluated", "notApplicable", "noContent"))
         return post_scan_plan(trigger=scan.trigger, targeted=targeted, rescanned=scan.images_rescanned,
                               inventory_hash=scan.inventory_hash, posture_hash=scan.posture_hash,
-                              prev_full_inventory_hash=prev_full, prev_posture_hash=prev_posture)
+                              prev_full_inventory_hash=prev_full, prev_posture_hash=prev_posture,
+                              stig_evaluated=genuine)
 
-    async def _after_done(self, scan_id: int, settings: app_settings.AppSettings) -> None:
+    async def _after_done(self, scan_id: int, settings: app_settings.AppSettings, defer: bool = False) -> None:
         try:  # §1: render the provenance-collector-pack report once; the compat API serves the bytes
             async with self.sm() as s, s.begin():
                 await compat_store.materialize(s, scan_id, settings.system_name,
                                                getattr(self.provenance_stage, "collector_version", None))
         except Exception:  # noqa: BLE001  (the compat API falls back to rendering on request)
             log.exception("compat.materialize_failed", scan_id=scan_id)
+        if defer:  # the STIG evaluation is still running: complete_scap runs these stages
+            await self._append_log(scan_id, "auto-reports and controls engine deferred until the STIG evaluation "
+                                            "completes")
+            return
+        await self._post_scan_stages(scan_id, settings)
+
+    async def _post_scan_stages(self, scan_id: int, settings: app_settings.AppSettings) -> None:
         plan = await self.plan_post_scan(scan_id)
         # event / targeted scans are small and frequent; a full scan that changed nothing
         # (everything fresh, same images) would only queue identical reports again
@@ -757,7 +778,7 @@ class Worker:
         ctx.add_log(f"finalize: {', '.join(sorted(self.stages & FINAL_STAGES))}")
         log.info("scan.finalize", scan_id=scan_id)
         progress = asyncio.create_task(self._progress_loop(ctx))
-        completed = False
+        completed = pending = defer = False
         try:
             prov_task = provenance_stage.start(self.provenance_stage, scan_id, settings, inv, key_to_id,
                                                ctx.add_log, force, self._scope(ctx))
@@ -766,11 +787,13 @@ class Worker:
             if ctx.cancelled:
                 await self._finish(ctx, "cancelled")
                 return
-            await self._await_scap(ctx)
+            pending, defer = await self._await_scap(ctx)
             await self._persist_snapshot(ctx, inv, key_to_id)
             async with self.sm() as s, s.begin():
                 await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == scan_id,
                                                            ScanSnapshot.level == INVENTORY_HANDOFF_LEVEL))
+            if pending:
+                await self._mark_scap_pending(ctx, inv, defer)
             await self._finish(ctx, "done")
             completed = True
         except asyncio.CancelledError:
@@ -782,7 +805,7 @@ class Worker:
         finally:
             progress.cancel()
         if completed:
-            await self._after_done(scan_id, settings)
+            await self._after_done(scan_id, settings, defer=pending and defer)
 
     async def scanners_not_ready(self, enabled: list[str]) -> list[str]:
         """Reasons why an enabled scanner would fail or return empty results right now."""
@@ -1134,7 +1157,11 @@ class Worker:
             s.add(ScanSnapshot(scan_id=ctx.scan_id, level="image", key=str(image_id), score=img.score, grade=img.grade,
                                data={"counts": analysis.counts, "fixable": analysis.fixable, "ref": img.ref}))
 
-    async def _persist_snapshot(self, ctx: ScanContext, inv: InventorySnapshot, key_to_id: dict[str, int]) -> None:
+    async def _persist_snapshot(self, ctx: ScanContext, inv: InventorySnapshot, key_to_id: dict[str, int],
+                                aggregates_only: bool = False) -> None:
+        """Containers, posture results, workload / namespace / cluster aggregates, vuln rollup and the
+        scan's scores. `aggregates_only` (scap_completed): replace only the STIG-dependent parts
+        (workload rows, aggregate snapshots, scan scores) of an already persisted scan."""
         posture = evaluate_inventory(inv)
         async with self.sm() as s:
             imgs = (await s.execute(select(Image).where(Image.id.in_(list(key_to_id.values()) or [0])))).scalars().all()
@@ -1145,7 +1172,11 @@ class Worker:
         workloads, namespaces, cluster = aggregate(inv, images_by_key, posture, ctx.supply_chain)
         sid = ctx.scan_id
         async with self.sm() as s, s.begin():
-            if inv.containers:
+            if aggregates_only:
+                await s.execute(delete(WorkloadRow).where(WorkloadRow.scan_id == sid))
+                await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == sid,
+                                                           ScanSnapshot.level.in_(AGGREGATE_LEVELS)))
+            if inv.containers and not aggregates_only:
                 await s.execute(ContainerRow.__table__.insert(), [{
                     "scan_id": sid, "namespace": c.namespace, "pod": c.pod, "container": c.container,
                     "container_type": c.container_type, "image": c.image, "image_id_raw": c.image_id,
@@ -1153,7 +1184,7 @@ class Worker:
                     "workload_name": c.workload_name, "pack": c.pack, "running": c.running, "pod_phase": c.pod_phase,
                     "security": c.security} for c in inv.containers])
             results = [r for wp in posture.values() for r in wp.results]
-            if results:
+            if results and not aggregates_only:
                 await s.execute(PostureResultRow.__table__.insert(), [{
                     "scan_id": sid, "check_id": r.check_id, "namespace": r.namespace, "kind": r.kind, "name": r.name,
                     "pod": r.pod, "container": r.container, "status": r.status, "severity": r.severity,
@@ -1194,12 +1225,15 @@ class Worker:
                                    "counts": counts, "fixable": fixable, "topRisks": top_risks,
                                    "inventoryErrors": inv.errors}})
             await s.execute(ScanSnapshot.__table__.insert(), snaps)
-            rolled = await write_vuln_rollup(s, sid)
+            rolled = 0 if aggregates_only else await write_vuln_rollup(s, sid)
             await s.execute(update(Scan).where(Scan.id == sid).values(
                 score=cluster.score, grade=cluster.grade, vuln_score=cluster.vuln_score,
                 posture_score=cluster.posture_score, inventory_complete=True,
                 images_inventoried=len(set(key_to_id.values())), inventory_hash=inventory_hash(key_to_id),
                 posture_hash=posture_hash(inv)))
+        if aggregates_only:
+            ctx.add_log(f"cluster score {cluster.score} ({cluster.grade}) with the new STIG results")
+            return
         ctx.add_log(f"cluster score {cluster.score} ({cluster.grade}); {len(workloads)} workloads, "
                     f"{len(namespaces)} namespaces, {len(results)} posture results, {rolled} vulnerabilities")
         await self._prune()
@@ -1271,16 +1305,22 @@ class Worker:
         scan); run inline when this process owns the stage, else queue it for the scap-worker."""
         if not getattr(ctx.settings.scanners, "scap", False):
             return
-        from .scap.stage import never_evaluated
+        from .scap.stage import needs_evaluation
 
         inventory = sorted(set(key_to_id.values()))
         if full:
             ids = inventory
+            ctx.add_log(f"scap: forced full scan, all {len(ids)} inventory image(s) re-evaluated")
         else:
             async with self.sm() as s:
-                fresh = await never_evaluated(s, inventory)
-            ids = sorted(set(scanned) | set(fresh))
-        detail = {"images": len(ids), "worker": "inline" if self.scap_owner else "scap-worker"}
+                due = await needs_evaluation(s, inventory)
+            ids = sorted(set(scanned) | {i for v in due.values() for i in v})
+            if ids:
+                ctx.add_log(f"scap: {len(ids)} of {len(inventory)} image(s) due: {len(set(scanned))} rescanned, "
+                            f"{len(due['never'])} never evaluated, {len(due['retry'])} retried after a failed "
+                            f"attempt, {len(due['content'])} evaluated against other content")
+        detail = {"images": len(ids), "worker": "inline" if self.scap_owner else "scap-worker",
+                  "progress": {"done": 0, "total": len(ids)}}
         if not ids:
             async with self.sm() as s, s.begin():
                 await s.execute(update(Scan).where(Scan.id == ctx.scan_id).values(
@@ -1300,7 +1340,8 @@ class Worker:
         stats: dict[str, int] = {}
         try:
             stats = await self.scap_stage().run(ctx.scan_id, ids, ctx.settings, ctx.add_log,
-                                                cancelled=lambda: ctx.cancelled)
+                                                cancelled=lambda: ctx.cancelled,
+                                                progress=self._scap_progress(ctx.scan_id, detail))
         except Exception as e:  # noqa: BLE001  (the SCAP stage never fails a scan)
             log.exception("scap.failed", scan_id=ctx.scan_id)
             ctx.add_log(f"scap failed: {e}")
@@ -1308,6 +1349,18 @@ class Worker:
         async with self.sm() as s, s.begin():
             await s.execute(update(Scan).where(Scan.id == ctx.scan_id).values(
                 scap_status=status, scap_finished_at=now(), scap_detail={**detail, "stats": stats}))
+
+    def _scap_progress(self, scan_id: int, detail: dict[str, Any], lines: deque | None = None):
+        """progress(done, total) for ScapStage.run: `scans.scap_detail.progress` (+ the log tail).
+        Only the process running the scap stage writes scap_detail."""
+        async def progress(done: int, total: int) -> None:
+            self.last_loop_beat = time.monotonic()
+            detail["progress"] = {"done": done, "total": total}
+            if lines is not None:
+                detail["log"] = list(lines)
+            async with self.sm() as s, s.begin():
+                await s.execute(update(Scan).where(Scan.id == scan_id).values(scap_detail=dict(detail)))
+        return progress
 
     async def claim_scap(self) -> int | None:
         async with self.sm() as s, s.begin():
@@ -1336,8 +1389,10 @@ class Worker:
 
         status, stats = "done", {}
         log.info("scap.job.start", scan_id=scan_id, images=len(ids))
+        detail["progress"] = {"done": 0, "total": len(ids)}
         try:
-            stats = await self.scap_stage().run(scan_id, ids, settings, add)
+            stats = await self.scap_stage().run(scan_id, ids, settings, add,
+                                                progress=self._scap_progress(scan_id, detail, lines))
         except Exception as e:  # noqa: BLE001
             log.exception("scap.job.failed", scan_id=scan_id)
             add(f"scap failed: {e}")
@@ -1356,11 +1411,14 @@ class Worker:
         beat = row.beat_at if row.beat_at.tzinfo else row.beat_at.replace(tzinfo=UTC)
         return (now() - beat).total_seconds() < SCAP_ALIVE_SECONDS
 
-    async def _await_scap(self, ctx: ScanContext) -> None:
-        """Before the posture snapshot: wait (SCAP_FINALIZE_WAIT_SECONDS) for a queued / running
-        scap stage of this scan so its STIG scores enter the configuration score; otherwise the
-        scan finishes with `scap pending` (the API shows scapStatus)."""
-        deadline = time.monotonic() + max(0.0, float(self.s.scap_finalize_wait_seconds))
+    async def _await_scap(self, ctx: ScanContext) -> tuple[bool, bool]:
+        """Before the posture snapshot: wait at most SCAP_FINALIZE_WAIT_SECONDS (default 0: not at
+        all) for a queued / running scap stage of this scan so its STIG scores enter the
+        configuration score. Returns (pending, defer): pending = the scan finalizes before its scap
+        stage completed (`scapPending`; complete_scap re-aggregates later); defer = auto-reports and
+        the controls run wait for that (not when no scap-worker is alive to complete it)."""
+        wait = max(0.0, float(self.s.scap_finalize_wait_seconds))
+        deadline = time.monotonic() + wait
         waited = False
         while True:
             async with self.sm() as s:
@@ -1368,19 +1426,93 @@ class Worker:
             if status not in SCAP_ACTIVE:
                 if waited:
                     ctx.add_log(f"scap stage {status}")
-                return
+                return False, False
             if status == "queued" and not await self._scap_worker_alive():
-                ctx.add_log("scap pending: no scap-worker heartbeat; the snapshot uses the previous STIG results")
-                return
+                ctx.add_log("scap pending: no scap-worker heartbeat; the snapshot uses the previous STIG results "
+                            "and the post-scan stages are not deferred")
+                return True, False
             if time.monotonic() >= deadline or ctx.cancelled:
-                ctx.add_log(f"scap pending: still {status} after {int(self.s.scap_finalize_wait_seconds)}s "
-                            "(SCAP_FINALIZE_WAIT_SECONDS); the snapshot uses the previous STIG results")
-                return
+                ctx.add_log(f"scap pending: STIG evaluation {status}"
+                            + (f" after {int(wait)}s (SCAP_FINALIZE_WAIT_SECONDS)" if wait else "")
+                            + "; scores use the previous STIG results until it completes")
+                return True, True
             if not waited:
                 ctx.add_log("waiting for the scap-worker (SCAP stage)")
                 waited = True
             self.last_loop_beat = time.monotonic()
             await asyncio.sleep(5)
+
+    async def _mark_scap_pending(self, ctx: ScanContext, inv: InventorySnapshot, defer: bool) -> None:
+        """Keep what the scap_completed re-aggregation needs (inventory, supply-chain inputs) and
+        flag the scan; `scap_deferred` = the post-scan stages complete_scap runs."""
+        sc = {str(k): asdict(v) for k, v in (ctx.supply_chain or {}).items() if v is not None}
+        async with self.sm() as s, s.begin():
+            await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == ctx.scan_id,
+                                                       ScanSnapshot.level == SCAP_PENDING_LEVEL))
+            s.add(ScanSnapshot(scan_id=ctx.scan_id, level=SCAP_PENDING_LEVEL, key="",
+                               data={**inventory_to_json(inv), "supplyChain": sc}))
+            await s.execute(update(Scan).where(Scan.id == ctx.scan_id).values(
+                scap_pending=True, scap_deferred=["reports", "controls"] if defer else []))
+
+    async def claim_scap_completed(self) -> int | None:
+        """A done scan whose scap stage finished after it was finalized (the `scap_completed`
+        event), or that waited longer than SCAP_DEFERRED_MAX_HOURS."""
+        give_up = now() - timedelta(hours=max(0.0, float(self.s.scap_deferred_max_hours)))
+        async with self.sm() as s, s.begin():
+            scan = (await s.execute(
+                select(Scan).where(Scan.scap_pending.is_(True), Scan.status == "done",
+                                   (Scan.scap_status.is_(None) | Scan.scap_status.notin_(SCAP_ACTIVE))
+                                   | (Scan.finished_at < give_up))
+                .order_by(Scan.id).limit(1).with_for_update(skip_locked=True))).scalar_one_or_none()
+            if scan is None:
+                return None
+            scan.scap_pending = False
+            return scan.id
+
+    async def complete_scap(self, scan_id: int) -> None:
+        """scap_completed: re-run the STIG-dependent aggregation of the scan (workload / namespace /
+        cluster scores with the new images.stig), clear scapPending, then run the deferred stages."""
+        async with self.sm() as s:
+            scan = await s.get(Scan, scan_id)
+            settings = await app_settings.load(s, self.s)
+            row = (await s.execute(select(ScanSnapshot).where(
+                ScanSnapshot.scan_id == scan_id, ScanSnapshot.level == SCAP_PENDING_LEVEL).limit(1))).scalar_one_or_none()
+            data = row.data if row is not None else None
+            deferred = list(scan.scap_deferred or [])
+            scap_status = scan.scap_status
+            stats = (scan.scap_detail or {}).get("stats") or {}
+        log.info("scan.scap_completed", scan_id=scan_id, scap_status=scap_status, deferred=",".join(deferred))
+        done = ", ".join(f"{v} {k}" for k, v in stats.items() if v)
+        if scap_status in SCAP_ACTIVE:
+            await self._append_log(scan_id, f"STIG evaluation still {scap_status} after "
+                                            f"{self.s.scap_deferred_max_hours:g} h (SCAP_DEFERRED_MAX_HOURS); "
+                                            "running the deferred stages without it")
+        else:
+            await self._append_log(scan_id, f"scap_completed: STIG evaluation {scap_status}"
+                                            + (f" ({done})" if done else "") + "; re-aggregating the scores")
+        if data is not None and scap_status not in SCAP_ACTIVE:
+            try:
+                ctx = ScanContext(scan_id, settings, [])
+                inv = inventory_from_json(data)
+                from .provenance.scoring import SupplyChainInputs
+
+                ctx.supply_chain = {int(k): SupplyChainInputs(**v) for k, v in (data.get("supplyChain") or {}).items()}
+                keys = sorted({c.image_key for c in inv.containers if c.image_key})
+                async with self.sm() as s:
+                    key_to_id = {k: i for k, i in (await s.execute(select(Image.key, Image.id).where(
+                        Image.key.in_(keys or [""])))).all()}
+                await self._persist_snapshot(ctx, inv, key_to_id, aggregates_only=True)
+                for line in ctx.log_lines:
+                    await self._append_log(scan_id, line.split(" ", 1)[-1])
+            except Exception:  # noqa: BLE001  (the deferred stages still run)
+                log.exception("scan.scap_reaggregate_failed", scan_id=scan_id)
+                await self._append_log(scan_id, "re-aggregation with the new STIG results failed")
+        async with self.sm() as s, s.begin():
+            await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == scan_id,
+                                                       ScanSnapshot.level == SCAP_PENDING_LEVEL))
+            await s.execute(update(Scan).where(Scan.id == scan_id).values(scap_deferred=[]))
+        if deferred:
+            await self._post_scan_stages(scan_id, settings)
 
     async def maybe_refresh_scap_content(self) -> None:
         """Daily content refresh (SCAP_CONTENT_REFRESH_HOURS) by the process that owns the content dir."""
@@ -1451,6 +1583,10 @@ class Worker:
             scan_id = await self.claim_scanned()
             if scan_id is not None:
                 await self.finalize_scan(scan_id)
+                return True
+            scan_id = await self.claim_scap_completed()
+            if scan_id is not None:
+                await self.complete_scap(scan_id)
                 return True
         if self.scap_side and not self.scan_side:
             scan_id = await self.claim_scap()
