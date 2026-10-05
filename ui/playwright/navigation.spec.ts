@@ -15,6 +15,7 @@ const ROUTES: Array<[string, RegExp]> = [
   ['/scans', /Scans/],
   ['/reports', /Reports/],
   ['/compliance', /Compliance/],
+  ['/stig/benchmarks/disa-postgresql15', /PostgreSQL 15 STIG/],
   ['/settings', /Settings/],
   ['/no-such-page', /not found/i],
 ];

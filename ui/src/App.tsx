@@ -21,6 +21,7 @@ import { ReportsPage } from '@/pages/reports';
 import { ScanDetailPage } from '@/pages/scan-detail';
 import { ScansPage } from '@/pages/scans';
 import { SettingsPage } from '@/pages/settings';
+import { StigBenchmarkPage } from '@/pages/stig-benchmark';
 import { SupplyChainPage } from '@/pages/supply-chain';
 import { VulnerabilitiesPage } from '@/pages/vulnerabilities';
 import { VulnerabilityDetailPage } from '@/pages/vulnerability-detail';
@@ -51,6 +52,7 @@ export const routes: RouteObject[] = [
           { path: 'scans/:id', element: <Gate feature="scanDetail"><ScanDetailPage /></Gate> },
           { path: 'reports', element: <ByMode posture={<ReportsPage />} provenance={<ProvenanceReportsPage />} /> },
           { path: 'compliance', element: <Gate feature="compliance"><CompliancePage /></Gate> },
+          { path: 'stig/benchmarks/:id', element: <Gate feature="compliance"><StigBenchmarkPage /></Gate> },
           { path: 'settings', element: <Gate feature="settings"><SettingsPage /></Gate> },
           { path: '*', element: <NotFoundPage /> },
         ],

@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { getCapabilities } from '@/capabilities';
 import { api } from './client';
-import type { ImageFindingsQuery, ImageQuery, VulnQuery } from './types';
+import type { ImageFindingsQuery, ImageQuery, ImageStigQuery, VulnQuery } from './types';
 
 export const qk = {
   me: ['me'] as const,
@@ -26,6 +26,9 @@ export const qk = {
   assertions: ['compliance', 'assertions'] as const,
   supplyChain: ['supplyChain'] as const,
   helmReleases: ['helmReleases'] as const,
+  imageStig: (id: string, q: ImageStigQuery = {}) => ['imageStig', id, q] as const,
+  stigBenchmarks: ['stig', 'benchmarks'] as const,
+  stigBenchmarkRules: (id: string) => ['stig', 'benchmarks', id, 'rules'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: qk.me, queryFn: api.me, staleTime: 5 * 60_000 });
@@ -51,7 +54,7 @@ export const useNamespaces = () => useQuery({ queryKey: qk.namespaces, queryFn: 
 export const useChecks = () => useQuery({ queryKey: qk.checks, queryFn: api.checks });
 export const useCheck = (id: string) => useQuery({ queryKey: qk.check(id), queryFn: () => api.check(id) });
 export const useScans = () => useQuery({ queryKey: qk.scans, queryFn: () => api.scans(1), refetchInterval: 15_000 });
-export const useScanners = () => useQuery({ queryKey: qk.scanners, queryFn: api.scanners });
+export const useScanners = (enabled = true) => useQuery({ queryKey: qk.scanners, queryFn: api.scanners, enabled });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: api.settings });
 export const useReportTypes = () => useQuery({ queryKey: qk.reportTypes, queryFn: api.reportTypes, staleTime: Infinity });
 export const useControls = () => useQuery({ queryKey: qk.controls, queryFn: api.complianceControls });
@@ -60,6 +63,21 @@ export const useAssertions = () => useQuery({ queryKey: qk.assertions, queryFn: 
 export const useSupplyChain = () => useQuery({ queryKey: qk.supplyChain, queryFn: api.supplyChain });
 export const useHelmReleases = () => useQuery({ queryKey: qk.helmReleases, queryFn: api.helmReleases });
 export const useStig = () => useQuery({ queryKey: qk.stig, queryFn: api.complianceStig });
+
+// §14 SCAP (posture mode only: the provenance dashboard has no SCAP data)
+const posture = () => getCapabilities().mode === 'posture';
+/** One image's benchmarks; `q` pages/filters the rules server-side. */
+export const useImageStig = (id: string, q: ImageStigQuery = {}) =>
+  useQuery({
+    queryKey: qk.imageStig(id, q),
+    queryFn: () => api.imageStig(id, q),
+    enabled: posture() && Boolean(id),
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === id ? prev : undefined),
+  });
+export const useStigBenchmarks = (enabled = true) =>
+  useQuery({ queryKey: qk.stigBenchmarks, queryFn: api.stigBenchmarks, enabled: enabled && posture() });
+export const useStigBenchmarkRules = (id: string) =>
+  useQuery({ queryKey: qk.stigBenchmarkRules(id), queryFn: () => api.stigBenchmarkRules(id), enabled: posture() && Boolean(id) });
 
 /** Poll a scan every 3s while it's queued/running (DESIGN §7). */
 export const useScan = (id: string | number | null | undefined) =>

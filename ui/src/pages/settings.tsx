@@ -2,13 +2,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lock, Save, Undo2 } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { api } from '@/api/client';
-import { qk, useReportTypes, useSettings } from '@/api/queries';
-import type { Baseline, ControlsEngineSettings, ProvenanceSettings, ScannerName, Settings, UpdateLevel } from '@/api/types';
+import { qk, useReportTypes, useScanners, useSettings } from '@/api/queries';
+import type { Baseline, ControlsEngineSettings, ProvenanceSettings, ScannerName, ScapContentVersion, ScapSettings, Settings, UpdateLevel } from '@/api/types';
 import { BASELINES, SCANNERS } from '@/api/types';
 import { SimpleSelect } from '@/components/simple-select';
 import { CardsSkeleton, ErrorAlert, PageHeader, errorMessage } from '@/components/page';
 import { SCANNER_LABEL } from '@/components/posture';
 import { TagInput } from '@/components/tag-input';
+import { SourceBadge } from '@/components/stig';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,7 +17,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { formatAge } from '@/lib/format';
 import { toast } from '@/components/ui/toast';
 
 const DNS_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
@@ -76,12 +79,21 @@ const DEFAULT_PROVENANCE: ProvenanceSettings = {
   helmReleases: true,
 };
 const DEFAULT_CONTROLS: ControlsEngineSettings = { enabled: true, baseline: 'moderate', adminSubjects: [] };
+const DEFAULT_SCAP: ScapSettings = { sources: [], preferDisa: true, timeoutSeconds: 900 };
+const SCAP_TIMEOUT = { min: 60, max: 24 * 3600 };
 
-function normalise(s: Settings): Required<Settings> {
+/** Edit form: every section filled in, except §14 `scap`, which stays absent on APIs without it. */
+type Form = Required<Omit<Settings, 'scap'>> & Pick<Settings, 'scap'>;
+
+/** The SCAP section shows when the API knows about it (`scap` or `scanners.scap` present). */
+const hasScap = (s: Pick<Settings, 'scap' | 'scanners'>) => s.scap !== undefined || s.scanners.scap !== undefined;
+
+function normalise(s: Settings): Form {
   const p = s.provenance;
   const c = s.controlsEngine;
   return {
     ...s,
+    ...(hasScap(s) ? { scap: { ...DEFAULT_SCAP, ...s.scap, sources: Array.isArray(s.scap?.sources) ? s.scap.sources : [] } } : {}),
     provenance: { ...DEFAULT_PROVENANCE, ...p },
     controlsEngine: { ...DEFAULT_CONTROLS, ...c, adminSubjects: c?.adminSubjects ?? [] },
     systemName: s.systemName ?? '',
@@ -95,7 +107,7 @@ export function SettingsPage() {
   const { data, error, isLoading, refetch } = useSettings();
   const reportTypes = useReportTypes();
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<Required<Settings> | null>(() => (data ? normalise(data) : null));
+  const [form, setForm] = useState<Form | null>(() => (data ? normalise(data) : null));
   const [source, setSource] = useState(data);
   // key vs keyless is implied by cosignPublicKey; keep the user's pick while the key is still empty
   const [keyModeChoice, setKeyMode] = useState<boolean | null>(null);
@@ -128,10 +140,15 @@ export function SettingsPage() {
     form.parallelism <= 16 &&
     SLA_KEYS.every((k) => form.remediationSlaDays[k] >= 1) &&
     SCANNERS.some((s) => form.scanners[s]) &&
+    (!form.scap || (form.scap.timeoutSeconds >= SCAP_TIMEOUT.min && form.scap.timeoutSeconds <= SCAP_TIMEOUT.max)) &&
     (!form.provenance.verifySignatures || !keyMode || Boolean(form.provenance.cosignPublicKey.trim()));
   const prov = form?.provenance;
   const setProv = (patch: Partial<ProvenanceSettings>) => form && set('provenance', { ...form.provenance, ...patch });
   const setCtl = (patch: Partial<ControlsEngineSettings>) => form && set('controlsEngine', { ...form.controlsEngine, ...patch });
+  const setScap = (patch: Partial<ScapSettings>) => form && set('scap', { ...DEFAULT_SCAP, ...form.scap, ...patch });
+  const scapOn = form ? hasScap(form) : false;
+  const scanners = useScanners(scapOn);
+  const contentVersions = scanners.data?.find((s) => s.name === 'scap')?.contentVersions ?? [];
 
   return (
     <>
@@ -313,6 +330,16 @@ export function SettingsPage() {
             </Card>
           ) : null}
 
+          {scapOn ? (
+            <ScapCard
+              enabled={Boolean(form.scanners.scap)}
+              scap={{ ...DEFAULT_SCAP, ...form.scap }}
+              contentVersions={contentVersions}
+              onEnabled={(v) => set('scanners', { ...form.scanners, scap: v })}
+              onChange={setScap}
+            />
+          ) : null}
+
           <Card>
             <CardHeader>
               <CardTitle>Control evidence engine</CardTitle>
@@ -372,5 +399,96 @@ export function SettingsPage() {
         </form>
       ) : null}
     </>
+  );
+}
+
+/** Content fetched from a source: the `scap` scanner's content entries whose `sourceName` (or file) matches. */
+function sourceContent(src: ScapSettings['sources'][number], versions: ScapContentVersion[]): ScapContentVersion[] {
+  const file = src.url.split('/').pop() ?? '';
+  return versions.filter(
+    (v) => (src.name && v.sourceName === src.name) || (src.name && v.name === src.name) || v.name === file || (v.file && (v.file === file || src.url.includes(v.file))),
+  );
+}
+
+function ScapCard({
+  enabled,
+  scap,
+  contentVersions,
+  onEnabled,
+  onChange,
+}: {
+  enabled: boolean;
+  scap: ScapSettings;
+  contentVersions: ScapContentVersion[];
+  onEnabled: (v: boolean) => void;
+  onChange: (patch: Partial<ScapSettings>) => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>SCAP (product and OS STIGs)</CardTitle>
+        <CardDescription>
+          OpenSCAP evaluates the applicable DISA / ComplianceAsCode benchmark inside each cached image (DESIGN §14). The scap-worker itself is deployed by the Helm
+          value <code className="font-mono">scanner.scap.enabled</code>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-5">
+        <Row label="Stage">
+          <Toggle label="Run SCAP evaluation during scans" checked={enabled} onChange={onEnabled} />
+        </Row>
+        <Row label="Content preference" hint="When both a DISA SCAP benchmark and SSG content match an image, use DISA.">
+          <Toggle label="Prefer DISA benchmarks" checked={scap.preferDisa} disabled={!enabled} onChange={(v) => onChange({ preferDisa: v })} />
+        </Row>
+        <Row id="scap-timeout" label="Timeout per image" hint="oscap-chroot is stopped after this; the image is then reported with an error.">
+          <NumberInput id="scap-timeout" value={scap.timeoutSeconds} min={SCAP_TIMEOUT.min} max={SCAP_TIMEOUT.max} suffix="seconds" onChange={(n) => onChange({ timeoutSeconds: n })} />
+        </Row>
+        <Row label="Content sources" hint="From the Helm value scap.content.sources[] (or a mounted PVC on air-gapped installs). Read-only here.">
+          {scap.sources.length ? (
+            <Table aria-label="SCAP content sources">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="px-2">Source</TableHead>
+                  <TableHead className="px-2">Content</TableHead>
+                  <TableHead className="px-2">Version</TableHead>
+                  <TableHead className="px-2">Fetched</TableHead>
+                  <TableHead className="px-2">sha256</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {scap.sources.map((src) => {
+                  const content = sourceContent(src, contentVersions);
+                  const versions = [...new Set([src.version, ...content.map((c) => c.version)].filter(Boolean))];
+                  const fetchedAt = src.fetchedAt ?? content.map((c) => c.fetchedAt).filter(Boolean).sort().at(-1);
+                  const kind = src.kind ?? src.source ?? content[0]?.source;
+                  return (
+                    <TableRow key={src.url}>
+                      <TableCell className="px-2 py-1.5">
+                        <SourceBadge source={kind ?? (/cyber\.mil/.test(src.url) ? 'disa' : /ComplianceAsCode|scap-security-guide/i.test(src.url) ? 'ssg' : null)} />
+                      </TableCell>
+                      <TableCell className="max-w-[360px] px-2 py-1.5">
+                        <span className="block truncate text-sm" title={src.url}>{src.name ?? src.url.split('/').pop()}</span>
+                        <a href={src.url} target="_blank" rel="noreferrer" className="block truncate text-[11px] text-muted-foreground underline-offset-4 hover:underline" title={src.url}>
+                          {src.url}
+                        </a>
+                      </TableCell>
+                      <TableCell className="px-2 py-1.5 font-mono text-xs">
+                        {versions.length ? versions.join(', ') : '—'}
+                        {content.length > 1 ? <span className="block font-sans text-[11px] text-muted-foreground">{content.length} datastreams</span> : null}
+                      </TableCell>
+                      <TableCell className="px-2 py-1.5 text-muted-foreground text-xs">{fetchedAt ? formatAge(fetchedAt) : '—'}</TableCell>
+                      <TableCell className="px-2 py-1.5 font-mono text-[11px] text-muted-foreground" title={src.sha256 ?? undefined}>
+                        {src.sha256 ? `${src.sha256.slice(0, 12)}…` : '—'}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          ) : (
+            <p className="text-muted-foreground text-sm">No content sources configured; the bundled ComplianceAsCode content is used.</p>
+          )}
+        </Row>
+      </CardContent>
+    </Card>
   );
 }

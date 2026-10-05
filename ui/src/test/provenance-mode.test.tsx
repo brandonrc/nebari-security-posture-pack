@@ -27,7 +27,7 @@ describe('provenance-only mode: navigation and gating', () => {
     expect(within(sidebar).queryByText('Settings')).toBeNull();
   });
 
-  it.each(['/settings', '/vulnerabilities', '/vulnerabilities/CVE-2024-1', '/workloads', '/namespaces', '/checks', '/checks/privileged', '/compliance', '/scans/12'])(
+  it.each(['/settings', '/vulnerabilities', '/vulnerabilities/CVE-2024-1', '/workloads', '/namespaces', '/checks', '/checks/privileged', '/compliance', '/compliance?tab=stig', '/stig/benchmarks/disa-rhel9', '/scans/12'])(
     '%s redirects to the Overview',
     async (path) => {
       renderProvenanceApp(path);
@@ -74,7 +74,8 @@ describe('provenance-only mode: pages', () => {
 
   it('Image detail: used-by and supply-chain tabs from the report', async () => {
     const user = userEvent.setup();
-    renderProvenanceApp('/images/busybox%3A1.36');
+    // §14 SCAP is posture-only: a ?tab=stig deep link falls back to the supply-chain tab
+    renderProvenanceApp('/images/busybox%3A1.36?tab=stig');
     expect(await screen.findByRole('heading', { level: 1, name: 'busybox' })).toBeInTheDocument();
     const tabs = screen.getByRole('tablist', { name: 'Image detail sections' });
     expect(within(tabs).getAllByRole('tab').map((t) => t.textContent?.replace(/\d+$/, '').trim())).toEqual(['Used by', expect.stringMatching(/^Supply chain/)]);

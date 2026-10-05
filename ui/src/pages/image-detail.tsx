@@ -8,6 +8,8 @@ import { useImage } from '@/api/queries';
 import { useCapabilities } from '@/capabilities';
 import type { ImageDetail } from '@/api/types';
 import { SCANNERS } from '@/api/types';
+import { ImageStigTab } from '@/components/image-stig';
+import { StigScore } from '@/components/stig';
 import { DEFAULT_FINDINGS_QUERY, FindingsTable, type FindingsQuery } from '@/components/findings-table';
 import { Pager, useClientPagination } from '@/components/table-kit';
 import { CardsSkeleton, CopyButton, EmptyState, ErrorAlert, Meta, PageHeader, errorMessage } from '@/components/page';
@@ -382,7 +384,7 @@ function SupplyChain({ image }: { image: ImageDetail }) {
   );
 }
 
-const TABS = ['findings', 'used-by', 'runs', 'posture', 'supply-chain'] as const;
+const TABS = ['findings', 'used-by', 'runs', 'posture', 'supply-chain', 'stig'] as const;
 /** provenance mode has no scanner data: only the collector's view of the image */
 const PROVENANCE_TABS = ['used-by', 'supply-chain'] as const;
 
@@ -473,6 +475,12 @@ export function ImageDetailPage() {
                     Supply chain
                     {image.provenance ? <SupplyChainTabBadge image={image} /> : null}
                   </TabsTab>
+                  {pv ? null : (
+                    <TabsTab value="stig">
+                      STIG
+                      {image.stig !== undefined ? <StigScore score={image.stig?.score ?? null} /> : null}
+                    </TabsTab>
+                  )}
                   <TabsIndicator />
                 </TabsList>
                 <TabsPanel value="findings">
@@ -490,6 +498,11 @@ export function ImageDetailPage() {
                 <TabsPanel value="supply-chain">
                   <SupplyChain image={image} />
                 </TabsPanel>
+                {pv ? null : (
+                  <TabsPanel value="stig">
+                    <ImageStigTab key={image.id} imageId={image.id} />
+                  </TabsPanel>
+                )}
               </Tabs>
             </CardContent>
           </Card>

@@ -45,12 +45,17 @@ export interface LastScan {
   imagesFailed: number;
 }
 
+/** Vulnerability scanners plus §14 `scap` (OpenSCAP), which reports benchmark content, not a vuln DB. */
+export type HealthScannerName = ScannerName | 'scap';
+
 export interface ScannerHealth {
-  name: ScannerName;
+  name: HealthScannerName;
   version: string | null;
   dbUpdatedAt: string | null;
   healthy: boolean;
   lastError: string | null;
+  /** §14 `scap`: SCAP content in the catalogue (`dbUpdatedAt` = last content fetch). */
+  contentVersions?: ScapContentVersion[];
 }
 
 export interface TrendPoint {
@@ -100,6 +105,8 @@ export interface Summary {
   slaOverdue?: Partial<SeverityCounts>;
   /** §12 cluster supply-chain score (0.6/0.25/0.15 split once present). */
   supplyChainScore?: number | null;
+  /** §14 product/OS STIG rollup over current images (absent before §14 / with SCAP off). */
+  stig?: StigRollup | null;
 }
 
 // ── images ───────────────────────────────────────────────────────────────────
@@ -139,6 +146,8 @@ export interface ImageSummary {
   confidence?: 'low' | 'normal';
   /** §12 supply-chain provenance (absent before §12 ships). */
   provenance?: ImageProvenance | null;
+  /** §14 per-image STIG summary; `null` = no applicable benchmark, absent = API without §14. */
+  stig?: ImageStigBrief | null;
 }
 
 // ── §12 supply-chain provenance ──────────────────────────────────────────────
@@ -346,6 +355,8 @@ export interface ImageQuery {
   q?: string;
   /** true = only images in the latest done scan, false = only stale ones. */
   current?: boolean;
+  /** §14 (assumed): `evaluated` | `na` | `cat1` (has open CAT I). */
+  stig?: string;
   sort?: string;
   order?: 'asc' | 'desc';
   page?: number;
@@ -489,13 +500,15 @@ export interface ScanCreate {
 }
 
 export interface Scanner {
-  name: ScannerName;
+  name: HealthScannerName;
   enabled: boolean;
   version: string | null;
   dbUpdatedAt: string | null;
   healthy: boolean;
   lastError: string | null;
   lastRunAt: string | null;
+  /** §14 `scap` only. */
+  contentVersions?: ScapContentVersion[];
 }
 
 // ── settings ─────────────────────────────────────────────────────────────────
@@ -503,7 +516,8 @@ export interface Settings {
   scanIntervalHours: number;
   rescanAfterHours: number;
   excludedNamespaces: string[];
-  scanners: Record<ScannerName, boolean>;
+  /** `scap` (§14) is optional: absent on APIs without the SCAP stage. */
+  scanners: Record<ScannerName, boolean> & { scap?: boolean };
   parallelism: number;
   /** read-only */
   adminGroups: string[];
@@ -515,6 +529,29 @@ export interface Settings {
   provenance?: ProvenanceSettings;
   /** §13 */
   controlsEngine?: ControlsEngineSettings;
+  /** §14 */
+  scap?: ScapSettings;
+}
+
+/** §14 `scap` settings. `sources` is read-only here (Helm `scap.content.sources[]`). */
+export interface ScapSettings {
+  sources: ScapContentSource[];
+  preferDisa: boolean;
+  timeoutSeconds: number;
+}
+
+/** API `ScapSource`: `{name, kind (ssg|disa|custom), url, sha256, include[]}`. */
+export interface ScapContentSource {
+  url: string;
+  sha256?: string | null;
+  name?: string | null;
+  kind?: string | null;
+  include?: string[];
+  /** assumed alias of `kind` */
+  source?: string | null;
+  /** assumed: content version (otherwise matched from the `scap` scanner's content list) */
+  version?: string | null;
+  fetchedAt?: string | null;
 }
 
 export type Baseline = 'low' | 'moderate' | 'high';
@@ -704,4 +741,187 @@ export interface StigRule {
   /** count or list of offending workloads (shape assumed; both are rendered). */
   offenders: number | Array<string | StigOffender>;
   checkId?: string | null;
+}
+
+// ── §14 SCAP scanner (product and OS STIGs inside images) ───────────────────
+export type ScapSource = 'disa' | 'ssg';
+export const SCAP_RESULTS = ['pass', 'fail', 'notapplicable', 'notchecked', 'error', 'unknown', 'informational'] as const;
+export type ScapResult = (typeof SCAP_RESULTS)[number];
+/** STIG severity category (CAT I = high). */
+export type ScapCat = 'cat1' | 'cat2' | 'cat3';
+export const SCAP_CATS: ScapCat[] = ['cat1', 'cat2', 'cat3'];
+
+/** `GET /summary` `stig`. `coverage` = share of current images with a benchmark (0–1 or 0–100). */
+export interface StigRollup {
+  evaluated: number;
+  pass: number;
+  fail: number;
+  cat1Open: number;
+  cat2Open: number;
+  cat3Open: number;
+  coverage: number | null;
+  /** API extras: images with no applicable benchmark / no content / errors / not yet evaluated, and their total */
+  notApplicable?: number;
+  noContent?: number;
+  errors?: number;
+  pending?: number;
+  images?: number;
+  score?: number | null;
+}
+
+/** `ImageSummary.stig` (fields beyond `score` assumed and optional). */
+export interface ImageStigBrief {
+  /** evaluated | notApplicable | noContent | error | timeout | notEvaluated */
+  status?: string | null;
+  score: number | null;
+  fidelity?: string | null;
+  error?: string | null;
+  benchmarks?: number;
+  pass?: number;
+  fail?: number;
+  cat1Open?: number;
+  cat2Open?: number;
+  cat3Open?: number;
+}
+
+/** Per-(image, benchmark) summary. */
+export interface ImageStigSummary {
+  benchmark?: string | null;
+  profile?: string | null;
+  pass: number;
+  fail: number;
+  notapplicable: number;
+  notchecked: number;
+  error: number;
+  score: number | null;
+  /** assumed: open (failed) rules per category over the whole benchmark */
+  cat1Open?: number;
+  cat2Open?: number;
+  cat3Open?: number;
+  rootfsFidelity?: string | null;
+  evaluatedAt?: string | null;
+}
+
+export interface ScapRule {
+  ruleId: string;
+  /** V-/SV- id when present */
+  stigId: string | null;
+  cci: string[];
+  severity: ScapCat;
+  result: ScapResult | string;
+  title: string;
+  fixText?: string | null;
+  checkedAt?: string | null;
+}
+
+export interface ImageStigBenchmark {
+  benchmarkId: string;
+  title: string;
+  version: string;
+  source: ScapSource | string;
+  profileId: string;
+  summary: ImageStigSummary;
+  /** one page of rules (`page/pageSize/result/severity/q`) */
+  rules: ScapRule[];
+  /** assumed: rules matching the filters (falls back to `rules.length`) */
+  rulesTotal: number;
+  page: number;
+  pageSize: number;
+  /** assumed: `full` | `degraded` — rootfs extraction kept owner/mode/xattrs or not */
+  rootfsFidelity?: string | null;
+  /** assumed: why fidelity is degraded */
+  rootfsWarnings?: string[];
+  checkedAt?: string | null;
+}
+
+/** `GET /images/{id}/stig`. No benchmarks = no applicable benchmark (`reason` assumed). */
+export interface ImageStig {
+  benchmarks: ImageStigBenchmark[];
+  /** evaluated | notApplicable | noContent | error | timeout | notEvaluated */
+  status?: string | null;
+  /** from `rootfs.fidelity` */
+  rootfsFidelity?: string | null;
+  /** from `rootfs.notes` / `droppedXattrs` */
+  rootfsWarnings?: string[];
+  reason?: string | null;
+}
+
+export interface ImageStigQuery {
+  page?: number;
+  pageSize?: number;
+  /** comma-separated results */
+  result?: string;
+  /** comma-separated cat1|cat2|cat3 */
+  severity?: string;
+  q?: string;
+  /** restrict the response to one benchmark (the UI doesn't send it: it keeps every sub-tab) */
+  benchmark?: string;
+}
+
+/** `GET /stig/benchmarks` row and `/compliance/stig` `product[]` row. */
+export interface StigBenchmark {
+  id: string;
+  title: string;
+  version: string;
+  source: ScapSource | string;
+  profileId?: string | null;
+  imagesEvaluated: number;
+  pass: number;
+  fail: number;
+  notapplicable?: number;
+  notchecked?: number;
+  /** assumed: open rules (failing on ≥1 image) per category */
+  cat1Open?: number;
+  cat2Open?: number;
+  cat3Open?: number;
+}
+
+export interface StigBenchmarkImage {
+  imageId: string;
+  ref: string;
+  result?: ScapResult | string;
+}
+
+/** `GET /stig/benchmarks/{id}/rules` row. */
+export interface StigBenchmarkRule {
+  ruleId: string;
+  stigId: string | null;
+  cat: ScapCat;
+  /** assumed */
+  title?: string | null;
+  failingImages: number;
+  passingImages: number;
+  /** images behind the counts: API `failing[]` (first 50), plus assumed `images[]` / `passing[]` */
+  images: StigBenchmarkImage[];
+  otherImages?: number;
+  /** assumed */
+  cci?: string[];
+  fixText?: string | null;
+}
+
+/** `GET /compliance/stig`: the Kubernetes STIG list plus the §14 `product` rollup. */
+export interface ComplianceStig {
+  kubernetes: StigRule[];
+  /** null = the API has no `product` section */
+  product: StigBenchmark[] | null;
+}
+
+/** `scap` scanner `content[]` entry; `name` = title, else file. */
+export interface ScapContentVersion {
+  name: string;
+  version: string | null;
+  file?: string | null;
+  title?: string | null;
+  source?: string | null;
+  sourceName?: string | null;
+  benchmarkId?: string | null;
+  fetchedAt?: string | null;
+  sha256?: string | null;
+  rules?: number | null;
+}
+
+/** `GET /stig/benchmarks/{id}/rules`: the rule rollup plus the benchmark row. */
+export interface StigBenchmarkRules {
+  benchmark: StigBenchmark | null;
+  rules: StigBenchmarkRule[];
 }

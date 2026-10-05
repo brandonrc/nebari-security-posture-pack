@@ -2,11 +2,13 @@ import { Boxes, SearchX } from 'lucide-react';
 import { Link } from 'react-router';
 import { useImages, useNamespaces } from '@/api/queries';
 import { useCapabilities } from '@/capabilities';
-import type { ImageQuery } from '@/api/types';
+import type { ImageQuery, ImageSummary } from '@/api/types';
 import { EmptyState, ErrorAlert, PageHeader } from '@/components/page';
 import { AgreementDots, GradeBadge, ScannerGlyphs, SeverityChips } from '@/components/posture';
 import { SimpleSelect } from '@/components/simple-select';
 import { DatasetBanner } from '@/components/provenance';
+import { StigScore } from '@/components/stig';
+import { imageStigScore } from '@/lib/stig';
 import { ProvenanceGlyph, SbomGlyph, SignatureGlyph, UpdateIndicator } from '@/components/supply-chain';
 import { Pager, SearchInput, SkeletonRows, SortableHead, StateRow, Toolbar, useUrlState } from '@/components/table-kit';
 import { Badge } from '@/components/ui/badge';
@@ -22,14 +24,38 @@ const SEVERITY_OPTIONS = [
   { value: 'medium', label: 'Medium or worse' },
   { value: 'low', label: 'Low or worse' },
 ];
+const STIG_OPTIONS = [
+  { value: 'evaluated', label: 'STIG evaluated' },
+  { value: 'cat1', label: 'Open CAT I' },
+  { value: 'na', label: 'No benchmark (n/a)' },
+];
+
+function StigCell({ image }: { image: ImageSummary }) {
+  const score = imageStigScore(image);
+  const status = image.stig?.status;
+  if (status === 'error' || status === 'timeout') {
+    return (
+      <Link to={`/images/${encodeURIComponent(image.id)}?tab=stig`} className="text-warning-foreground text-xs underline-offset-4 hover:underline" title={image.stig?.error ?? `SCAP ${status}`}>
+        {status}
+      </Link>
+    );
+  }
+  if (score === null || score === undefined) return <StigScore score={null} />;
+  return (
+    <Link to={`/images/${encodeURIComponent(image.id)}?tab=stig`} className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Open the STIG tab">
+      <StigScore score={score} />
+    </Link>
+  );
+}
 
 export function ImagesPage() {
-  const [state, update] = useUrlState({ namespace: '', grade: '', severity: '', q: '', sort: 'score', order: 'asc', page: '1', pageSize: '50' });
+  const [state, update] = useUrlState({ namespace: '', grade: '', severity: '', stig: '', q: '', sort: 'score', order: 'asc', page: '1', pageSize: '50' });
   const query: ImageQuery = {
     namespace: state.namespace || undefined,
     grade: state.grade || undefined,
     severity: state.severity || undefined,
     q: state.q || undefined,
+    stig: state.stig || undefined,
     sort: state.sort,
     order: state.order === 'desc' ? 'desc' : 'asc',
     page: Number(state.page) || 1,
@@ -38,9 +64,11 @@ export function ImagesPage() {
   const { data, error, isLoading, isFetching, refetch } = useImages(query);
   // provenance mode: supply-chain columns only (no scanner findings); grade = supply-chain grade
   const pv = useCapabilities().mode === 'provenance';
-  const COLS = pv ? 8 : 12;
+  // §14 STIG column: only when the API serves `stig` on images (null = n/a, absent = pre-§14)
+  const showStig = !pv && Boolean(state.stig || state.sort === 'stig' || data?.items.some((i) => i.stig !== undefined));
+  const COLS = (pv ? 8 : 12) + (showStig ? 1 : 0);
   const namespaces = useNamespaces();
-  const filtered = Boolean(state.namespace || state.grade || state.severity || state.q);
+  const filtered = Boolean(state.namespace || state.grade || state.severity || state.stig || state.q);
   const onSort = (sort: string, order: 'asc' | 'desc') => update({ sort, order });
 
   return (
@@ -70,8 +98,9 @@ export function ImagesPage() {
             {pv ? null : (
               <SimpleSelect ariaLabel="Severity" allLabel="Any severity" value={state.severity} onChange={(severity) => update({ severity })} options={SEVERITY_OPTIONS} />
             )}
+            {showStig ? <SimpleSelect ariaLabel="STIG" allLabel="Any STIG status" value={state.stig} onChange={(stig) => update({ stig })} options={STIG_OPTIONS} /> : null}
             {filtered ? (
-              <Button variant="ghost" size="sm" onClick={() => update({ namespace: '', grade: '', severity: '', q: '' })}>
+              <Button variant="ghost" size="sm" onClick={() => update({ namespace: '', grade: '', severity: '', stig: '', q: '' })}>
                 Clear filters
               </Button>
             ) : null}
@@ -92,6 +121,7 @@ export function ImagesPage() {
                     <SortableHead label="Agreement" field="agreement" sort={state.sort} order={state.order} onSort={onSort} />
                   </>
                 )}
+                {showStig ? <SortableHead label="STIG" field="stig" sort={state.sort} order={state.order} onSort={onSort} /> : null}
                 <TableHead className="px-2 text-center" title="Signature (cosign)">Signed</TableHead>
                 <TableHead className="px-2 text-center" title="SBOM attestation">SBOM</TableHead>
                 <TableHead className="px-2 text-center" title="SLSA provenance attestation">Provenance</TableHead>
@@ -149,6 +179,11 @@ export function ImagesPage() {
                         </TableCell>
                       </>
                     )}
+                    {showStig ? (
+                      <TableCell className="px-3 py-2" data-testid="stig-cell">
+                        <StigCell image={image} />
+                      </TableCell>
+                    ) : null}
                     <TableCell className="px-2 py-2 text-center">
                       <SignatureGlyph provenance={image.provenance} />
                     </TableCell>

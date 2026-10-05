@@ -688,3 +688,56 @@ short-lived verify pods.
   - `build:mock-preview` now also builds `dist-mock-provenance`, so the CI e2e job runs the new
     `playwright/provenance.spec.ts`, a second Playwright project on `PORT+1`, without a workflow
     change.
+
+## 2026-10-05: UI for the SCAP scanner (DESIGN §14)
+
+- **Where.** Image detail gets a **STIG** tab (posture mode only; a `?tab=stig` deep link falls
+  back in provenance mode). Compliance → STIG shows "Kubernetes STIG" (unchanged) above a new
+  "Product STIGs" rollup (`#product-stigs`), each row linking to the new route
+  `/stig/benchmarks/:id` (gated on the `compliance` feature, so provenance mode redirects).
+  The Overview gets a Product STIGs tile (from `summary.stig`, hidden when absent) and an
+  OpenSCAP scanner card. The Images table gets a sortable STIG column plus a STIG filter, shown
+  only when the API serves `stig` on images. Settings gets a SCAP card, shown only when the API
+  returns `scap` or `scanners.scap`.
+- **Shapes read** (aligned with `api/src/posture/routers/stig.py`, 5aed1b8). Everything goes
+  through `ui/src/api/normalize.ts`, so missing or malformed fields degrade to empty states:
+  - `GET /compliance/stig` is `{items, product: {benchmarks[], ...summary}}`. The pre-§14 bare
+    list, `{kubernetes, product[]}` and `product: {items}` are also accepted. When `product` is
+    missing, the rollup falls back to `GET /stig/benchmarks`. Rows with `id: null` (content that
+    applies to no image) are not listed.
+  - `GET /images/{id}/stig`: the image-level `status` (`evaluated | notApplicable | noContent |
+    error | timeout | notEvaluated`) picks the empty state when `benchmarks` is empty. Rootfs
+    fidelity comes from `benchmarks[].summary.rootfsFidelity`, then `rootfs.fidelity`. Warnings
+    come from `rootfs.notes` and the `droppedXattrs` / `skippedDevices` / `unsafeEntries`
+    counts. The tab shows sub-tabs from `benchmarks[]` and never sends `?benchmark=`, because
+    the API would then drop the other benchmarks. `page/pageSize/result/severity/q` apply to
+    every benchmark alike.
+  - `GET /stig/benchmarks/{id}/rules` is `{benchmark, items, total}`. The page fetches every
+    rule, in pages of 500 (up to 10 pages), and filters client-side (search, CAT, failing only).
+    It lists the images behind a rule from `failing[]`; the API caps that list at 50, and the UI
+    says so when there are more.
+  - `GET /scanners`: the `scap` entry's `content[]` (title/file, version, source, sourceName,
+    fetchedAt) is shown as content versions. The summary doesn't list `scap`, so the Overview
+    adds the `scap` card from `/scanners` when it is enabled.
+  - `summary.stig.coverage` is read as a percentage, or as a fraction when it is 1 or less.
+- **Field names assumed beyond §14** (all optional; none is required to render):
+  `ImageSummary.stig.{status, fidelity, error}` (served), `ImageStigSummary.cat{1,2,3}Open`
+  (served; when absent the chips are counted from the rules, but only if the whole benchmark
+  fits on one page), `StigBenchmark.cat{1,2,3}Open` (served), and `StigBenchmarkRule.title`
+  (served), `.cci` and `.fixText` (not served; used when present). Also `images[]` / `passing[]`
+  and arrays in `failingImages` / `passingImages` (not served; accepted). `ScapContentSource
+  .version/.fetchedAt` are not served; versions are matched from the scanner `content[]` by
+  `sourceName` (or file name), and a source with several datastreams lists each version.
+  Open CAT counts are failing (image, rule) pairs, the same as the API's `cat1Open`.
+- **API gap (for the backend).** `GET /images` ignores the UI's `sort=stig` (it falls back to
+  the score sort) and the `stig=evaluated|na|cat1` filter. The column and filter render, and the
+  MSW mock implements both, but against the real API they have no effect until `SORT_KEYS`
+  gains `stig` (by `stig.score`, n/a last) and `filter_images` gains `stig`.
+- **Bug fix on the way.** `normalize.imageSummary` turned the posture API's integer image ids into
+  `''` (the defensive `str()` accepted strings only), which broke image links against the real
+  API. Ids now go through `idStr()`, which keeps numbers as strings.
+- **Mock.** `ui/src/mocks/scap.ts` has its own seeded PRNG, so the existing fixtures are
+  unchanged. It has three benchmarks of 30 rules each: RHEL 9 (DISA V2R5), Ubuntu 22.04 (SSG
+  0.1.76) and PostgreSQL 15 (DISA V1R2). Eight images have results: `security-posture-api`
+  has two benchmarks, and calico/node has a degraded rootfs. The other 19 images are n/a.
+  `/stig/benchmarks` also lists one content-only entry with `id: null`.

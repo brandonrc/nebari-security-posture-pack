@@ -71,7 +71,9 @@ BuildKit SBOM + SLSA v0.2 but no signature, a signed-but-unverified Bitnami imag
 third-party images, one private image whose checks couldn't run) with patch/minor/major updates, and 12
 Helm releases (deployed / failed / pending-upgrade). §13: 33 assertions across pass / fail / unknown /
 not-applicable with realistic evidence JSON, and a 79-control 800-53 rev5 slice over 13 families whose
-statuses derive from the assertions (plus inherited and tailored-out controls). `POST /scans` progresses over ~30 s (live progress + toast);
+statuses derive from the assertions (plus inherited and tailored-out controls). §14: three SCAP
+benchmarks (RHEL 9 DISA, Ubuntu 22.04 SSG, PostgreSQL 15 DISA; 30 rules each) evaluated on eight
+images (one with two benchmarks, one with a degraded rootfs), the rest "n/a". `POST /scans` progresses over ~30 s (live progress + toast);
 `POST /reports` completes after ~5 s; `POST /compliance/assertions/run` finishes after ~4 s (the
 Compliance page polls and toasts); `PUT /settings` persists in memory.
 Append `?mockAuth=401` or `?mockAuth=403` to any URL to see the session-expired / admins-only screens.
@@ -220,6 +222,9 @@ The contract leaves these open; the UI uses the names below and reads every one 
 | Settings `provenance` | flat, matching the API model: `{enabled, verifySignatures, cosignPublicKey, cosignCertificateIdentityRegexp, cosignCertificateOidcIssuerRegexp, checkSbom, checkProvenance, checkUpdates, updateLevel, skipPrerelease, helmReleases (bool), recheckHours}` | Missing keys get defaults before editing. Key vs keyless is a UI-only choice: key mode = non-empty `cosignPublicKey` (required when chosen); switching to keyless clears it. |
 | Settings `controlsEngine` | `{enabled (read-only, Helm), baseline, adminSubjects[]}` | Baseline drives the Controls coverage tile ("x/y (moderate baseline)"). |
 | Reports | types `oscal-ssp`, `oscal-component-definition` | Listed from `/reports/types` like every other type; "Compliance package" queues `poam.xlsx`, `stig-checklist.cklb`, `sar.pdf`, `oscal-ar.json`, `oscal-ssp.json` (cluster scope), skipping any the API doesn't offer. |
+
+§14 SCAP field names and fallbacks are listed in `../docs/DECISIONS.md` (2026-10-05, "UI for the
+SCAP scanner"); every view is posture-mode only and hidden when the API serves no SCAP data.
 
 The Control catalog is composed from table-kit + the Nebari `Table` primitives rather than
 `DataTable`, because the vendored DataTable has no row-expansion slot.

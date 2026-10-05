@@ -24,6 +24,7 @@ import {
 } from './fixtures';
 import { assertions, resetAssertionRun, setAssertionRunAt } from './controls';
 import { helmReleases } from './provenance';
+import { defaultScapSettings, imageStigBrief, imageStigResponse, scapScannerHealth, stigBenchmarkCatalogue, stigBenchmarkRollup, stigBenchmarkRules, stigRollup } from './scap';
 
 /**
  * MSW handlers mirroring DESIGN §5/§11. Mutable state (scans, reports,
@@ -44,7 +45,8 @@ function settleAssertionRun() {
   }
 }
 
-let settings: Settings = structuredClone(defaultSettings);
+const seedSettings = (): Settings => ({ ...structuredClone(defaultSettings), scanners: { ...defaultSettings.scanners, scap: true }, scap: structuredClone(defaultScapSettings) });
+let settings: Settings = seedSettings();
 const scans: Scan[] = structuredClone(seedScans);
 const reports: Report[] = structuredClone(seedReports);
 const reportStarted = new Map<string, number>([['rpt-0007', Date.now()]]);
@@ -52,7 +54,7 @@ const scanStarted = new Map<string, number>();
 const cancelled = new Set<string>();
 
 export function resetMockState() {
-  settings = structuredClone(defaultSettings);
+  settings = seedSettings();
   scans.splice(0, scans.length, ...structuredClone(seedScans));
   reports.splice(0, reports.length, ...structuredClone(seedReports));
   reportStarted.clear();
@@ -134,6 +136,8 @@ function sortImages(items: ImageSummary[], sort: string, order: 'asc' | 'desc') 
         return i.workloads;
       case 'lastScannedAt':
         return i.lastScannedAt ?? '';
+      case 'stig':
+        return i.stig?.score ?? -1;
       default:
         return i.score ?? -1;
     }
@@ -146,7 +150,7 @@ function sortImages(items: ImageSummary[], sort: string, order: 'asc' | 'desc') 
 }
 
 function summaryOf({ findings: _f, usedBy: _u, scans: _s, postureFindings: _p, ...rest }: (typeof images)[number]): ImageSummary {
-  return rest;
+  return { ...rest, stig: imageStigBrief(rest.id) };
 }
 
 const UNPAGED_FINDINGS_LIMIT = 500;
@@ -226,6 +230,8 @@ export const handlers = [
 
   http.get(`${API}/summary`, () => {
     const summary = buildSummary();
+    // like the API: `stig` rollup on /summary; the `scap` scanner is only listed by /scanners
+    summary.stig = stigRollup();
     const latest = scans[scans.length - 1];
     advanceScan(latest);
     summary.lastScan = {
@@ -260,13 +266,31 @@ export const handlers = [
     if (q) items = items.filter((i) => i.ref.toLowerCase().includes(q) || (i.digest ?? '').includes(q));
     const current = url.searchParams.get('current');
     if (current !== null) items = items.filter((i) => (i.current !== false) === (current === 'true'));
+    const stig = url.searchParams.get('stig');
+    if (stig === 'evaluated') items = items.filter((i) => i.stig);
+    else if (stig === 'na') items = items.filter((i) => !i.stig);
+    else if (stig === 'cat1') items = items.filter((i) => (i.stig?.cat1Open ?? 0) > 0);
     items = sortImages(items, sort, order);
     return HttpResponse.json({ items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, pageSize });
   }),
 
   http.get(`${API}/images/:id`, ({ params, request }) => {
     const image = images.find((i) => i.id === params.id);
-    return image ? HttpResponse.json(imageWithFindingsPage(image, new URL(request.url).searchParams)) : HttpResponse.json({ detail: 'image not found' }, { status: 404 });
+    return image ? HttpResponse.json({ ...imageWithFindingsPage(image, new URL(request.url).searchParams), stig: imageStigBrief(image.id) }) : HttpResponse.json({ detail: 'image not found' }, { status: 404 });
+  }),
+  http.get(`${API}/images/:id/stig`, ({ params, request }) => {
+    if (!images.some((i) => i.id === params.id)) return HttpResponse.json({ detail: 'image not found' }, { status: 404 });
+    return HttpResponse.json(imageStigResponse(String(params.id), new URL(request.url).searchParams));
+  }),
+  http.get(`${API}/stig/benchmarks`, () => HttpResponse.json(stigBenchmarkCatalogue())),
+  http.get(`${API}/stig/benchmarks/:id/rules`, ({ params, request }) => {
+    const rules = stigBenchmarkRules(String(params.id));
+    if (!rules) return HttpResponse.json({ detail: 'benchmark not evaluated on any image' }, { status: 404 });
+    const url = new URL(request.url);
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1);
+    const pageSize = Math.min(500, Math.max(1, Number(url.searchParams.get('pageSize') ?? 100) || 100));
+    const benchmark = stigBenchmarkRollup().find((b) => b.id === params.id) ?? null;
+    return HttpResponse.json({ benchmark, items: rules.slice((page - 1) * pageSize, page * pageSize), total: rules.length, page, pageSize });
   }),
 
   http.get(`${API}/vulnerabilities`, ({ request }) => {
@@ -364,7 +388,7 @@ export const handlers = [
 
   http.get(`${API}/scanners`, () =>
     HttpResponse.json(
-      scannerHealth.map((s) => ({ ...s, enabled: settings.scanners[s.name], lastRunAt: scans[scans.length - 1].finishedAt })),
+      [...scannerHealth, scapScannerHealth].map((s) => ({ ...s, enabled: Boolean(settings.scanners[s.name as keyof Settings['scanners']]), lastRunAt: scans[scans.length - 1].finishedAt })),
     ),
   ),
 
@@ -450,7 +474,7 @@ export const handlers = [
       { headers: { 'Content-Disposition': `attachment; filename="${image.repository.split('/').pop()}.sbom.json"` } },
     );
   }),
-  http.get(`${API}/compliance/stig`, () => HttpResponse.json(stigRules())),
+  http.get(`${API}/compliance/stig`, () => HttpResponse.json({ items: stigRules(), product: { benchmarks: stigBenchmarkRollup(), ...stigRollup() } })),
 
   http.get(`${API}/export`, ({ request }) => {
     const format = new URL(request.url).searchParams.get('format') ?? 'json';

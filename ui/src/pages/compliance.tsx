@@ -7,6 +7,7 @@ import { useControls, useFamilies, useSettings, useStig, useSummary } from '@/ap
 import type { Baseline, Severity, StigOffender, StigRule } from '@/api/types';
 import { ControlsTable } from '@/components/controls-table';
 import { FamilyRollupChart } from '@/components/family-rollup';
+import { ProductStigs } from '@/components/product-stigs';
 import { CardsSkeleton, ErrorAlert, errorMessage, PageHeader } from '@/components/page';
 import { StatusBadge } from '@/components/posture';
 import { useUrlState } from '@/components/table-kit';
@@ -243,7 +244,16 @@ function ControlsTab() {
 
 function StigTab() {
   const stig = useStig();
-  const rules = stig.data ?? [];
+  return (
+    <div className="mt-2 flex flex-col gap-4">
+      <KubernetesStig stig={stig} />
+      <ProductStigs product={stig.error ? null : stig.data?.product} loading={stig.isLoading} />
+    </div>
+  );
+}
+
+function KubernetesStig({ stig }: { stig: ReturnType<typeof useStig> }) {
+  const rules = stig.data?.kubernetes ?? [];
   const openBy = (cat: 'I' | 'II' | 'III') => rules.filter((r) => r.status === 'Open' && normCat(String(r.cat)) === cat).length;
   const counts = {
     open: rules.filter((r) => r.status === 'Open').length,
@@ -251,7 +261,7 @@ function StigTab() {
     nr: rules.filter((r) => r.status === 'Not_Reviewed').length,
   };
   return (
-    <Card className="mt-2">
+    <Card>
       <CardHeader>
         <CardTitle>Kubernetes STIG</CardTitle>
         <CardDescription>
@@ -334,7 +344,7 @@ export function CompliancePage() {
     <>
       <PageHeader
         title="Compliance"
-        description="NIST 800-53 control implementation with live evidence, Kubernetes STIG rollup and remediation SLA status."
+        description="NIST 800-53 control implementation with live evidence, Kubernetes and product STIG rollups and remediation SLA status."
         actions={
           <Button variant="outline" onClick={run.start} loading={run.running} loadingText="Running assertions…">
             <Play />

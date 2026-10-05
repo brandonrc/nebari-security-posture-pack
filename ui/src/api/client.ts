@@ -6,6 +6,12 @@ import type { PcMe, PcProvenanceReport, PcReportEntry, PcScanResponse } from './
 import type {
   Assertion,
   AssertionRun,
+  ComplianceStig,
+  ImageStig,
+  ImageStigQuery,
+  StigBenchmark,
+  StigBenchmarkRule,
+  StigBenchmarkRules,
   CheckDetail,
   FamiliesRollup,
   FamilyRollup,
@@ -28,7 +34,6 @@ import type {
   ScanDetail,
   Scanner,
   Settings,
-  StigRule,
   Summary,
   VulnDetail,
   VulnList,
@@ -214,7 +219,7 @@ export const api = {
   startScan: (body: ScanCreate = {}) => request<Scan>('POST', '/scans', { body }),
   cancelScan: (id: string | number) => request<unknown>('DELETE', `/scans/${encodeURIComponent(String(id))}`),
 
-  scanners: async () => asArray(await request<Scanner[] | { items: Scanner[] }>('GET', '/scanners')),
+  scanners: async () => asArray(await request<Scanner[] | { items: Scanner[] }>('GET', '/scanners')).map((x) => normalize.scanner<Scanner>(x)),
 
   settings: async (): Promise<Settings> => normalize.settings(await request<unknown>('GET', '/settings')),
   saveSettings: (settings: Settings) => request<Settings>('PUT', '/settings', { body: settings }),
@@ -240,7 +245,25 @@ export const api = {
     isProvenanceMode() ? (await dataset()).supplyChain : normalize.supplyChain(await request<unknown>('GET', '/supply-chain')),
   helmReleases: async () => isProvenanceMode() ? (await dataset()).helmReleases : asArray(await request<HelmRelease[] | { items: HelmRelease[] }>('GET', '/helm-releases')),
 
-  complianceStig: async () => asArray(await request<StigRule[] | { items: StigRule[] }>('GET', '/compliance/stig')),
+  complianceStig: async (): Promise<ComplianceStig> => normalize.complianceStig(await request<unknown>('GET', '/compliance/stig')),
+
+  // §14 SCAP
+  imageStig: async (id: string, query: ImageStigQuery = {}): Promise<ImageStig> =>
+    normalize.imageStig(await request<unknown>('GET', `/images/${encodeURIComponent(id)}/stig`, { params: { ...query } })),
+  stigBenchmarks: async (): Promise<StigBenchmark[]> =>
+    asArray(await request<unknown[] | { items: unknown[] }>('GET', '/stig/benchmarks')).map(normalize.stigBenchmark),
+  /** Every rule of a benchmark (the API pages at most 500 per request; the page filters client-side). */
+  stigBenchmarkRules: async (id: string): Promise<StigBenchmarkRules> => {
+    const path = `/stig/benchmarks/${encodeURIComponent(id)}/rules`;
+    const first = normalize.stigBenchmarkRules(await request<unknown>('GET', path, { params: { page: 1, pageSize: 500 } }));
+    const rules: StigBenchmarkRule[] = [...first.rules];
+    for (let page = 2; rules.length < first.total && page <= 10; page += 1) {
+      const next = normalize.stigBenchmarkRules(await request<unknown>('GET', path, { params: { page, pageSize: 500 } }));
+      if (!next.rules.length) break;
+      rules.push(...next.rules);
+    }
+    return { benchmark: first.benchmark, rules };
+  },
 
   exportUrl: (format: 'json' | 'csv') => apiUrl('/export', { format }),
 };

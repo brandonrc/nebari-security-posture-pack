@@ -15,6 +15,7 @@ const ROUTES = [
   '/',
   '/images',
   '/images/img-001',
+  '/images/img-001?tab=stig',
   '/vulnerabilities',
   '/vulnerabilities/CVE-2024-0001',
   '/workloads',
@@ -26,6 +27,8 @@ const ROUTES = [
   '/scans/1',
   '/reports',
   '/compliance',
+  '/compliance?tab=stig',
+  '/stig/benchmarks/disa-rhel9',
   '/settings',
   '/no-such-page',
 ] as const;

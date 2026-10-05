@@ -2,7 +2,10 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, Minus, ServerCrash, ShieldChe
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
-import { useControls, useFamilies, useSettings, useSummary, useSupplyChain } from '@/api/queries';
+import { useControls, useFamilies, useScanners, useSettings, useSummary, useSupplyChain } from '@/api/queries';
+import { PRODUCT_STIGS_HREF } from '@/components/product-stigs';
+import { CatOpenChips, StigResultBar } from '@/components/stig';
+import { coveragePct, SOURCE_LABEL } from '@/lib/stig';
 import { ROLLUP_SERIES, ROLLUP_STATUS } from '@/components/family-rollup';
 import type { Baseline } from '@/api/types';
 import { applicableTotal, complianceTotals, totalsByStatus } from '@/lib/controls';
@@ -113,14 +116,18 @@ function SeverityTiles({ summary }: { summary: Summary }) {
   );
 }
 
+const scannerLabel = (name: string) => (name === 'scap' ? 'OpenSCAP' : (SCANNER_LABEL[name as keyof typeof SCANNER_LABEL] ?? name));
+
 function ScannerCard({ scanner }: { scanner: ScannerHealth }) {
   const age = ageHours(scanner.dbUpdatedAt);
-  const stale = age !== null && age > 72;
+  const scap = scanner.name === 'scap';
+  // SCAP content is refreshed daily; benchmarks themselves change quarterly
+  const stale = age !== null && age > (scap ? 24 * 8 : 72);
   return (
-    <Card size="sm">
+    <Card size="sm" data-testid={`scanner-${scanner.name}`}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          {SCANNER_LABEL[scanner.name]}
+          {scannerLabel(scanner.name)}
           {scanner.version ? <span className="font-mono font-normal text-muted-foreground text-xs">v{scanner.version}</span> : null}
         </CardTitle>
         <CardAction>
@@ -135,12 +142,86 @@ function ScannerCard({ scanner }: { scanner: ScannerHealth }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-1 text-sm">
         <span className={cn('tabular-nums', stale ? 'text-warning-foreground' : 'text-muted-foreground')}>
-          Vulnerability DB {formatAge(scanner.dbUpdatedAt)}
+          {scap ? 'SCAP content fetched' : 'Vulnerability DB'} {formatAge(scanner.dbUpdatedAt)}
           {stale ? ' · stale' : ''}
         </span>
+        {scap && scanner.contentVersions?.length ? (
+          <ul className="flex flex-col gap-0.5 text-xs" aria-label="SCAP content versions">
+            {scanner.contentVersions.map((c) => (
+              <li key={`${c.name}-${c.version ?? ''}`} className="flex min-w-0 items-center gap-1.5">
+                {c.source ? <span className="font-mono text-[10px] text-muted-foreground">{SOURCE_LABEL(c.source)}</span> : null}
+                <span className="truncate" title={c.name}>{c.name}</span>
+                {c.version ? <span className="ml-auto shrink-0 font-mono text-muted-foreground">{c.version}</span> : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {scanner.lastError ? <span className="line-clamp-2 text-destructive-foreground text-xs" title={scanner.lastError}>{scanner.lastError}</span> : null}
       </CardContent>
     </Card>
+  );
+}
+
+/** §14 product/OS STIG tile (`summary.stig`); hidden when the API has no SCAP rollup. */
+function StigTile({ summary }: { summary: Summary }) {
+  const stig = summary.stig;
+  if (!stig) return null;
+  const cov = coveragePct(stig.coverage);
+  return (
+    <Card data-testid="stig-tile">
+      <CardHeader>
+        <CardTitle>Product STIGs</CardTitle>
+        <CardDescription>OS and product STIGs evaluated inside images (OpenSCAP)</CardDescription>
+        <CardAction>
+          <Button variant="ghost" size="sm" render={<Link to={PRODUCT_STIGS_HREF} />}>
+            Benchmarks
+            <ArrowRight />
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <Link to={PRODUCT_STIGS_HREF} className="rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" aria-label={`${stig.evaluated} images evaluated against a STIG benchmark`}>
+            <span className="font-semibold text-3xl tabular-nums">{stig.evaluated}</span>
+            <span className="ml-2 text-muted-foreground text-sm">images evaluated{cov !== null ? ` · ${cov.toFixed(0)}% coverage` : ''}</span>
+          </Link>
+          <div className="flex flex-col">
+            <span className="text-muted-foreground text-xs">Open CAT I</span>
+            <span className={cn('font-semibold text-3xl tabular-nums', stig.cat1Open ? 'text-destructive-foreground' : 'text-success-foreground')} data-testid="stig-cat1">
+              {stig.cat1Open}
+            </span>
+          </div>
+        </div>
+        <StigResultBar counts={stig} legend={false} />
+        <div className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs tabular-nums">
+          <CatOpenChips cat1={stig.cat1Open} cat2={stig.cat2Open} cat3={stig.cat3Open} />
+          <span>
+            {stig.pass.toLocaleString()} pass · {stig.fail.toLocaleString()} fail
+            {stig.notApplicable ? ` · ${stig.notApplicable} images not applicable` : ''}
+            {stig.errors ? ` · ${stig.errors} errors` : ''}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Summary scanners plus `scap` from `GET /scanners` when the summary doesn't carry it. */
+function useScannerCards(summary: Summary): ScannerHealth[] {
+  const hasScap = summary.scanners.some((s) => s.name === 'scap');
+  const scanners = useScanners(!hasScap);
+  const scap = hasScap ? undefined : scanners.data?.find((s) => s.name === 'scap' && s.enabled);
+  return scap ? [...summary.scanners, scap] : summary.scanners;
+}
+
+function ScannerCards({ summary }: { summary: Summary }) {
+  const cards = useScannerCards(summary);
+  return (
+    <div className={cn('grid gap-4', cards.length > 3 ? 'md:grid-cols-2 xl:grid-cols-4' : 'md:grid-cols-3')}>
+      {cards.map((s) => (
+        <ScannerCard key={s.name} scanner={s} />
+      ))}
+    </div>
   );
 }
 
@@ -388,13 +469,10 @@ export function OverviewPage() {
           <div className="grid gap-4 xl:grid-cols-2 empty:hidden">
             <SupplyChainTile />
             <ControlsTile />
+            <StigTile summary={summary} />
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            {summary.scanners.map((s) => (
-              <ScannerCard key={s.name} scanner={s} />
-            ))}
-          </div>
+          <ScannerCards summary={summary} />
 
           <div className="grid gap-4 xl:grid-cols-2">
             <Card>
