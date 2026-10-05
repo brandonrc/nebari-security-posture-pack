@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -18,6 +18,19 @@ def _split(value: object) -> list[str]:
 
 
 CsvList = Annotated[list[str], NoDecode]
+
+# ComplianceAsCode / SSG release (BSD-3-Clause), pinned by the sha256 GitHub publishes for the asset.
+# Only the datastreams named in `include` are kept on the content volume (~150 MB).
+SSG_VERSION = "0.1.82"
+DEFAULT_SCAP_SOURCES: list[dict[str, Any]] = [{
+    "name": "ssg", "kind": "ssg",
+    "url": f"https://github.com/ComplianceAsCode/content/releases/download/v{SSG_VERSION}/"
+           f"scap-security-guide-{SSG_VERSION}.zip",
+    "sha256": "765e84bdce7f9055f9b9c2dd0ee2b713d4255f8eec94eac6d35ea4973c28919c",
+    "include": ["ssg-debian11-ds.xml", "ssg-debian12-ds.xml", "ssg-debian13-ds.xml", "ssg-ubuntu2204-ds.xml",
+                "ssg-ubuntu2404-ds.xml", "ssg-rhel8-ds.xml", "ssg-rhel9-ds.xml", "ssg-rhel10-ds.xml",
+                "ssg-al2023-ds.xml", "ssg-sle15-ds.xml", "ssg-fedora-ds.xml"],
+}]
 
 
 class Settings(BaseSettings):
@@ -133,6 +146,35 @@ class Settings(BaseSettings):
     @classmethod
     def _controls_csv(cls, v: object) -> list[str]:
         return _split(v)
+
+    # SCAP scanner (DESIGN §14, posture.scap): product / OS STIGs inside images with OpenSCAP
+    scanners_scap_enabled: bool = False  # default for settings scanners.scap
+    scap_embedded: bool = False  # run the scap stage inside the scan worker (dev; degraded rootfs fidelity)
+    scap_content_dir: str = ""  # "" = CACHE_DIR/scap-content
+    scap_work_dir: str = ""  # rootfs + oscap scratch; "" = CACHE_DIR/scap
+    # [{name, kind: ssg|disa|custom, url, sha256, include: [globs]}] as JSON; default: the pinned SSG release
+    scap_content_sources: list[dict[str, Any]] | None = None
+    scap_disa_urls: list[Any] = []  # [{url, sha256, name?, include?}] (kind disa) as JSON
+    scap_content_offline: bool = False  # air-gapped: never fetch, index SCAP_CONTENT_DIR only
+    scap_content_refresh_hours: float = 24
+    scap_prefer_disa: bool = True
+    scap_timeout_seconds: int = 900  # per image (all its benchmarks)
+    scap_max_rootfs_gb: float = 10
+    scap_finalize_wait_seconds: float = 600  # privileged worker waits this long for a queued scap stage
+    scap_skip_validation: bool = False  # oscap --skip-valid
+    scap_benchmarks_file: str = ""  # extra os-release/product -> benchmark candidates (benchmarks.yaml format)
+    oscap_bin: str = "oscap"
+    oscap_chroot_bin: str = "oscap-chroot"
+
+    @field_validator("scap_content_sources", "scap_disa_urls", mode="before")
+    @classmethod
+    def _scap_json(cls, v: object) -> object:
+        if isinstance(v, str):
+            import json
+
+            t = v.strip()
+            return json.loads(t) if t else []
+        return v
 
     # misc
     cache_dir: str = "/cache"
@@ -260,6 +302,25 @@ class Settings(BaseSettings):
             return "off"
         return mode if mode in ("registry", "local", "off") else "local"
     # <<< operations / scale (properties)
+
+    @property
+    def scap_content_path(self) -> str:
+        import os
+
+        return self.scap_content_dir or os.path.join(self.cache_dir, "scap-content")
+
+    @property
+    def scap_work_path(self) -> str:
+        import os
+
+        return self.scap_work_dir or os.path.join(self.cache_dir, "scap")
+
+    @property
+    def scap_sources(self) -> list[dict[str, Any]]:
+        """Content sources: SCAP_CONTENT_SOURCES (default: the pinned SSG release) + SCAP_DISA_URLS."""
+        base = DEFAULT_SCAP_SOURCES if self.scap_content_sources is None else self.scap_content_sources
+        disa = [{"kind": "disa", **({"url": d} if isinstance(d, str) else d)} for d in self.scap_disa_urls]
+        return [dict(x) for x in base] + disa
 
 
 @lru_cache

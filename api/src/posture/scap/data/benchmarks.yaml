@@ -1,0 +1,155 @@
+# os-release / product detection -> candidate SCAP benchmarks (DESIGN §14).
+#
+# A candidate applies when every key of `match` matches (regular expressions, `re.search`,
+# case-insensitive):
+#   os.id         os-release ID              os.versionId  os-release VERSION_ID
+#   os.idLike     any of ID_LIKE             product       a detected product name (detect.PRODUCTS)
+#   productVersion the detected product version
+# For each candidate the content catalogue is searched for a datastream whose file name matches
+# one of `datastreams` (glob, first hit wins) and whose benchmark offers one of `profiles` (first
+# hit wins). `source` orders candidates: with scap.preferDisa (default) a DISA benchmark that
+# applies is evaluated instead of the SSG one for the same `family`; otherwise SSG wins. Both
+# are never evaluated for one family.
+#
+# SSG = ComplianceAsCode content (BSD, GitHub releases). DISA = public.cyber.mil SCAP 1.3
+# benchmarks (U_*_STIG_SCAP_1-3_Benchmark.zip), fetched only when configured (scap.disa.urls).
+# Alpine, distroless, scratch and busybox have no SCAP content: those images are reported as
+# `notApplicable`, which is the honest answer.
+candidates:
+  # ---------------------------------------------------------------- Red Hat family
+  - key: disa-rhel9
+    family: rhel9
+    source: disa
+    title: DISA RHEL 9 STIG (SCAP benchmark)
+    match: {os.id: "^(rhel|redhat|centos|rocky|almalinux|ol)$", os.versionId: "^9(\\.|$)"}
+    datastreams: ["U_RHEL_9_*STIG_SCAP_1-3_Benchmark.xml", "U_RHEL_9_*Benchmark*.xml"]
+    profiles: ["xccdf_mil.disa.stig_profile_MAC-1_Classified", "xccdf_mil.disa.stig_profile_MAC-1_Public"]
+  - key: ssg-rhel9
+    family: rhel9
+    source: ssg
+    title: ComplianceAsCode RHEL 9 (DISA STIG profile)
+    match: {os.id: "^(rhel|redhat|centos|rocky|almalinux|ol)$", os.versionId: "^9(\\.|$)"}
+    datastreams: ["ssg-rhel9-ds.xml", "ssg-cs9-ds.xml", "ssg-almalinux9-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_stig", "xccdf_org.ssgproject.content_profile_cis_server_l1",
+               "xccdf_org.ssgproject.content_profile_standard"]
+  - key: disa-rhel8
+    family: rhel8
+    source: disa
+    title: DISA RHEL 8 STIG (SCAP benchmark)
+    match: {os.id: "^(rhel|redhat|centos|rocky|almalinux|ol)$", os.versionId: "^8(\\.|$)"}
+    datastreams: ["U_RHEL_8_*STIG_SCAP_1-3_Benchmark.xml"]
+    profiles: ["xccdf_mil.disa.stig_profile_MAC-1_Classified", "xccdf_mil.disa.stig_profile_MAC-1_Public"]
+  - key: ssg-rhel8
+    family: rhel8
+    source: ssg
+    title: ComplianceAsCode RHEL 8 (DISA STIG profile)
+    match: {os.id: "^(rhel|redhat|centos|rocky|almalinux|ol)$", os.versionId: "^8(\\.|$)"}
+    datastreams: ["ssg-rhel8-ds.xml", "ssg-centos8-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_stig", "xccdf_org.ssgproject.content_profile_cis_server_l1"]
+  - key: ssg-rhel10
+    family: rhel10
+    source: ssg
+    title: ComplianceAsCode RHEL 10 (DISA STIG profile)
+    match: {os.id: "^(rhel|redhat|centos|rocky|almalinux|ol)$", os.versionId: "^10(\\.|$)"}
+    datastreams: ["ssg-rhel10-ds.xml", "ssg-cs10-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_stig", "xccdf_org.ssgproject.content_profile_cis_server_l1"]
+  - key: ssg-fedora
+    family: fedora
+    source: ssg
+    title: ComplianceAsCode Fedora
+    match: {os.id: "^fedora$"}
+    datastreams: ["ssg-fedora-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_standard", "xccdf_org.ssgproject.content_profile_ospp"]
+  - key: ssg-al2023
+    family: al2023
+    source: ssg
+    title: ComplianceAsCode Amazon Linux 2023
+    match: {os.id: "^amzn$", os.versionId: "^2023"}
+    datastreams: ["ssg-al2023-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_cis_server_l1", "xccdf_org.ssgproject.content_profile_cis"]
+  # ---------------------------------------------------------------- Ubuntu
+  - key: disa-ubuntu2204
+    family: ubuntu2204
+    source: disa
+    title: DISA Canonical Ubuntu 22.04 LTS STIG (SCAP benchmark)
+    match: {os.id: "^ubuntu$", os.versionId: "^22\\.04"}
+    datastreams: ["U_CAN_Ubuntu_22-04_LTS_*Benchmark*.xml"]
+    profiles: ["xccdf_mil.disa.stig_profile_MAC-1_Classified", "xccdf_mil.disa.stig_profile_MAC-1_Public"]
+  - key: ssg-ubuntu2204
+    family: ubuntu2204
+    source: ssg
+    title: ComplianceAsCode Ubuntu 22.04 (DISA STIG profile)
+    match: {os.id: "^ubuntu$", os.versionId: "^22\\.04"}
+    datastreams: ["ssg-ubuntu2204-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_stig", "xccdf_org.ssgproject.content_profile_cis_level1_server",
+               "xccdf_org.ssgproject.content_profile_standard"]
+  - key: ssg-ubuntu2404
+    family: ubuntu2404
+    source: ssg
+    title: ComplianceAsCode Ubuntu 24.04 (DISA STIG profile)
+    match: {os.id: "^ubuntu$", os.versionId: "^24\\.04"}
+    datastreams: ["ssg-ubuntu2404-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_stig", "xccdf_org.ssgproject.content_profile_cis_level1_server"]
+  # ---------------------------------------------------------------- Debian (no DISA STIG exists)
+  - key: ssg-debian11
+    family: debian11
+    source: ssg
+    title: ComplianceAsCode Debian 11 (standard profile)
+    match: {os.id: "^debian$", os.versionId: "^11"}
+    datastreams: ["ssg-debian11-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_standard"]
+  - key: ssg-debian12
+    family: debian12
+    source: ssg
+    title: ComplianceAsCode Debian 12 (CIS level 1 server / standard)
+    match: {os.id: "^debian$", os.versionId: "^12"}
+    datastreams: ["ssg-debian12-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_cis_level1_server", "xccdf_org.ssgproject.content_profile_standard"]
+  - key: ssg-debian13
+    family: debian13
+    source: ssg
+    title: ComplianceAsCode Debian 13 (CIS level 1 server / standard)
+    match: {os.id: "^debian$", os.versionId: "^13"}
+    datastreams: ["ssg-debian13-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_cis_level1_server", "xccdf_org.ssgproject.content_profile_standard"]
+  # ---------------------------------------------------------------- SUSE
+  - key: ssg-sle15
+    family: sle15
+    source: ssg
+    title: ComplianceAsCode SLE 15 (DISA STIG profile)
+    match: {os.id: "^(sles|sled|opensuse-leap)$", os.versionId: "^15"}
+    datastreams: ["ssg-sle15-ds.xml", "ssg-opensuse-ds.xml"]
+    profiles: ["xccdf_org.ssgproject.content_profile_stig", "xccdf_org.ssgproject.content_profile_standard"]
+  # ---------------------------------------------------------------- products (DISA SCAP only)
+  # DISA publishes SCAP (automated) benchmarks for few products; most product STIGs (PostgreSQL,
+  # NGINX, Tomcat, Apache) are manual XCCDF without OVAL checks. A manual benchmark is still
+  # indexed and evaluated (every rule `notchecked`), which yields a complete product checklist
+  # for a reviewer but no score.
+  - key: disa-postgresql
+    family: postgresql
+    source: disa
+    title: DISA PostgreSQL STIG
+    match: {product: "^postgresql$"}
+    datastreams: ["U_*PostgreSQL*.xml", "U_PGS_SQL*.xml"]
+    profiles: ["xccdf_mil.disa.stig_profile_MAC-1_Classified", "xccdf_mil.disa.stig_profile_MAC-1_Public"]
+  - key: disa-apache-httpd
+    family: httpd
+    source: disa
+    title: DISA Apache Server 2.4 UNIX STIG
+    match: {product: "^httpd$"}
+    datastreams: ["U_Apache_Server_2-4_UNIX_Server*.xml"]
+    profiles: ["xccdf_mil.disa.stig_profile_MAC-1_Classified", "xccdf_mil.disa.stig_profile_MAC-1_Public"]
+  - key: disa-tomcat
+    family: tomcat
+    source: disa
+    title: DISA Apache Tomcat Application Server 9 STIG
+    match: {product: "^tomcat$"}
+    datastreams: ["U_Apache_Tomcat*.xml"]
+    profiles: ["xccdf_mil.disa.stig_profile_MAC-1_Classified", "xccdf_mil.disa.stig_profile_MAC-1_Public"]
+  - key: disa-nginx
+    family: nginx
+    source: disa
+    title: DISA NGINX STIG
+    match: {product: "^nginx$"}
+    datastreams: ["U_*NGINX*.xml"]
+    profiles: ["xccdf_mil.disa.stig_profile_MAC-1_Classified", "xccdf_mil.disa.stig_profile_MAC-1_Public"]

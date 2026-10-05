@@ -8,6 +8,7 @@ from typing import Any
 
 from .inventory_model import ContainerRecord, InventorySnapshot
 from .posture_checks import WorkloadPosture
+from .scap.scoring import configuration_score
 from .scoring import SYSTEM_NAMESPACES, combine, combine_cluster, grade, mean, weighted_mean
 from .severity import SEVERITIES, zero_counts
 
@@ -18,6 +19,7 @@ class ImageInfo:
     ref: str
     score: float | None
     counts: dict[str, int] = field(default_factory=dict)
+    stig_score: float | None = None  # DESIGN §14: OS / product STIG score of the image (None = n/a)
 
 
 @dataclass
@@ -92,6 +94,9 @@ def aggregate(inv: InventorySnapshot, images_by_key: dict[str, ImageInfo],
         vuln = mean([i.score for i in imgs if i.score is not None])
         wp = posture.get(key)
         pscore = wp.score if wp and wp.results else None
+        # DESIGN §14: configuration = mean(workloadPostureScore, STIG scores of its images)
+        stig = {i.id: i.stig_score for i in imgs if i.stig_score is not None}
+        pscore = configuration_score(pscore, stig.values())
         score = combine(vuln, pscore)
         uniq: dict[int, ImageInfo] = {}
         for c in cs:

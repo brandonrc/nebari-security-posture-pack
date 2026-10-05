@@ -1,0 +1,329 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<arf:asset-report-collection xmlns:arf="http://scap.nist.gov/schema/asset-reporting-format/1.1" xmlns:core="http://scap.nist.gov/schema/reporting-core/1.1" xmlns:ai="http://scap.nist.gov/schema/asset-identification/1.1">
+  <core:relationships xmlns:arfvocab="http://scap.nist.gov/specifications/arf/vocabulary/relationships/1.0#">
+    <core:relationship type="arfvocab:createdFor" subject="xccdf1">
+      <core:ref>collection1</core:ref>
+    </core:relationship>
+    <core:relationship type="arfvocab:isAbout" subject="xccdf1">
+      <core:ref>asset0</core:ref>
+    </core:relationship>
+  </core:relationships>
+  <arf:report-requests>
+    <arf:report-request id="collection1">
+      <arf:content>
+        <ds:data-stream-collection xmlns:ds="http://scap.nist.gov/schema/scap/source/1.2" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:cat="urn:oasis:names:tc:entity:xmlns:xml:catalog" id="scap_test.posture_collection_minimal" schematron-version="1.3">
+  <ds:data-stream id="scap_test.posture_datastream_minimal" scap-version="1.3" use-case="CONFIGURATION" timestamp="2026-10-05T00:00:00">
+    <ds:checklists>
+      <ds:component-ref id="scap_test.posture_cref_xccdf" xlink:href="#scap_test.posture_comp_xccdf">
+        <cat:catalog>
+          <cat:uri name="posture-test-oval.xml" uri="#scap_test.posture_cref_oval"/>
+        </cat:catalog>
+      </ds:component-ref>
+    </ds:checklists>
+    <ds:checks>
+      <ds:component-ref id="scap_test.posture_cref_oval" xlink:href="#scap_test.posture_comp_oval"/>
+    </ds:checks>
+  </ds:data-stream>
+  <ds:component id="scap_test.posture_comp_oval" timestamp="2026-10-05T00:00:00">
+    <oval_definitions xmlns="http://oval.mitre.org/XMLSchema/oval-definitions-5" xmlns:oval="http://oval.mitre.org/XMLSchema/oval-common-5" xmlns:ind="http://oval.mitre.org/XMLSchema/oval-definitions-5#independent" xmlns:unix="http://oval.mitre.org/XMLSchema/oval-definitions-5#unix">
+      <generator>
+        <oval:product_name>nebari-security-posture-pack tests</oval:product_name>
+        <oval:schema_version>5.11.1</oval:schema_version>
+        <oval:timestamp>2026-10-05T00:00:00</oval:timestamp>
+      </generator>
+      <definitions>
+        <definition class="compliance" id="oval:test.posture:def:1" version="1">
+          <metadata><title>Login banner in /etc/issue</title><description>/etc/issue starts with AUTHORIZED.</description></metadata>
+          <criteria><criterion comment="banner present" test_ref="oval:test.posture:tst:1"/></criteria>
+        </definition>
+        <definition class="compliance" id="oval:test.posture:def:2" version="1">
+          <metadata><title>No /etc/hosts.equiv</title><description>/etc/hosts.equiv is absent.</description></metadata>
+          <criteria><criterion comment="hosts.equiv absent" test_ref="oval:test.posture:tst:2"/></criteria>
+        </definition>
+        <definition class="compliance" id="oval:test.posture:def:3" version="1">
+          <metadata><title>MOTD notice</title><description>/etc/motd carries the notice.</description></metadata>
+          <criteria><criterion comment="motd notice" test_ref="oval:test.posture:tst:3"/></criteria>
+        </definition>
+      </definitions>
+      <tests>
+        <ind:textfilecontent54_test check="all" check_existence="at_least_one_exists" comment="banner" id="oval:test.posture:tst:1" version="1">
+          <ind:object object_ref="oval:test.posture:obj:1"/>
+        </ind:textfilecontent54_test>
+        <unix:file_test check="all" check_existence="none_exist" comment="no hosts.equiv" id="oval:test.posture:tst:2" version="1">
+          <unix:object object_ref="oval:test.posture:obj:2"/>
+        </unix:file_test>
+        <ind:textfilecontent54_test check="all" check_existence="at_least_one_exists" comment="motd" id="oval:test.posture:tst:3" version="1">
+          <ind:object object_ref="oval:test.posture:obj:3"/>
+        </ind:textfilecontent54_test>
+      </tests>
+      <objects>
+        <ind:textfilecontent54_object id="oval:test.posture:obj:1" version="1">
+          <ind:filepath>/etc/issue</ind:filepath>
+          <ind:pattern operation="pattern match">^AUTHORIZED</ind:pattern>
+          <ind:instance datatype="int" operation="greater than or equal">1</ind:instance>
+        </ind:textfilecontent54_object>
+        <unix:file_object id="oval:test.posture:obj:2" version="1">
+          <unix:filepath>/etc/hosts.equiv</unix:filepath>
+        </unix:file_object>
+        <ind:textfilecontent54_object id="oval:test.posture:obj:3" version="1">
+          <ind:filepath>/etc/motd</ind:filepath>
+          <ind:pattern operation="pattern match">Authorized use only</ind:pattern>
+          <ind:instance datatype="int" operation="greater than or equal">1</ind:instance>
+        </ind:textfilecontent54_object>
+      </objects>
+    </oval_definitions>
+  </ds:component>
+  <ds:component id="scap_test.posture_comp_xccdf" timestamp="2026-10-05T00:00:00">
+    <Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" xmlns:dc="http://purl.org/dc/elements/1.1/" id="xccdf_test.posture_benchmark_minimal" resolved="1" xml:lang="en-US" style="SCAP_1.2">
+      <status date="2026-10-05">accepted</status>
+      <title>Posture Pack Test Benchmark</title>
+      <description>Three file checks for the posture.scap tests.</description>
+      <reference><dc:publisher>Nebari Security Posture Pack tests</dc:publisher></reference>
+      <plain-text id="release-info">Release: 1 Benchmark Date: 05 Oct 2026</plain-text>
+      <version>V1R1</version>
+      <Profile id="xccdf_test.posture_profile_stig">
+        <title>Test STIG profile</title>
+        <description>All three rules.</description>
+        <select idref="xccdf_test.posture_rule_banner" selected="true"/>
+        <select idref="xccdf_test.posture_rule_no_rhosts" selected="true"/>
+        <select idref="xccdf_test.posture_rule_motd" selected="true"/>
+      </Profile>
+      <Group id="xccdf_test.posture_group_V-90001">
+        <title>SRG-OS-000023-GPOS-00006</title>
+        <Rule id="xccdf_test.posture_rule_banner" selected="false" severity="high" weight="10.0">
+          <version>TEST-01-000010</version>
+          <title>The system must display a login banner.</title>
+          <description>Banner.</description>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools/">SV-90001r1_rule</reference>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools#vulnerability_id">V-90001</reference>
+          <ident system="http://cyber.mil/cci">CCI-000048</ident>
+          <fixtext fixref="F-90001r1_fix">Put the DoD banner in /etc/issue.</fixtext>
+          <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+            <check-content-ref href="posture-test-oval.xml" name="oval:test.posture:def:1"/>
+          </check>
+        </Rule>
+      </Group>
+      <Group id="xccdf_test.posture_group_V-90002">
+        <title>SRG-OS-000480-GPOS-00227</title>
+        <Rule id="xccdf_test.posture_rule_no_rhosts" selected="false" severity="medium" weight="10.0">
+          <version>TEST-01-000020</version>
+          <title>The system must not have a hosts.equiv file.</title>
+          <description>hosts.equiv.</description>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools#vulnerability_id">V-90002</reference>
+          <reference href="http://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r4.pdf">CM-6(a)</reference>
+          <ident system="http://cyber.mil/cci">CCI-000366</ident>
+          <fixtext fixref="F-90002r1_fix">Remove /etc/hosts.equiv.</fixtext>
+          <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+            <check-content-ref href="posture-test-oval.xml" name="oval:test.posture:def:2"/>
+          </check>
+        </Rule>
+      </Group>
+      <Group id="xccdf_test.posture_group_V-90003">
+        <title>SRG-OS-000228-GPOS-00088</title>
+        <Rule id="xccdf_test.posture_rule_motd" selected="false" severity="low" weight="10.0">
+          <version>TEST-01-000030</version>
+          <title>The MOTD must carry the use notice.</title>
+          <description>motd.</description>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools#vulnerability_id">V-90003</reference>
+          <ident system="http://cyber.mil/cci">CCI-001384</ident>
+          <fixtext fixref="F-90003r1_fix">Write the notice to /etc/motd.</fixtext>
+          <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+            <check-content-ref href="posture-test-oval.xml" name="oval:test.posture:def:3"/>
+          </check>
+        </Rule>
+      </Group>
+    </Benchmark>
+  </ds:component>
+</ds:data-stream-collection>
+      </arf:content>
+    </arf:report-request>
+  </arf:report-requests>
+  <arf:assets>
+    <arf:asset id="asset0">
+      <ai:computing-device/>
+    </arf:asset>
+  </arf:assets>
+  <arf:reports>
+    <arf:report id="xccdf1">
+      <arf:content>
+        <TestResult xmlns="http://checklists.nist.gov/xccdf/1.2" id="xccdf_org.open-scap_testresult_xccdf_test.posture_profile_stig" start-time="2026-10-05T02:12:21+00:00" end-time="2026-10-05T02:12:21+00:00" version="V1R1" test-system="cpe:/a:redhat:openscap:1.3.7">
+          <benchmark href="#scap_test.posture_comp_xccdf" id="xccdf_test.posture_benchmark_minimal"/>
+          <title>OSCAP Scan Result</title>
+          <profile idref="xccdf_test.posture_profile_stig"/>
+          <target>unknown</target>
+          <target-facts>
+            <fact name="urn:xccdf:fact:scanner:name" type="string">OpenSCAP</fact>
+            <fact name="urn:xccdf:fact:scanner:version" type="string">1.3.7</fact>
+            <fact name="urn:xccdf:fact:identifier" type="string">chroot:///w/root</fact>
+            <fact name="urn:xccdf:fact:asset:identifier:ein" type="string">chroot:///w/root</fact>
+          </target-facts>
+          <target-id-ref system="http://scap.nist.gov/schema/asset-identification/1.1" name="asset0" href=""/>
+          <rule-result idref="xccdf_test.posture_rule_banner" role="full" time="2026-10-05T02:12:21+00:00" severity="high" version="TEST-01-000010" weight="10.000000">
+            <result>pass</result>
+            <ident system="http://cyber.mil/cci">CCI-000048</ident>
+            <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+              <check-content-ref name="oval:test.posture:def:1" href="#oval0"/>
+            </check>
+          </rule-result>
+          <rule-result idref="xccdf_test.posture_rule_no_rhosts" role="full" time="2026-10-05T02:12:21+00:00" severity="medium" version="TEST-01-000020" weight="10.000000">
+            <result>pass</result>
+            <ident system="http://cyber.mil/cci">CCI-000366</ident>
+            <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+              <check-content-ref name="oval:test.posture:def:2" href="#oval0"/>
+            </check>
+          </rule-result>
+          <rule-result idref="xccdf_test.posture_rule_motd" role="full" time="2026-10-05T02:12:21+00:00" severity="low" version="TEST-01-000030" weight="10.000000">
+            <result>fail</result>
+            <ident system="http://cyber.mil/cci">CCI-001384</ident>
+            <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+              <check-content-ref name="oval:test.posture:def:3" href="#oval0"/>
+            </check>
+          </rule-result>
+          <score system="urn:xccdf:scoring:default" maximum="100.000000">66.666664</score>
+        </TestResult>
+      </arf:content>
+    </arf:report>
+    <arf:report id="oval0">
+      <arf:content>
+        <oval_results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:oval="http://oval.mitre.org/XMLSchema/oval-common-5" xmlns="http://oval.mitre.org/XMLSchema/oval-results-5" xsi:schemaLocation="http://oval.mitre.org/XMLSchema/oval-results-5 oval-results-schema.xsd http://oval.mitre.org/XMLSchema/oval-common-5 oval-common-schema.xsd">
+          <generator>
+            <oval:product_name>cpe:/a:open-scap:oscap</oval:product_name>
+            <oval:product_version>1.3.7</oval:product_version>
+            <oval:schema_version>5.11.1</oval:schema_version>
+            <oval:timestamp>2026-10-05T02:12:21</oval:timestamp>
+          </generator>
+          <directives>
+            <definition_true reported="true" content="full"/>
+            <definition_false reported="true" content="full"/>
+            <definition_unknown reported="true" content="full"/>
+            <definition_error reported="true" content="full"/>
+            <definition_not_evaluated reported="true" content="full"/>
+            <definition_not_applicable reported="true" content="full"/>
+          </directives>
+          <oval_definitions xmlns:oval="http://oval.mitre.org/XMLSchema/oval-common-5" xmlns:unix-def="http://oval.mitre.org/XMLSchema/oval-definitions-5#unix" xmlns:ind-def="http://oval.mitre.org/XMLSchema/oval-definitions-5#independent" xmlns:lin-def="http://oval.mitre.org/XMLSchema/oval-definitions-5#linux" xmlns:win-def="http://oval.mitre.org/XMLSchema/oval-definitions-5#windows" xmlns:mac-def="http://oval.mitre.org/XMLSchema/oval-definitions-5#macos" xmlns="http://oval.mitre.org/XMLSchema/oval-definitions-5" xsi:schemaLocation="http://oval.mitre.org/XMLSchema/oval-definitions-5#unix unix-definitions-schema.xsd http://oval.mitre.org/XMLSchema/oval-definitions-5#independent independent-definitions-schema.xsd http://oval.mitre.org/XMLSchema/oval-definitions-5#unix unix-definitions-schema.xsd http://oval.mitre.org/XMLSchema/oval-definitions-5#linux linux-definitions-schema.xsd http://oval.mitre.org/XMLSchema/oval-definitions-5#windows windows-definitions-schema.xsd http://oval.mitre.org/XMLSchema/oval-definitions-5#macos macos-definitions-schema.xsd http://oval.mitre.org/XMLSchema/oval-definitions-5 oval-definitions-schema.xsd http://oval.mitre.org/XMLSchema/oval-common-5 oval-common-schema.xsd">
+            <generator>
+              <oval:product_name>nebari-security-posture-pack tests</oval:product_name>
+              <oval:schema_version>5.11.1</oval:schema_version>
+              <oval:timestamp>2026-10-05T00:00:00</oval:timestamp>
+            </generator>
+            <definitions>
+              <definition id="oval:test.posture:def:3" version="1" class="compliance">
+                <metadata>
+                  <title>MOTD notice</title>
+                  <description>/etc/motd carries the notice.</description>
+                </metadata>
+                <criteria>
+                  <criterion test_ref="oval:test.posture:tst:3" comment="motd notice"/>
+                </criteria>
+              </definition>
+              <definition id="oval:test.posture:def:2" version="1" class="compliance">
+                <metadata>
+                  <title>No /etc/hosts.equiv</title>
+                  <description>/etc/hosts.equiv is absent.</description>
+                </metadata>
+                <criteria>
+                  <criterion test_ref="oval:test.posture:tst:2" comment="hosts.equiv absent"/>
+                </criteria>
+              </definition>
+              <definition id="oval:test.posture:def:1" version="1" class="compliance">
+                <metadata>
+                  <title>Login banner in /etc/issue</title>
+                  <description>/etc/issue starts with AUTHORIZED.</description>
+                </metadata>
+                <criteria>
+                  <criterion test_ref="oval:test.posture:tst:1" comment="banner present"/>
+                </criteria>
+              </definition>
+            </definitions>
+            <tests>
+              <ind-def:textfilecontent54_test id="oval:test.posture:tst:3" version="1" check="all" comment="motd">
+                <ind-def:object object_ref="oval:test.posture:obj:3"/>
+              </ind-def:textfilecontent54_test>
+              <unix-def:file_test id="oval:test.posture:tst:2" version="1" check_existence="none_exist" check="all" comment="no hosts.equiv">
+                <unix-def:object object_ref="oval:test.posture:obj:2"/>
+              </unix-def:file_test>
+              <ind-def:textfilecontent54_test id="oval:test.posture:tst:1" version="1" check="all" comment="banner">
+                <ind-def:object object_ref="oval:test.posture:obj:1"/>
+              </ind-def:textfilecontent54_test>
+            </tests>
+            <objects>
+              <ind-def:textfilecontent54_object id="oval:test.posture:obj:3" version="1">
+                <ind-def:filepath>/etc/motd</ind-def:filepath>
+                <ind-def:pattern operation="pattern match">Authorized use only</ind-def:pattern>
+                <ind-def:instance operation="greater than or equal" datatype="int">1</ind-def:instance>
+              </ind-def:textfilecontent54_object>
+              <unix-def:file_object id="oval:test.posture:obj:2" version="1">
+                <unix-def:filepath>/etc/hosts.equiv</unix-def:filepath>
+              </unix-def:file_object>
+              <ind-def:textfilecontent54_object id="oval:test.posture:obj:1" version="1">
+                <ind-def:filepath>/etc/issue</ind-def:filepath>
+                <ind-def:pattern operation="pattern match">^AUTHORIZED</ind-def:pattern>
+                <ind-def:instance operation="greater than or equal" datatype="int">1</ind-def:instance>
+              </ind-def:textfilecontent54_object>
+            </objects>
+          </oval_definitions>
+          <results>
+            <system>
+              <definitions>
+                <definition definition_id="oval:test.posture:def:3" result="false" version="1">
+                  <criteria operator="AND" result="false">
+                    <criterion test_ref="oval:test.posture:tst:3" version="1" result="false"/>
+                  </criteria>
+                </definition>
+                <definition definition_id="oval:test.posture:def:2" result="true" version="1">
+                  <criteria operator="AND" result="true">
+                    <criterion test_ref="oval:test.posture:tst:2" version="1" result="true"/>
+                  </criteria>
+                </definition>
+                <definition definition_id="oval:test.posture:def:1" result="true" version="1">
+                  <criteria operator="AND" result="true">
+                    <criterion test_ref="oval:test.posture:tst:1" version="1" result="true"/>
+                  </criteria>
+                </definition>
+              </definitions>
+              <tests>
+                <test test_id="oval:test.posture:tst:1" version="1" check="all" result="true">
+                  <tested_item item_id="1000102" result="not evaluated"/>
+                </test>
+                <test test_id="oval:test.posture:tst:2" version="1" check_existence="none_exist" check="all" result="true"/>
+                <test test_id="oval:test.posture:tst:3" version="1" check="all" result="false"/>
+              </tests>
+              <oval_system_characteristics xmlns:oval="http://oval.mitre.org/XMLSchema/oval-common-5" xmlns:unix-sys="http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#unix" xmlns:ind-sys="http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#independent" xmlns:lin-sys="http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#linux" xmlns:win-sys="http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#windows" xmlns="http://oval.mitre.org/XMLSchema/oval-system-characteristics-5" xsi:schemaLocation="http://oval.mitre.org/XMLSchema/oval-system-characteristics-5 oval-system-characteristics-schema.xsd http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#independent independent-system-characteristics-schema.xsd http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#unix unix-system-characteristics-schema.xsd http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#linux linux-system-characteristics-schema.xsd http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#windows windows-system-characteristics-schema.xsd http://oval.mitre.org/XMLSchema/oval-system-characteristics-5#macos macos-system-characteristics-schema.xsd http://oval.mitre.org/XMLSchema/oval-common-5 oval-common-schema.xsd">
+                <generator>
+                  <oval:product_name>cpe:/a:open-scap:oscap</oval:product_name>
+                  <oval:schema_version>5.11.1</oval:schema_version>
+                  <oval:timestamp>2026-10-05T02:12:21</oval:timestamp>
+                </generator>
+                <system_info>
+                  <os_name>Unknown</os_name>
+                  <os_version>Unknown</os_version>
+                  <architecture>Unknown</architecture>
+                  <primary_host_name>Unknown</primary_host_name>
+                  <interfaces/>
+                </system_info>
+                <collected_objects>
+                  <object id="oval:test.posture:obj:1" version="1" flag="complete">
+                    <reference item_ref="1000102"/>
+                  </object>
+                  <object id="oval:test.posture:obj:2" version="1" flag="does not exist"/>
+                  <object id="oval:test.posture:obj:3" version="1" flag="does not exist"/>
+                </collected_objects>
+                <system_data>
+                  <ind-sys:textfilecontent_item id="1000102" status="exists">
+                    <ind-sys:filepath>/etc/issue</ind-sys:filepath>
+                    <ind-sys:path>/etc</ind-sys:path>
+                    <ind-sys:filename>issue</ind-sys:filename>
+                    <ind-sys:pattern>^AUTHORIZED</ind-sys:pattern>
+                    <ind-sys:instance datatype="int">1</ind-sys:instance>
+                    <ind-sys:line>^AUTHORIZED</ind-sys:line>
+                    <ind-sys:text>AUTHORIZED</ind-sys:text>
+                  </ind-sys:textfilecontent_item>
+                </system_data>
+              </oval_system_characteristics>
+            </system>
+          </results>
+        </oval_results>
+      </arf:content>
+    </arf:report>
+  </arf:reports>
+</arf:asset-report-collection>

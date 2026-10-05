@@ -76,6 +76,12 @@ class Scan(Base):
     error: Mapped[str | None] = mapped_column(Text)
     inventory_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     vuln_rollup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # vuln_rollup written
+    # SCAP hand-off (0007, DESIGN §14): null = not requested (disabled), queued | running | done |
+    # skipped | failed; scap_image_ids = images the scap stage evaluates for this scan
+    scap_status: Mapped[str | None] = mapped_column(String(16))
+    scap_image_ids: Mapped[list[Any] | None] = mapped_column(JSONType)
+    scap_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scap_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONType)  # {stats, log[], worker}
 
 
 class Image(Base):

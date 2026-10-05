@@ -13,6 +13,7 @@ from posture.config import Settings
 # autogenerate / `alembic check` silently ignores its tables (tests/test_migrations.py).
 import posture.controls_engine.models  # noqa: F401  (DESIGN §13 tables)
 import posture.provenance.models  # noqa: F401  (DESIGN §12 tables)
+import posture.scap.models  # noqa: F401  (DESIGN §14 tables)
 from posture.db.models import Base
 
 target_metadata = Base.metadata

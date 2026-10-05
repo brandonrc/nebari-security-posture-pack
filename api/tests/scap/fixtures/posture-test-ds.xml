@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-written minimal SCAP 1.3 source datastream for the posture.scap tests (DESIGN §14):
+     one XCCDF 1.2 benchmark, one profile, three rules, each checked by an OVAL definition that
+     inspects a file of the evaluated root filesystem (oscap-chroot / OSCAP_PROBE_ROOT).
+       rule_banner     CAT I   /etc/issue contains a line starting with AUTHORIZED   (pass in the test rootfs)
+       rule_no_rhosts  CAT II  /etc/hosts.equiv does not exist                        (pass)
+       rule_motd       CAT III /etc/motd contains "Authorized use only"               (fail: file absent)
+     Not real STIG content: ids V-90001.. / TEST-01-.. are made up. -->
+<ds:data-stream-collection xmlns:ds="http://scap.nist.gov/schema/scap/source/1.2"
+    xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:cat="urn:oasis:names:tc:entity:xmlns:xml:catalog"
+    id="scap_test.posture_collection_minimal" schematron-version="1.3">
+  <ds:data-stream id="scap_test.posture_datastream_minimal" scap-version="1.3" use-case="CONFIGURATION"
+      timestamp="2026-10-05T00:00:00">
+    <ds:checklists>
+      <ds:component-ref id="scap_test.posture_cref_xccdf" xlink:href="#scap_test.posture_comp_xccdf">
+        <cat:catalog>
+          <cat:uri name="posture-test-oval.xml" uri="#scap_test.posture_cref_oval"/>
+        </cat:catalog>
+      </ds:component-ref>
+    </ds:checklists>
+    <ds:checks>
+      <ds:component-ref id="scap_test.posture_cref_oval" xlink:href="#scap_test.posture_comp_oval"/>
+    </ds:checks>
+  </ds:data-stream>
+  <ds:component id="scap_test.posture_comp_oval" timestamp="2026-10-05T00:00:00">
+    <oval_definitions xmlns="http://oval.mitre.org/XMLSchema/oval-definitions-5"
+        xmlns:oval="http://oval.mitre.org/XMLSchema/oval-common-5"
+        xmlns:ind="http://oval.mitre.org/XMLSchema/oval-definitions-5#independent"
+        xmlns:unix="http://oval.mitre.org/XMLSchema/oval-definitions-5#unix">
+      <generator>
+        <oval:product_name>nebari-security-posture-pack tests</oval:product_name>
+        <oval:schema_version>5.11.1</oval:schema_version>
+        <oval:timestamp>2026-10-05T00:00:00</oval:timestamp>
+      </generator>
+      <definitions>
+        <definition class="compliance" id="oval:test.posture:def:1" version="1">
+          <metadata><title>Login banner in /etc/issue</title><description>/etc/issue starts with AUTHORIZED.</description></metadata>
+          <criteria><criterion comment="banner present" test_ref="oval:test.posture:tst:1"/></criteria>
+        </definition>
+        <definition class="compliance" id="oval:test.posture:def:2" version="1">
+          <metadata><title>No /etc/hosts.equiv</title><description>/etc/hosts.equiv is absent.</description></metadata>
+          <criteria><criterion comment="hosts.equiv absent" test_ref="oval:test.posture:tst:2"/></criteria>
+        </definition>
+        <definition class="compliance" id="oval:test.posture:def:3" version="1">
+          <metadata><title>MOTD notice</title><description>/etc/motd carries the notice.</description></metadata>
+          <criteria><criterion comment="motd notice" test_ref="oval:test.posture:tst:3"/></criteria>
+        </definition>
+      </definitions>
+      <tests>
+        <ind:textfilecontent54_test check="all" check_existence="at_least_one_exists" comment="banner"
+            id="oval:test.posture:tst:1" version="1">
+          <ind:object object_ref="oval:test.posture:obj:1"/>
+        </ind:textfilecontent54_test>
+        <unix:file_test check="all" check_existence="none_exist" comment="no hosts.equiv"
+            id="oval:test.posture:tst:2" version="1">
+          <unix:object object_ref="oval:test.posture:obj:2"/>
+        </unix:file_test>
+        <ind:textfilecontent54_test check="all" check_existence="at_least_one_exists" comment="motd"
+            id="oval:test.posture:tst:3" version="1">
+          <ind:object object_ref="oval:test.posture:obj:3"/>
+        </ind:textfilecontent54_test>
+      </tests>
+      <objects>
+        <ind:textfilecontent54_object id="oval:test.posture:obj:1" version="1">
+          <ind:filepath>/etc/issue</ind:filepath>
+          <ind:pattern operation="pattern match">^AUTHORIZED</ind:pattern>
+          <ind:instance datatype="int" operation="greater than or equal">1</ind:instance>
+        </ind:textfilecontent54_object>
+        <unix:file_object id="oval:test.posture:obj:2" version="1">
+          <unix:filepath>/etc/hosts.equiv</unix:filepath>
+        </unix:file_object>
+        <ind:textfilecontent54_object id="oval:test.posture:obj:3" version="1">
+          <ind:filepath>/etc/motd</ind:filepath>
+          <ind:pattern operation="pattern match">Authorized use only</ind:pattern>
+          <ind:instance datatype="int" operation="greater than or equal">1</ind:instance>
+        </ind:textfilecontent54_object>
+      </objects>
+    </oval_definitions>
+  </ds:component>
+  <ds:component id="scap_test.posture_comp_xccdf" timestamp="2026-10-05T00:00:00">
+    <Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" xmlns:dc="http://purl.org/dc/elements/1.1/"
+        id="xccdf_test.posture_benchmark_minimal" resolved="1" xml:lang="en-US" style="SCAP_1.2">
+      <status date="2026-10-05">accepted</status>
+      <title>Posture Pack Test Benchmark</title>
+      <description>Three file checks for the posture.scap tests.</description>
+      <reference><dc:publisher>Nebari Security Posture Pack tests</dc:publisher></reference>
+      <plain-text id="release-info">Release: 1 Benchmark Date: 05 Oct 2026</plain-text>
+      <version>V1R1</version>
+      <Profile id="xccdf_test.posture_profile_stig">
+        <title>Test STIG profile</title>
+        <description>All three rules.</description>
+        <select idref="xccdf_test.posture_rule_banner" selected="true"/>
+        <select idref="xccdf_test.posture_rule_no_rhosts" selected="true"/>
+        <select idref="xccdf_test.posture_rule_motd" selected="true"/>
+      </Profile>
+      <Group id="xccdf_test.posture_group_V-90001">
+        <title>SRG-OS-000023-GPOS-00006</title>
+        <Rule id="xccdf_test.posture_rule_banner" selected="false" severity="high" weight="10.0">
+          <version>TEST-01-000010</version>
+          <title>The system must display a login banner.</title>
+          <description>Banner.</description>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools/">SV-90001r1_rule</reference>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools#vulnerability_id">V-90001</reference>
+          <ident system="http://cyber.mil/cci">CCI-000048</ident>
+          <fixtext fixref="F-90001r1_fix">Put the DoD banner in /etc/issue.</fixtext>
+          <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+            <check-content-ref href="posture-test-oval.xml" name="oval:test.posture:def:1"/>
+          </check>
+        </Rule>
+      </Group>
+      <Group id="xccdf_test.posture_group_V-90002">
+        <title>SRG-OS-000480-GPOS-00227</title>
+        <Rule id="xccdf_test.posture_rule_no_rhosts" selected="false" severity="medium" weight="10.0">
+          <version>TEST-01-000020</version>
+          <title>The system must not have a hosts.equiv file.</title>
+          <description>hosts.equiv.</description>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools#vulnerability_id">V-90002</reference>
+          <reference href="http://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r4.pdf">CM-6(a)</reference>
+          <ident system="http://cyber.mil/cci">CCI-000366</ident>
+          <fixtext fixref="F-90002r1_fix">Remove /etc/hosts.equiv.</fixtext>
+          <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+            <check-content-ref href="posture-test-oval.xml" name="oval:test.posture:def:2"/>
+          </check>
+        </Rule>
+      </Group>
+      <Group id="xccdf_test.posture_group_V-90003">
+        <title>SRG-OS-000228-GPOS-00088</title>
+        <Rule id="xccdf_test.posture_rule_motd" selected="false" severity="low" weight="10.0">
+          <version>TEST-01-000030</version>
+          <title>The MOTD must carry the use notice.</title>
+          <description>motd.</description>
+          <reference href="https://www.cyber.mil/stigs/srg-stig-tools#vulnerability_id">V-90003</reference>
+          <ident system="http://cyber.mil/cci">CCI-001384</ident>
+          <fixtext fixref="F-90003r1_fix">Write the notice to /etc/motd.</fixtext>
+          <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+            <check-content-ref href="posture-test-oval.xml" name="oval:test.posture:def:3"/>
+          </check>
+        </Rule>
+      </Group>
+    </Benchmark>
+  </ds:component>
+</ds:data-stream-collection>

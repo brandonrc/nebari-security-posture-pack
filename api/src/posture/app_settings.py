@@ -22,6 +22,47 @@ class ScannerToggles(CamelModel):
     trivy: bool = True
     grype: bool = True
     clair: bool = True
+    scap: bool = False  # DESIGN §14 (OpenSCAP product / OS STIGs); SCANNERS_SCAP_ENABLED
+
+
+class ScapSource(CamelModel):
+    """A SCAP content source (DESIGN §14): fetched, sha256-verified, unpacked to SCAP_CONTENT_DIR."""
+
+    name: str = ""
+    kind: str = "ssg"  # ssg | disa | custom
+    url: str
+    sha256: str
+    include: list[str] = Field(default_factory=list)
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v: str) -> str:
+        v = (v or "ssg").strip().lower()
+        if v not in ("ssg", "disa", "custom"):
+            raise ValueError("kind must be ssg, disa or custom")
+        return v
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("url must be http(s)")
+        return v
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha(cls, v: str) -> str:
+        v = (v or "").strip().lower().removeprefix("sha256:")
+        if len(v) != 64 or any(c not in "0123456789abcdef" for c in v):
+            raise ValueError("sha256 must be 64 hex characters (content is never unpacked unverified)")
+        return v
+
+
+class ScapSettings(CamelModel):
+    sources: list[ScapSource] = Field(default_factory=list)
+    prefer_disa: bool = True
+    timeout_seconds: int = Field(900, ge=60, le=24 * 3600)
 
 
 class SlaDays(CamelModel):
@@ -87,6 +128,7 @@ class AppSettings(CamelModel):
     reports: ReportsSettings = Field(default_factory=ReportsSettings)
     controls_engine: ControlsEngineSettings = Field(default_factory=ControlsEngineSettings)  # DESIGN §13
     provenance: ProvenanceSettings = Field(default_factory=ProvenanceSettings)
+    scap: ScapSettings = Field(default_factory=ScapSettings)  # DESIGN §14
     admin_groups: list[str] = Field(default_factory=list)  # read-only (from env)
 
     @field_validator("excluded_namespaces")
@@ -96,8 +138,19 @@ class AppSettings(CamelModel):
 
 
 EDITABLE = {"scan_interval_hours", "rescan_after_hours", "excluded_namespaces", "scanners", "parallelism",
-            "system_name", "organization", "remediation_sla_days", "reports", "provenance"}
+            "system_name", "organization", "remediation_sla_days", "reports", "provenance", "scap"}
 EDITABLE = EDITABLE | {"controls_engine"}
+
+
+def _scap_defaults(env: Settings) -> ScapSettings:
+    sources = []
+    for d in env.scap_sources:
+        try:
+            sources.append(ScapSource.model_validate(d))
+        except ValueError:  # a malformed env entry is reported by the content refresh, not here
+            continue
+    return ScapSettings(sources=sources, prefer_disa=env.scap_prefer_disa,
+                        timeout_seconds=max(60, int(env.scap_timeout_seconds)))
 
 
 def defaults(env: Settings | None = None) -> AppSettings:
@@ -106,7 +159,8 @@ def defaults(env: Settings | None = None) -> AppSettings:
         scan_interval_hours=env.scan_interval_hours,
         rescan_after_hours=env.rescan_after_hours,
         excluded_namespaces=env.excluded_namespaces,
-        scanners=ScannerToggles(trivy=env.trivy_enabled, grype=env.grype_enabled, clair=env.clair_enabled),
+        scanners=ScannerToggles(trivy=env.trivy_enabled, grype=env.grype_enabled, clair=env.clair_enabled,
+                                scap=env.scanners_scap_enabled),
         parallelism=env.scan_parallelism,
         system_name=env.cluster_name,
         reports=ReportsSettings(auto_generate=env.reports_auto_generate),
@@ -119,6 +173,7 @@ def defaults(env: Settings | None = None) -> AppSettings:
             check_updates=env.provenance_check_updates, skip_prerelease=env.provenance_skip_prerelease,
             update_level=env.provenance_update_level, helm_releases=env.provenance_helm_enabled,
             recheck_hours=env.provenance_recheck_hours),
+        scap=_scap_defaults(env),
         controls_engine=ControlsEngineSettings(enabled=env.controls_engine_enabled, baseline=env.controls_baseline,
                                                admin_subjects=env.controls_admin_subjects),
         admin_groups=sorted(env.admin_group_set),
