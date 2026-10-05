@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { DataTable, type DataTableColumnDef } from '@/components/ui/data-table';
 import { asRows, durationBetween, formatDateTime, formatDuration, formatRelative } from '@/lib/format';
+import { scanImageSummary } from '@/lib/scan-counts';
 
 type Row = Scan & Record<string, unknown>;
 
@@ -55,11 +56,11 @@ const columns: DataTableColumnDef<Row>[] = [
   },
   {
     id: 'images',
-    accessorFn: (s) => s.imagesDone,
+    accessorFn: (s) => s.imagesRescanned ?? s.imagesDone,
     header: 'Images',
     cell: ({ row }) => (
       <span className="tabular-nums">
-        {row.original.imagesDone}/{row.original.imagesTotal}
+        {scanImageSummary(row.original)}
         {row.original.imagesFailed ? <span className="ml-1 text-destructive-foreground text-xs">({row.original.imagesFailed} failed)</span> : null}
       </span>
     ),
@@ -72,7 +73,7 @@ export function ScansPage() {
   const summary = useSummary();
   return (
     <>
-      <PageHeader title="Scans" description="Scheduled and manual scan history." actions={<div className="w-64"><ScanControl lastScan={summary.data?.lastScan} compact /></div>} />
+      <PageHeader title="Scans" description="Scheduled, manual and event scan history. Images: rescanned now · still fresh (skipped) · unique images in the inventory; event scans show their target count." actions={<div className="w-64"><ScanControl lastScan={summary.data?.lastScan} compact /></div>} />
       <Card>
         <CardContent>
           <DataTable<Row>

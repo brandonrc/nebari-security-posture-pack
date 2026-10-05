@@ -3,7 +3,14 @@
 Runs once per scan, after inventory and concurrently with CVE scanning:
 per unique image digest -> signature (+ cosign verify) / SBOM / SLSA provenance
 (cached per digest for `recheckHours`) and per-tag update checks; Helm releases
-from `sh.helm.release.v1.*` Secrets. Persists `image_provenance` / `helm_releases`
+from `sh.helm.release.v1.*` Secrets.
+
+Scoping (grace, 2026-10-05): the worker passes `only` = the images (re)scanned by this scan
+(None = every image: a forced full scan). Those, plus images without a usable previous result
+(never checked, last check errored, check configuration changed), go to the registry; every
+other image of the inventory is *carried*: its previous `image_provenance` row is copied into
+this scan without a registry call, so per-scan rows and the supply-chain score still cover the
+whole inventory. Persists `image_provenance` / `helm_releases`
 rows for the scan plus the denormalized `images.provenance` summary, and returns
 the per-image `SupplyChainInputs` the cluster aggregation needs.
 
@@ -168,7 +175,8 @@ class ProvenanceStage:
 
     # ------------------------------------------------------------------ run
     async def run(self, scan_id: int, settings: AppSettings, inv: InventorySnapshot, key_to_id: dict[str, int],
-                  log_line: Callable[[str], None] = lambda _m: None, force: bool = False) -> dict[int, SupplyChainInputs]:
+                  log_line: Callable[[str], None] = lambda _m: None, force: bool = False,
+                  only: set[int] | None = None) -> dict[int, SupplyChainInputs]:
         ps = settings.provenance
         if not ps.enabled:
             return {}
@@ -177,11 +185,18 @@ class ProvenanceStage:
             images = {i.id: i for i in (await s.execute(
                 select(Image).where(Image.id.in_(list(key_to_id.values()) or [0])))).scalars()}
             prev = await self._previous(s, list(images))
-        items = work_items(inv, key_to_id, images)
+        all_items = work_items(inv, key_to_id, images)
+        fp = config_fingerprint(ps)
+        if only is None:
+            items, carried = all_items, []
+        else:
+            items = [w for w in all_items if w.image_id in only or not self._carryable(prev.get(w.image_id), fp)]
+            checking = {w.image_id for w in items}
+            carried = [w for w in all_items if w.image_id not in checking]
         cosign_cfg = CosignConfig(ps.cosign_public_key, ps.cosign_certificate_identity_regexp,
                                   ps.cosign_certificate_oidc_issuer_regexp)
-        verifier = self.cosign_factory(cosign_cfg) if (ps.verify_signatures and cosign_cfg.enabled) else None
-        fp = config_fingerprint(ps)
+        verifier = (self.cosign_factory(cosign_cfg) if (items and ps.verify_signatures and cosign_cfg.enabled)
+                    else None)
         reg = self.registry_factory()
         tag_cache: dict[tuple[str, str], asyncio.Future] = {}
         sem = asyncio.Semaphore(max(1, self.env.provenance_concurrency))
@@ -214,19 +229,28 @@ class ProvenanceStage:
             closer = getattr(reg, "aclose", None)
             if closer is not None:
                 await closer()
-        mutable = {w.image_id: w.mutable for w in items}
+        for w in carried:
+            outcomes.append(self._carry(w, ps, prev[w.image_id], cosign_cfg.enabled))
+        from .. import metrics
+
+        metrics.PROVENANCE_IMAGES.labels("checked").inc(len(items))
+        metrics.PROVENANCE_IMAGES.labels("carried").inc(len(carried))
+        mutable = {w.image_id: w.mutable for w in all_items}
         await self._persist(scan_id, outcomes, mutable, helm_rows)
         signed = sum(1 for o in outcomes if (o.signature or {}).get("signed"))
         with_sbom = sum(1 for o in outcomes if (o.sbom or {}).get("hasSBOM"))
         with_prov = sum(1 for o in outcomes if (o.provenance or {}).get("hasProvenance"))
         errors = sum(1 for o in outcomes if o.error)
+        scope = (f"; {len(items)} checked, {len(carried)} carried from their previous check"
+                 if only is not None else "")
         msg = (f"provenance: {len(outcomes)} image(s), {signed} signed, {with_sbom} with SBOM, {with_prov} with "
                f"provenance, {errors} registry error(s); {len(helm_rows)} helm release(s) "
-               f"in {int((now() - started).total_seconds())}s")
+               f"in {int((now() - started).total_seconds())}s{scope}")
         log_line(msg)
         for e in helm_errors[:5]:
             log_line(f"provenance: helm: {e}")
-        log.info("provenance.done", scan_id=scan_id, images=len(outcomes), signed=signed, sbom=with_sbom,
+        log.info("provenance.done", scan_id=scan_id, images=len(outcomes), checked=len(items),
+                 carried=len(carried), signed=signed, sbom=with_sbom,
                  provenance=with_prov, errors=errors, helm=len(helm_rows))
         return {o.image_id: o.inputs for o in outcomes}
 
@@ -237,6 +261,33 @@ class ProvenanceStage:
                   .group_by(ImageProvenance.image_id))
         rows = (await s.execute(select(ImageProvenance).where(ImageProvenance.id.in_(latest)))).scalars()
         return {r.image_id: r for r in rows}
+
+    @staticmethod
+    def _carryable(prev: ImageProvenance | None, fp: str) -> bool:
+        """A previous result that may be reused without a registry call (scoped runs)."""
+        return prev is not None and not prev.error and (prev.details or {}).get("config") == fp
+
+    def _carry(self, w: ImageWork, ps: ProvenanceSettings, prev: ImageProvenance, cosign_on: bool) -> ImageOutcome:
+        details = {k: v for k, v in (prev.details or {}).items() if k not in ("carried", "carriedFromScan")}
+        details.update({"carried": True, "carriedFromScan": prev.scan_id})
+        updates = dict(prev.updates or {})
+        return self._outcome(w, ps, prev.signature, prev.sbom, prev.provenance, updates, details, None,
+                             prev.checked_at, cosign_on, prev.digest)
+
+    def _outcome(self, w: ImageWork, ps: ProvenanceSettings, sig, sbom, prov, updates: dict[str, Any],
+                 details: dict[str, Any], error: str | None, checked_at: datetime, cosign_on: bool,
+                 digest: str | None) -> ImageOutcome:
+        ref = w.ref
+        primary = ref.tag if ref.tag in updates else (sorted(updates)[0] if updates else ref.tag)
+        upd = UpdateInfo.from_json(updates.get(primary or "")) if primary is not None else None
+        if error:  # registry unreachable / rate limited: unknown, not failed (no penalty; not cached)
+            inputs = build_inputs(None, None, None, upd, ps.model_copy(update={"check_sbom": False,
+                                                                                "check_provenance": False}), cosign_on)
+        else:
+            inputs = build_inputs(sig, sbom, prov, upd, ps, cosign_on)
+        score = supply_chain_score(inputs, w.mutable)
+        return ImageOutcome(w.image_id, digest, checked_at, sig, sbom, prov, updates, details, error, inputs, score,
+                            primary)
 
     async def _check_image(self, w: ImageWork, ps: ProvenanceSettings, reg: Registry, verifier: CosignVerifier | None,
                            prev: ImageProvenance | None, fp: str, force: bool, cosign_on: bool,
@@ -286,16 +337,8 @@ class ProvenanceStage:
                 else:
                     info = compute_update(tag, None)
                 updates[tag] = info.as_json()
-        primary = ref.tag if ref.tag in updates else (sorted(updates)[0] if updates else ref.tag)
-        upd = UpdateInfo.from_json(updates.get(primary or "")) if primary is not None else None
-        if error:  # registry unreachable / rate limited: unknown, not failed (no penalty; not cached)
-            inputs = build_inputs(None, None, None, upd, ps.model_copy(update={"check_sbom": False,
-                                                                                "check_provenance": False}), cosign_on)
-        else:
-            inputs = build_inputs(sig, sbom, prov, upd, ps, cosign_on)
-        score = supply_chain_score(inputs, w.mutable)
-        return ImageOutcome(w.image_id, ref.digest or details.get("resolvedDigest"), checked_at, sig, sbom, prov,
-                            updates, details, error, inputs, score, primary)
+        return self._outcome(w, ps, sig, sbom, prov, updates, details, error, checked_at, cosign_on,
+                             ref.digest or details.get("resolvedDigest"))
 
     async def _helm(self, ps: ProvenanceSettings, reg: Registry) -> tuple[list[helm_mod.HelmRelease], list[str]]:
         try:
@@ -338,11 +381,12 @@ class ProvenanceStage:
 
 
 def start(stage: ProvenanceStage | None, scan_id: int, settings: AppSettings, inv: InventorySnapshot,
-          key_to_id: dict[str, int], log_line: Callable[[str], None], force: bool = False) -> asyncio.Task | None:
-    """Kick off the stage concurrently with scanning (worker hook)."""
+          key_to_id: dict[str, int], log_line: Callable[[str], None], force: bool = False,
+          only: set[int] | None = None) -> asyncio.Task | None:
+    """Kick off the stage concurrently with scanning (worker hook). `only`: see the module doc."""
     if stage is None or not settings.provenance.enabled:
         return None
-    return asyncio.create_task(stage.run(scan_id, settings, inv, key_to_id, log_line, force))
+    return asyncio.create_task(stage.run(scan_id, settings, inv, key_to_id, log_line, force, only))
 
 
 async def finish(task: asyncio.Task | None, log_line: Callable[[str], None], cancel: bool = False) -> dict[int, SupplyChainInputs]:

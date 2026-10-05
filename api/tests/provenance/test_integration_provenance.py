@@ -175,30 +175,68 @@ async def test_02_scan_with_provenance(env):
 
 
 async def test_03_rescan_reuses_attestation_cache(env):
+    """Scoped provenance (2026-10-05): a scan that rescans nothing carries every image's previous
+    result into its own rows without a registry call; a rescanned image is re-checked alone; a
+    forced full scan re-checks everything."""
+    from datetime import timedelta
+
+    from sqlalchemy import select, update
+
+    from posture.db.models import Image
+    from posture.provenance.models import ImageProvenance
+
     c = env["client"]
     reg = fake_registry()
-    assert (await c.post("/api/v1/scans", json={"force": False})).status_code == 202
+    r = await c.post("/api/v1/scans", json={"force": False})
+    assert r.status_code == 202
     w = make_worker(env, reg)
     assert await w.poll_once() is True
-    heads = [x for x in reg.calls if x[0] == "head"]
-    # digest-pinned images are cached; only busybox (tag ref, no digest) is re-walked
-    assert all("busybox" in x[2] for x in heads)
-    assert any(x[0] == "tags" for x in reg.calls)  # update checks always re-run
+    scan = (await c.get(f"/api/v1/scans/{r.json()['id']}")).json()
+    assert scan["imagesRescanned"] == 0 and scan["imagesSkippedFresh"] == 3 and scan["imagesInventoried"] == 3
+    assert reg.calls == []  # nothing rescanned: no registry traffic at all (update checks included)
+    assert any("0 checked, 3 carried" in line for line in scan["log"]), scan["log"]
     assert len((await c.get("/api/reports")).json()) == 2
     sc = (await c.get("/api/v1/supply-chain")).json()
-    assert sc["signed"] == 1 and sc["scanId"] == 2
+    assert sc["signed"] == 1 and sc["scanId"] == 2 and sc["unique"] == 3
+    async with env["sm"]() as s:
+        rows = (await s.execute(select(ImageProvenance).where(ImageProvenance.scan_id == 2))).scalars().all()
+    assert len(rows) == 3 and all(r.details.get("carried") and r.details.get("carriedFromScan") == 1 for r in rows)
+    s1 = (await c.get("/api/v1/summary")).json()
+    assert s1["supplyChainScore"] == 42.5  # same as scan 1: the carried inputs feed the score
+
+    # alpine goes stale -> only alpine is rescanned and provenance-checked
+    async with env["sm"]() as s, s.begin():
+        await s.execute(update(Image).where(Image.ref.like("%alpine%"))
+                        .values(last_scanned_at=Image.last_scanned_at - timedelta(days=3)))
+    reg = fake_registry()
+    r = await c.post("/api/v1/scans", json={})
+    assert await make_worker(env, reg).poll_once() is True
+    scan = (await c.get(f"/api/v1/scans/{r.json()['id']}")).json()
+    assert scan["imagesRescanned"] == 1 and scan["imagesSkippedFresh"] == 2
+    assert {x[2] for x in reg.calls} == {"library/alpine"}, reg.calls
+    assert any("1 checked, 2 carried" in line for line in scan["log"])
+
+    # forced full scan: every image goes to the registry again
+    reg = fake_registry()
+    r = await c.post("/api/v1/scans", json={"force": True})
+    assert await make_worker(env, reg).poll_once() is True
+    scan = (await c.get(f"/api/v1/scans/{r.json()['id']}")).json()
+    assert scan["imagesRescanned"] == 3 and not any("carried" in line for line in scan["log"])
+    assert {x[2] for x in reg.calls if x[0] == "tags"} == {"org/web", "library/alpine"}
 
 
 async def test_04_disabled_restores_old_weights(env):
     c = env["client"]
+    before = len((await c.get("/api/reports")).json())
     r = await c.put("/api/v1/settings", json={"provenance": {"enabled": False}})
     assert r.status_code == 200 and r.json()["provenance"]["enabled"] is False
-    assert (await c.post("/api/v1/scans", json={})).status_code == 202
+    r = await c.post("/api/v1/scans", json={})
+    assert r.status_code == 202
     w = make_worker(env, fake_registry())
     assert await w.poll_once() is True
-    scan = (await c.get("/api/v1/scans/3")).json()
+    scan = (await c.get(f"/api/v1/scans/{r.json()['id']}")).json()
     assert scan["score"] == round(0.7 * scan["vulnScore"] + 0.3 * scan["postureScore"], 1)
-    assert len((await c.get("/api/reports")).json()) == 2  # scan 3 has no provenance results
+    assert len((await c.get("/api/reports")).json()) == before  # this scan has no provenance results
     await c.put("/api/v1/settings", json={"provenance": {"enabled": True}})
 
 

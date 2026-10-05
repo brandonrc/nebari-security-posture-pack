@@ -23,6 +23,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gzip
+import hashlib
+import json
 import os
 import signal
 import socket
@@ -155,6 +157,72 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+def inventory_hash(image_keys: Iterable[str]) -> str:
+    """sha256 over the inventory's unique image keys: equal hashes = same set of deployed images."""
+    return hashlib.sha256("\n".join(sorted(set(image_keys))).encode()).hexdigest()
+
+
+def posture_hash(inv: InventorySnapshot) -> str:
+    """sha256 over what the posture checks and the controls engine look at per workload: the
+    workloads (namespace, kind, name), their containers and security contexts. Pod names,
+    replica counts and image digests are left out, so a restart or a rollout of a new image
+    keeps the hash; a new workload or a changed securityContext changes it."""
+    rows = {json.dumps([c.namespace, c.workload_kind, c.workload_name, c.container, c.container_type,
+                        c.security or {}], sort_keys=True, default=str) for c in inv.containers}
+    return hashlib.sha256("\n".join(sorted(rows)).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class ImageSelection:
+    """`_select_images` result with the accounting for the scan row (DECISIONS 2026-10-05)."""
+    to_scan: list[int]
+    inventoried: int  # unique images in the inventory snapshot
+    candidates: int  # images this scan considered (inventory, or the targets)
+    targeted: int | None  # targeted / event scans: candidate count; None for full scans
+
+    @property
+    def skipped_fresh(self) -> int:
+        return max(0, self.candidates - len(self.to_scan))
+
+
+@dataclass(frozen=True)
+class PostScanPlan:
+    controls: bool
+    controls_reason: str
+    reports: bool
+    reports_reason: str
+
+
+def post_scan_plan(*, trigger: str, targeted: bool, rescanned: int | None, inventory_hash: str | None,
+                   posture_hash: str | None, prev_full_inventory_hash: str | None,
+                   prev_posture_hash: str | None) -> PostScanPlan:
+    """Which post-scan stages a done scan triggers (grace, 2026-10-05).
+
+    * controls engine: after every full (untargeted) scan; after a targeted / event scan only when
+      the posture-relevant inventory changed against the previous done scan (new workload, changed
+      securityContext; unknown previous hash = changed).
+    * `reports.autoGenerate`: never after targeted / event scans; after a full scan only when it
+      rescanned at least one image or its set of deployed images differs from the previous done
+      full scan's.
+    """
+    full = not targeted and trigger != "event"
+    if full:
+        controls, creason = True, "full scan"
+    elif posture_hash is None or prev_posture_hash is None or posture_hash != prev_posture_hash:
+        controls, creason = True, "posture-relevant inventory changed"
+    else:
+        controls, creason = False, "targeted scan; workloads and security contexts unchanged"
+    if not full:
+        reports, rreason = False, f"{trigger} scan (targeted)" if trigger == "event" else "targeted scan"
+    elif rescanned:
+        reports, rreason = True, f"{rescanned} image(s) rescanned"
+    elif inventory_hash is None or prev_full_inventory_hash is None or inventory_hash != prev_full_inventory_hash:
+        reports, rreason = True, "inventory changed"
+    else:
+        reports, rreason = False, "no image rescanned and inventory unchanged"
+    return PostScanPlan(controls, creason, reports, rreason)
+
+
 def pack_raw(r: ScanResult, max_gz: int) -> tuple[bytes | None, int, bool]:
     """gzip raw scanner output for `image_scans.raw_gz`, never cut into invalid JSON: output whose
     gzip exceeds RAW_MAX_GZ_BYTES is replaced by a small `{"truncated": true, ...}` summary."""
@@ -188,6 +256,7 @@ class ScanContext:
     failed: int = 0
     dirty: bool = True
     supply_chain: dict[int, Any] = field(default_factory=dict)  # image id -> SupplyChainInputs (DESIGN §12)
+    provenance_scope: list[int] | None = None  # images the provenance stage re-checks (None = all)
 
     def add_log(self, msg: str) -> None:
         self.log_lines.append(f"{now().strftime('%Y-%m-%dT%H:%M:%SZ')} {msg}")
@@ -402,6 +471,8 @@ class Worker:
                 ctx.cancelled = True
             scan.images_done = ctx.done
             scan.images_failed = ctx.failed
+            if scan.images_inventoried is not None:
+                scan.images_rescanned = ctx.done
             scan.per_scanner = {k: dict(v) for k, v in ctx.per_scanner.items()}
             scan.log = list(ctx.log_lines)
             scan.heartbeat_at = now()
@@ -445,12 +516,21 @@ class Worker:
                 ctx.add_log(f"inventory warning: {err}")
             ctx.add_log(f"inventory: {len(inv.containers)} containers in {len(inv.namespaces)} namespaces")
             key_to_id = await self._upsert_images(inv)
-            # supply-chain checks run concurrently with CVE scanning (DESIGN §12)
-            prov_task = provenance_stage.start(self.provenance_stage, scan_id, settings, inv, key_to_id, ctx.add_log, force)
-            to_scan = await self._select_images(key_to_id, inv, target_ids, target_ns, force, settings)
+            sel = await self._select(key_to_id, inv, target_ids, target_ns, force, settings)
+            to_scan = sel.to_scan
             async with self.sm() as s, s.begin():
-                await s.execute(update(Scan).where(Scan.id == scan_id).values(images_total=len(to_scan)))
-            ctx.add_log(f"{len(to_scan)} image(s) to scan, {len(key_to_id)} unique image(s) in inventory")
+                await s.execute(update(Scan).where(Scan.id == scan_id).values(
+                    images_total=len(to_scan), images_inventoried=sel.inventoried, images_rescanned=0,
+                    images_skipped_fresh=sel.skipped_fresh, images_targeted=sel.targeted))
+            trig = await self._trigger(scan_id)
+            metrics.SCAN_IMAGE_SELECTION.labels(trig, "rescanned").inc(len(to_scan))
+            metrics.SCAN_IMAGE_SELECTION.labels(trig, "skipped_fresh").inc(sel.skipped_fresh)
+            ctx.add_log(self._selection_line(sel))
+            # provenance: only the images (re)scanned now (+ never checked) unless a forced full scan
+            ctx.provenance_scope = None if (force and not target_ids and not target_ns) else list(to_scan)
+            # supply-chain checks run concurrently with CVE scanning (DESIGN §12)
+            prov_task = provenance_stage.start(self.provenance_stage, scan_id, settings, inv, key_to_id, ctx.add_log,
+                                               force, self._scope(ctx))
             if enabled and to_scan:  # outside the scanning window: may wait for the first grype DB update
                 await self._wait_scanners_ready(ctx, enabled)
             async with self.scanning():  # m7: no grype DB update during the scan
@@ -515,6 +595,36 @@ class Worker:
         if completed:
             await self._after_done(scan_id, settings)
 
+    @staticmethod
+    def _selection_line(sel: ImageSelection) -> str:
+        rescanned = len(sel.to_scan)
+        if sel.targeted is not None:
+            return (f"{rescanned} image(s) to scan of {sel.targeted} targeted ({sel.skipped_fresh} fresh), "
+                    f"{sel.inventoried} unique image(s) in inventory")
+        return (f"{rescanned} image(s) to scan, {sel.skipped_fresh} fresh (rescanAfterHours), "
+                f"{sel.inventoried} unique image(s) in inventory")
+
+    @staticmethod
+    def _scope(ctx: ScanContext) -> set[int] | None:
+        return None if ctx.provenance_scope is None else set(ctx.provenance_scope)
+
+    async def _trigger(self, scan_id: int) -> str:
+        async with self.sm() as s:
+            return await s.scalar(select(Scan.trigger).where(Scan.id == scan_id)) or "manual"
+
+    async def plan_post_scan(self, scan_id: int) -> PostScanPlan:
+        async with self.sm() as s:
+            scan = await s.get(Scan, scan_id)
+            full = Scan.target_image_ids.is_(None) & Scan.target_namespaces.is_(None)
+            prev_full = await s.scalar(select(Scan.inventory_hash).where(
+                Scan.status == "done", Scan.id < scan_id, full).order_by(Scan.id.desc()).limit(1))
+            prev_posture = await s.scalar(select(Scan.posture_hash).where(
+                Scan.status == "done", Scan.id < scan_id).order_by(Scan.id.desc()).limit(1))
+        targeted = bool(scan.target_image_ids) or bool(scan.target_namespaces)
+        return post_scan_plan(trigger=scan.trigger, targeted=targeted, rescanned=scan.images_rescanned,
+                              inventory_hash=scan.inventory_hash, posture_hash=scan.posture_hash,
+                              prev_full_inventory_hash=prev_full, prev_posture_hash=prev_posture)
+
     async def _after_done(self, scan_id: int, settings: app_settings.AppSettings) -> None:
         try:  # §1: render the provenance-collector-pack report once; the compat API serves the bytes
             async with self.sm() as s, s.begin():
@@ -522,13 +632,36 @@ class Worker:
                                                getattr(self.provenance_stage, "collector_version", None))
         except Exception:  # noqa: BLE001  (the compat API falls back to rendering on request)
             log.exception("compat.materialize_failed", scan_id=scan_id)
-        async with self.sm() as s:
-            trigger = await s.scalar(select(Scan.trigger).where(Scan.id == scan_id))
-        # event scans (pod watcher) are small and frequent: no auto-generated reports for them
-        if "reports" in self.stages and settings.reports.auto_generate and trigger != "event":
-            await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
-        if "controls" in self.stages:  # DESIGN §13: control evidence stage after every completed scan
-            await self.run_controls(trigger="scan", scan_id=scan_id)
+        plan = await self.plan_post_scan(scan_id)
+        # event / targeted scans are small and frequent; a full scan that changed nothing
+        # (everything fresh, same images) would only queue identical reports again
+        if "reports" in self.stages and settings.reports.auto_generate:
+            if plan.reports:
+                metrics.POST_SCAN_STAGES.labels("reports", "run").inc()
+                await self.auto_generate_reports(scan_id, settings.reports.auto_generate)
+            else:
+                metrics.POST_SCAN_STAGES.labels("reports", "skipped").inc()
+                log.info("reports.auto_skipped", scan_id=scan_id, reason=plan.reports_reason)
+                await self._append_log(scan_id, f"auto-reports skipped: {plan.reports_reason}")
+        if "controls" in self.stages and self.s.controls_engine_enabled:
+            # DESIGN §13: control evidence after every full scan; targeted scans only on posture changes
+            if plan.controls:
+                metrics.POST_SCAN_STAGES.labels("controls", "run").inc()
+                await self.run_controls(trigger="scan", scan_id=scan_id)
+            else:
+                metrics.POST_SCAN_STAGES.labels("controls", "skipped").inc()
+                log.info("controls.skipped", scan_id=scan_id, reason=plan.controls_reason)
+                await self._append_log(scan_id, f"controls engine skipped: {plan.controls_reason}")
+
+    async def _append_log(self, scan_id: int, msg: str) -> None:
+        try:
+            async with self.sm() as s, s.begin():
+                scan = await s.get(Scan, scan_id, with_for_update=True)
+                if scan is not None:
+                    line = f"{now().strftime('%Y-%m-%dT%H:%M:%SZ')} {msg}"
+                    scan.log = [*(scan.log or []), line][-LOG_LINES_KEPT:]
+        except Exception:  # noqa: BLE001  (a log line never fails the post-scan stages)
+            log.exception("scan.log_append_failed", scan_id=scan_id)
 
     async def _handoff(self, ctx: ScanContext, inv: InventorySnapshot) -> None:
         """Scan worker (no provenance/controls stages): park the inventory on the scan for the
@@ -537,7 +670,7 @@ class Worker:
             await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == ctx.scan_id,
                                                        ScanSnapshot.level == INVENTORY_HANDOFF_LEVEL))
             s.add(ScanSnapshot(scan_id=ctx.scan_id, level=INVENTORY_HANDOFF_LEVEL, key="",
-                               data=inventory_to_json(inv)))
+                               data={**inventory_to_json(inv), "provenanceScope": ctx.provenance_scope}))
         ctx.add_log("scan stage done; waiting for the privileged worker (provenance, posture, controls, reports)")
         await self._finish(ctx, STATUS_SCANNED)
 
@@ -555,6 +688,12 @@ class Worker:
             ctx.done, ctx.failed = scan.images_done, scan.images_failed
             ctx.per_scanner = {k: dict(v) for k, v in (scan.per_scanner or {}).items()}
             inv_data = row.data if row is not None else None
+            if inv_data is not None:
+                scope = inv_data.get("provenanceScope", "all")
+                if scope == "all":  # hand-off written by an older worker: no rescan list -> check all
+                    ctx.provenance_scope = None
+                else:
+                    ctx.provenance_scope = None if scope is None else [int(i) for i in scope]
         if inv_data is None:
             await self._finish(ctx, "failed", error="inventory hand-off missing (scan stage did not store it)")
             return
@@ -569,7 +708,7 @@ class Worker:
         completed = False
         try:
             prov_task = provenance_stage.start(self.provenance_stage, scan_id, settings, inv, key_to_id,
-                                               ctx.add_log, force)
+                                               ctx.add_log, force, self._scope(ctx))
             ctx.supply_chain = await provenance_stage.finish(prov_task, ctx.add_log)
             await self._flush_progress(ctx)
             if ctx.cancelled:
@@ -650,6 +789,8 @@ class Worker:
                 scan.finished_at = now()
             scan.images_done = ctx.done
             scan.images_failed = ctx.failed
+            if scan.images_inventoried is not None:  # selection happened (not an inventory failure)
+                scan.images_rescanned = ctx.done
             scan.per_scanner = {k: dict(v) for k, v in ctx.per_scanner.items()}
             if error:
                 scan.error = error
@@ -727,6 +868,12 @@ class Worker:
 
     async def _select_images(self, key_to_id: dict[str, int], inv: InventorySnapshot, target_ids: list[int],
                              target_ns: list[str], force: bool, settings: app_settings.AppSettings) -> list[int]:
+        return (await self._select(key_to_id, inv, target_ids, target_ns, force, settings)).to_scan
+
+    async def _select(self, key_to_id: dict[str, int], inv: InventorySnapshot, target_ids: list[int],
+                      target_ns: list[str], force: bool, settings: app_settings.AppSettings) -> ImageSelection:
+        inventoried = len(set(key_to_id.values()))
+        targeted = bool(target_ids or target_ns)
         if target_ids:
             candidates = {int(i) for i in target_ids}
         elif target_ns:
@@ -735,7 +882,7 @@ class Worker:
         else:
             candidates = set(key_to_id.values())
         if not candidates:
-            return []
+            return ImageSelection([], inventoried, 0, 0 if targeted else None)
         async with self.sm() as s:
             imgs = (await s.execute(select(Image).where(Image.id.in_(candidates)))).scalars().all()
         cutoff = now() - timedelta(hours=settings.rescan_after_hours)
@@ -749,7 +896,7 @@ class Worker:
                      and complete)
             if force or target_ids or not fresh:
                 out.append(img.id)
-        return sorted(out)
+        return ImageSelection(sorted(out), inventoried, len(imgs), len(imgs) if targeted else None)
 
     async def _scan_one(self, name: str, target: ScanTarget) -> ScanResult:
         result = await self._scan_one_raw(name, target)
@@ -992,7 +1139,9 @@ class Worker:
             rolled = await write_vuln_rollup(s, sid)
             await s.execute(update(Scan).where(Scan.id == sid).values(
                 score=cluster.score, grade=cluster.grade, vuln_score=cluster.vuln_score,
-                posture_score=cluster.posture_score, inventory_complete=True))
+                posture_score=cluster.posture_score, inventory_complete=True,
+                images_inventoried=len(set(key_to_id.values())), inventory_hash=inventory_hash(key_to_id),
+                posture_hash=posture_hash(inv)))
         ctx.add_log(f"cluster score {cluster.score} ({cluster.grade}); {len(workloads)} workloads, "
                     f"{len(namespaces)} namespaces, {len(results)} posture results, {rolled} vulnerabilities")
         await self._prune()
@@ -1169,7 +1318,10 @@ class Worker:
         from .event_scans import PodWatcher
 
         self.pod_watcher = PodWatcher(self.sm, lambda: self._excluded_ns or self.s.excluded_namespaces,
-                                      debounce=self.s.event_scan_debounce_seconds)
+                                      debounce=self.s.event_scan_debounce_seconds,
+                                      interval=self.s.event_scans_debounce_seconds,
+                                      min_pod_age=self.s.event_scans_min_pod_age_seconds,
+                                      include_jobs=self.s.event_scans_include_jobs)
         return asyncio.create_task(self.pod_watcher.run())
 
     async def _refresh_metrics(self) -> None:

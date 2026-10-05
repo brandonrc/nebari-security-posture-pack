@@ -43,6 +43,25 @@ describe('Scans page', () => {
     expect(screen.getByRole('button', { name: /Scan now/ })).toBeEnabled();
   });
 
+  it('explains image counts: rescanned, fresh, in inventory; event scans show their targets', async () => {
+    server.use(
+      http.get('*/api/v1/scans', () =>
+        HttpResponse.json([
+          scan(31, { trigger: 'event', requestedBy: 'pod-watcher', imagesTotal: 1, imagesDone: 1, imagesInventoried: 80, imagesRescanned: 1, imagesSkippedFresh: 2, imagesTargeted: 3 }),
+          scan(30, { imagesTotal: 68, imagesDone: 68, imagesInventoried: 80, imagesRescanned: 68, imagesSkippedFresh: 12, imagesTargeted: null }),
+          scan(29, { imagesTotal: 0, imagesDone: 0, imagesInventoried: 80, imagesRescanned: 0, imagesSkippedFresh: 80, imagesTargeted: null }),
+        ]),
+      ),
+    );
+    renderApp('/scans');
+    const table = await screen.findByRole('table', { name: 'Scan history' });
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(4));
+    const [, event, full, fresh] = within(table).getAllByRole('row');
+    expect(within(event).getByText('3 targeted · 1 rescanned · 2 fresh')).toBeInTheDocument();
+    expect(within(full).getByText('68 rescanned · 12 fresh · 80 in inventory')).toBeInTheDocument();
+    expect(within(fresh).getByText('0 rescanned · 80 fresh · 80 in inventory')).toBeInTheDocument();
+  });
+
   it('shows the empty state', async () => {
     server.use(http.get('*/api/v1/scans', () => HttpResponse.json({ items: [] })));
     renderApp('/scans');

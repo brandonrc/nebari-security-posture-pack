@@ -158,7 +158,10 @@ class Settings(BaseSettings):
     image_cache_max_bytes: int = 20 * 1024**3
     # pod watcher: targeted scans for new digests (m11)
     event_scans_enabled: bool = True
-    event_scan_debounce_seconds: float = 60
+    event_scan_debounce_seconds: float = 60  # collection window after the first new digest
+    event_scans_debounce_seconds: float = 300  # at most one event scan per this many seconds
+    event_scans_min_pod_age_seconds: float = 120  # younger pods wait (short-lived verify pods)
+    event_scans_include_jobs: bool = False  # pods owned by Jobs / CronJobs
 
     @field_validator("reports_max_total_bytes", "image_cache_max_bytes", "raw_max_gz_bytes", mode="before")
     @classmethod

@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
 import { durationBetween, formatDateTime, formatDuration } from '@/lib/format';
+import { scanImageSummary } from '@/lib/scan-counts';
 import { cn } from '@/lib/utils';
 
 export function ScanDetailPage() {
@@ -59,7 +60,7 @@ export function ScanDetailPage() {
                 <Meta label="Started">{formatDateTime(scan.startedAt)}</Meta>
                 <Meta label="Duration">{formatDuration(durationBetween(scan.startedAt, scan.finishedAt))}</Meta>
                 <Meta label="Images">
-                  {scan.imagesDone}/{scan.imagesTotal}
+                  {scanImageSummary(scan)}
                   {scan.imagesFailed ? <span className="text-destructive-foreground"> · {scan.imagesFailed} failed</span> : null}
                 </Meta>
                 <Meta label="Score">{scan.grade ? <GradeBadge grade={scan.grade} score={scan.score} /> : '—'}</Meta>

@@ -43,6 +43,18 @@ IMAGES_DEFERRED = Counter("posture_scan_images_deferred_total",
                           "Images moved to the end of the scan queue because they exceed SCAN_MAX_IMAGE_GB.")
 GRYPE_DB_UPDATES = Counter("posture_grype_db_updates_total", "grype DB update attempts.", ["status"])
 EVENT_SCANS = Counter("posture_event_scans_total", "Targeted scans queued by the pod watcher (new digests).")
+SCAN_IMAGE_SELECTION = Counter(
+    "posture_scan_image_selection_total",
+    "Per scan, candidate images by outcome: rescanned (stale/forced/targeted) or skipped_fresh (rescanAfterHours).",
+    ["trigger", "result"])
+PROVENANCE_IMAGES = Counter(
+    "posture_provenance_images_total",
+    "Images handled by the provenance stage: checked (registry) or carried (previous result reused, no registry call).",
+    ["result"])
+POST_SCAN_STAGES = Counter(
+    "posture_post_scan_stage_total",
+    "Post-scan stages after a done scan, by stage (controls, reports) and action (run, skipped).",
+    ["stage", "action"])
 IMAGE_CACHE_BYTES = Gauge("posture_image_cache_bytes", "Bytes in the local OCI image cache (MIRROR_MODE=local).")
 REPORT_DURATION = Histogram("posture_report_duration_seconds", "Report generation time, by type and status.",
                             ["type", "status"], buckets=_SHORT_BUCKETS)
@@ -53,8 +65,9 @@ REPORTS_GENERATED = Counter("posture_reports_generated_total", "Reports finished
 LAST_SUCCESS = Gauge("posture_last_successful_scan_timestamp_seconds",
                      "Finish time of the latest full (untargeted) scan with status done (0 = never).")
 SCAN_INTERVAL = Gauge("posture_scan_interval_seconds", "Configured scheduled-scan interval (settings).")
-SCAN_IMAGES = Gauge("posture_scan_images", "Images of the latest done full scan, by status (total, done, failed).",
-                    ["status"])
+SCAN_IMAGES = Gauge("posture_scan_images",
+                    "Images of the latest done full scan, by status (total, done, failed, inventoried, rescanned, "
+                    "skipped_fresh).", ["status"])
 SCAN_SCANNER_RESULTS = Gauge("posture_scan_scanner_results",
                              "Per-image scanner results of the latest done full scan, by scanner and result (ok, error).",
                              ["scanner", "result"])
@@ -125,6 +138,10 @@ async def _refresh(session: AsyncSession) -> None:
         SCAN_IMAGES.labels("total").set(latest.images_total)
         SCAN_IMAGES.labels("done").set(latest.images_done)
         SCAN_IMAGES.labels("failed").set(latest.images_failed)
+        for status in ("inventoried", "rescanned", "skipped_fresh"):
+            value = getattr(latest, f"images_{status}", None)
+            if value is not None:
+                SCAN_IMAGES.labels(status).set(value)
         for scanner, r in (latest.per_scanner or {}).items():
             for result in ("ok", "error"):
                 SCAN_SCANNER_RESULTS.labels(scanner, result).set(int((r or {}).get(result, 0) or 0))

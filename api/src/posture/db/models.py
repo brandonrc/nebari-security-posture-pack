@@ -60,6 +60,13 @@ class Scan(Base):
     images_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     images_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     images_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # accounting (0006): images_total = images this scan attempted (= rescanned); null = older row
+    images_inventoried: Mapped[int | None] = mapped_column(Integer)  # unique images in the inventory
+    images_rescanned: Mapped[int | None] = mapped_column(Integer)  # stale / forced / targeted: scanned now
+    images_skipped_fresh: Mapped[int | None] = mapped_column(Integer)  # candidates still fresh (rescanAfterHours)
+    images_targeted: Mapped[int | None] = mapped_column(Integer)  # targeted / event scans: candidate images
+    inventory_hash: Mapped[str | None] = mapped_column(String(64))  # sha256 of the inventory's image keys
+    posture_hash: Mapped[str | None] = mapped_column(String(64))  # sha256 of workloads + security contexts
     score: Mapped[float | None] = mapped_column(Float)
     grade: Mapped[str | None] = mapped_column(String(2))
     vuln_score: Mapped[float | None] = mapped_column(Float)

@@ -33,7 +33,7 @@ export interface Me {
 
 // ── /summary ─────────────────────────────────────────────────────────────────
 export type ScanStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
-export type ScanTrigger = 'manual' | 'scheduled';
+export type ScanTrigger = 'manual' | 'scheduled' | 'event';
 
 export interface LastScan {
   id: number | string;
@@ -461,6 +461,15 @@ export interface Scan {
   imagesTotal: number;
   imagesDone: number;
   imagesFailed: number;
+  /** Unique images in the scan's inventory snapshot (null on scans before migration 0006). */
+  imagesInventoried?: number | null;
+  /** Images (re)scanned by this scan: stale, forced or targeted. */
+  imagesRescanned?: number | null;
+  /** Candidate images skipped because their last scan is still fresh (rescanAfterHours). */
+  imagesSkippedFresh?: number | null;
+  /** Targeted / event scans: images the scan was aimed at; null for full scans. */
+  imagesTargeted?: number | null;
+  targetNamespaces?: string[] | null;
   score: number | null;
   grade: Grade | null;
   requestedBy: string | null;
