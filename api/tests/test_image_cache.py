@@ -128,3 +128,42 @@ def test_worker_skips_clair_outside_registry_mode():
     assert "clair" in w.enabled_scanners(st)
     w.mirror = object()  # custom mirror without a mode: treated as a registry
     assert "clair" in w.enabled_scanners(st)
+
+
+async def test_docker_schema2_converted_to_oci_verifies_by_blobs(tmp_path):
+    """skopeo converts a Docker schema 2 manifest to OCI for the layout: the manifest digest
+    changes, the config and layer blobs do not (grace: coredns, DESIGN §14 scap-worker)."""
+    cfg, layer = "sha256:" + "c" * 64, "sha256:" + "d" * 64
+    docker = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                         "config": {"digest": cfg}, "layers": [{"digest": layer}]}).encode()
+    oci = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                      "config": {"digest": cfg}, "layers": [{"digest": layer}]}).encode()
+    d_docker = "sha256:" + hashlib.sha256(docker).hexdigest()
+    c = cache(tmp_path, fake_skopeo(tmp_path, oci), raw=docker)
+    _, digest = await c.ensure("docker.io/coredns/coredns", d_docker, False)
+    assert digest == "sha256:" + hashlib.sha256(oci).hexdigest()
+    other = json.dumps({"schemaVersion": 2, "config": {"digest": cfg}, "layers": [{"digest": "sha256:" + "e" * 64}]})
+    (tmp_path / "o").mkdir()
+    bad = cache(tmp_path / "o", fake_skopeo(tmp_path / "o", other.encode()), raw=docker)
+    with pytest.raises(RuntimeError, match="not part of source"):
+        await bad.ensure("docker.io/coredns/coredns", d_docker, False)
+
+
+async def test_index_child_converted_to_oci_verifies_against_the_child(tmp_path):
+    cfg, layer = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+    child = json.dumps({"schemaVersion": 2, "config": {"digest": cfg}, "layers": [{"digest": layer}],
+                        "mediaType": "application/vnd.docker.distribution.manifest.v2+json"}).encode()
+    child_d = "sha256:" + hashlib.sha256(child).hexdigest()
+    index = json.dumps({"manifests": [{"digest": child_d}]}).encode()
+    index_d = "sha256:" + hashlib.sha256(index).hexdigest()
+    oci = json.dumps({"schemaVersion": 2, "config": {"digest": cfg}, "layers": [{"digest": layer}]}).encode()
+
+    class M(FakeMirror):
+        async def _raw_bytes(self, ref, insecure, authfile=False):
+            return child if ref.endswith(child_d) else index
+
+    s = SimpleNamespace(cache_dir=str(tmp_path / "cache"), image_cache_max_bytes=10**9,
+                        skopeo_bin=fake_skopeo(tmp_path, oci))
+    c = LocalImageCache(s, M())
+    _, digest = await c.ensure("docker.io/library/x", index_d, False)
+    assert digest == "sha256:" + hashlib.sha256(oci).hexdigest()

@@ -591,3 +591,68 @@ untouched. Surface `stig: {evaluated, pass, fail, cat1Open, cat2Open, cat3Open, 
 `persistence.scapContent` (2Gi) + `persistence.scapWork` (20Gi), NetworkPolicy egress to
 content hosts, env plumbing. `scanner.scap.enabled` default **false** (opt-in; heavy), true on
 grace.
+
+### Implemented shapes (appended 2026-10-05; api/src/posture/routers/stig.py)
+Benchmark ids in the API are the catalogue keys of `scap/data/benchmarks.yaml` (`ssg-rhel9`,
+`disa-rhel9`, `ssg-debian12`, ...); `xccdfId` carries the XCCDF benchmark id. Image-level
+status adds `noContent` (a benchmark applies but its content is not on the content volume) and
+`notEvaluated` (never evaluated) to evaluated | notApplicable | error | timeout.
+
+```ts
+type StigResult = 'pass'|'fail'|'notapplicable'|'notchecked'|'error'|'unknown'|'informational'
+type StigCat = 'cat1'|'cat2'|'cat3'
+type ImageStigStatus = 'evaluated'|'notApplicable'|'noContent'|'error'|'timeout'|'notEvaluated'
+// ImageSummary.stig (GET /images, /images/{id}); null until the image was evaluated
+interface ImageStig { status: ImageStigStatus; score: number|null; benchmarks: number; benchmarkIds: string[];
+  pass: number; fail: number; notapplicable: number; notchecked: number; cat1Open: number; cat2Open: number;
+  cat3Open: number; fidelity: 'full'|'degraded'|null; os: string|null; evaluatedAt: string|null; error: string|null }
+interface StigRule { ruleId: string; stigId: string|null /* V- else SV- */; vulnId: string|null; svId: string|null;
+  ruleVersion: string|null /* STIG ID e.g. RHEL-09-412035 */; cci: string[]; nist: string[]; severity: StigCat;
+  result: StigResult; title: string; fixText: string|null; groupTitle: string|null; checkedAt: string|null;
+  firstFailedAt: string|null }
+interface StigBenchmarkSummary { pass: number; fail: number; notapplicable: number; notchecked: number; error: number;
+  unknown: number; informational: number; cat1Open: number; cat2Open: number; cat3Open: number; score: number|null;
+  status: string; evaluatedAt: string|null; rootfsFidelity: 'full'|'degraded'|null; durationMs: number;
+  error: string|null; oscapVersion: string|null; scanId: number|null }
+// GET /images/{id}/stig?page&pageSize(100)&result&severity(cat1|I|high,...)&q&benchmark ; rules: fail first, then CAT
+interface ImageStigDetail { imageId: number; ref: string; digest: string|null; status: ImageStigStatus;
+  stig: ImageStig|null; reason: string|null; detected: {os: Record<string, unknown>; products: {name: string;
+  version: string; path: string}[]; distroless: boolean}|null; rootfs: Record<string, unknown>|null;
+  benchmarks: {benchmarkId: string; xccdfId: string|null; title: string; version: string; source: 'ssg'|'disa'|'custom'|null;
+    profileId: string|null; profileTitle: string|null; summary: StigBenchmarkSummary; rules: StigRule[];
+    rulesTotal: number; page: number; pageSize: number}[] }
+// GET /stig/benchmarks (current inventory; content-only catalogue entries have id null, imagesEvaluated 0)
+interface StigBenchmarkRow { id: string|null; benchmarkId: string|null; xccdfId: string|null; title: string;
+  version: string; source: string|null; profileId: string|null; profileTitle: string|null; imagesEvaluated: number;
+  imagesFailing: number; imagesWithCat1: number; pass: number; fail: number; notapplicable: number; notchecked: number;
+  error: number; unknown: number; informational: number; cat1Open: number; cat2Open: number; cat3Open: number;
+  meanScore: number|null; lastEvaluatedAt: string|null; file?: string }
+// GET /stig/benchmarks/{id}/rules?page&pageSize&severity&q&failing ; 404 when never evaluated
+interface StigBenchmarkRules { benchmark: StigBenchmarkRow|null; total: number; page: number; pageSize: number;
+  items: {ruleId: string; stigId: string|null; vulnId: string|null; svId: string|null; ruleVersion: string|null;
+    title: string; cat: StigCat; severity: StigCat; failingImages: number; passingImages: number; otherImages: number;
+    failing: {imageId: number; ref: string|null}[] /* first 50 */}[] }
+// GET /summary -> stig; coverage = evaluated / images of the latest done scan, percent (1 decimal)
+interface SummaryStig { evaluated: number; pass: number; fail: number; cat1Open: number; cat2Open: number;
+  cat3Open: number; coverage: number|null; notApplicable: number; noContent: number; errors: number;
+  pending: number; images: number; score: number|null /* mean image STIG score */ }
+// GET /compliance/stig -> { items: <Kubernetes STIG rules, §11>, product: SummaryStig & {benchmarks: StigBenchmarkRow[]} }
+// GET /scanners -> also {name: 'scap', ..., content: {file, benchmarkId, title, version, source, sourceName,
+//   fetchedAt, sha256, profiles: number, rules: number}[]}
+// Scan rows: scapStatus null|'queued'|'running'|'done'|'skipped'|'failed'; scapImages: number|null;
+//   scapStats: {evaluated, notApplicable, noContent, error, timeout}|null. A done scan whose scapStatus is
+//   still queued/running finished with "scap pending".
+```
+
+`GET /images` STIG parameters (semantics the UI relies on):
+- `sort=stig`: by `stig.score`; default order ascending (worst first), `order=desc` reverses; images
+  without a STIG score (not evaluated, not applicable, no content, error, or every rule notchecked)
+  always sort **last** in both orders.
+- `stig=<comma list>` keeps an image when **any** value matches: `evaluated` = `stig.status ==
+  evaluated` (at least one benchmark result); `na` = `stig.status` is `notApplicable` or
+  `noContent`; `cat1` = `stig.cat1Open >= 1`. Unknown values match nothing. Images never evaluated
+  (`stig: null`) match none of them.
+
+Deviations from the text above (DECISIONS 2026-10-05, SCAP scanner): the scap-worker adds
+`FSETID`, `SETFCAP` and `SYS_CHROOT` and does not need `SETUID`/`SETGID`; it refreshes the
+content itself (it owns the content volume) instead of the privileged worker.

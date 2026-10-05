@@ -37,7 +37,24 @@ SORT_KEYS = {
     "containers": lambda d: d["containers"],
     "workloads": lambda d: d["workloads"],
     "agreementIndex": lambda d: d["agreementIndex"] if d["agreementIndex"] is not None else -1,
+    # DESIGN §14: STIG score; images without one sort last in either order (see list_images)
+    "stig": lambda d: ((d.get("stig") or {}).get("score") is None, (d.get("stig") or {}).get("score") or 0),
 }
+STIG_FILTERS = ("evaluated", "na", "cat1")
+
+
+def stig_filter(d: dict[str, Any], value: str) -> bool:
+    """`stig=` filter (comma list, any matches): evaluated = at least one benchmark result;
+    na = notApplicable or noContent (no SCAP benchmark / no content for it); cat1 = >= 1 open CAT I."""
+    st = d.get("stig") or {}
+    for v in (x.strip().lower() for x in value.split(",") if x.strip()):
+        if v == "evaluated" and st.get("status") == "evaluated":
+            return True
+        if v == "na" and st.get("status") in ("notApplicable", "noContent"):
+            return True
+        if v == "cat1" and int(st.get("cat1Open") or 0) > 0:
+            return True
+    return False
 
 
 def filter_images(items: list[dict[str, Any]], namespace: str | None, grade: str | None, severity: str | None,
@@ -70,6 +87,7 @@ async def list_images(
     q: str | None = None,
     running: bool | None = None,
     current: bool | None = None,
+    stig: str | None = None,
     sort: str = "score",
     order: str | None = None,
     page: int = 1,
@@ -83,12 +101,16 @@ async def list_images(
     for d in items:  # in the latest done scan's inventory (False = stale); None before any scan
         d["current"] = None if cur is None else d["id"] in cur
     items = filter_images(items, namespace, grade, severity, q, running, current)
+    if stig:
+        items = [d for d in items if stig_filter(d, stig)]
     keyfn = SORT_KEYS.get(sort, SORT_KEYS["score"])
-    default_desc = sort not in ("score", "ref", "grade")
+    default_desc = sort not in ("score", "ref", "grade", "stig")
     desc = (order or ("desc" if default_desc else "asc")).lower() == "desc"
     items.sort(key=keyfn, reverse=desc)
     if sort == "score":  # unscored images always last
         items.sort(key=lambda d: d["score"] is None)
+    if sort == "stig":  # images without a STIG score always last
+        items.sort(key=lambda d: (d.get("stig") or {}).get("score") is None)
     total = len(items)
     start = (page - 1) * page_size
     return {"items": items[start:start + page_size], "total": total, "page": page, "pageSize": page_size}

@@ -202,6 +202,17 @@ class ScapStage:
         async with self.sm() as s:
             return await s.get(Image, image_id)
 
+    def _source(self, img: Image, ref: Any) -> tuple[str, str, bool]:
+        """(ref to copy, digest it must verify against, insecure). With MIRROR_MODE=registry the
+        scan stage already copied the digest into the mirror (verified against the source digest),
+        so the scap stage copies that one instead of pulling upstream again (rate limits)."""
+        mref = getattr(img, "mirror_ref", None)
+        if (getattr(self.mirror, "mode", None) == "registry" and img.mirrored and mref and "@sha256:" in mref
+                and "oci-dir:" not in mref):
+            return mref, mref.rsplit("@", 1)[1], bool(getattr(self.s, "mirror_insecure", True))
+        src, src_insecure, _ = self.mirror.plan(ref)
+        return src.pullable, ref.digest, src_insecure
+
     async def evaluate_image(self, image_id: int, cat: list[dict[str, Any]], timeout: float,
                              prefer_disa: bool = True) -> ImageOutcome:
         started = time.monotonic()
@@ -214,9 +225,9 @@ class ScapStage:
         if not ref.digest:
             return ImageOutcome(image_id, "error", error="image has no digest (locally loaded / not started); "
                                                          "a rootfs is only built from digest-pinned images")
-        src, src_insecure, _ = self.mirror.plan(ref)
+        source, source_digest, src_insecure = self._source(img, ref)
         try:
-            layout, _digest = await self.cache.ensure(src.pullable, ref.digest, src_insecure, timeout=min(timeout, 900))
+            layout, _digest = await self.cache.ensure(source, source_digest, src_insecure, timeout=min(timeout, 900))
         except Exception as e:  # noqa: BLE001
             return ImageOutcome(image_id, "error", error=f"image copy failed: {str(e)[:300]}")
         hexd = ref.digest.split(":", 1)[-1]

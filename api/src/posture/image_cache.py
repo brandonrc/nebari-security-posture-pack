@@ -77,6 +77,24 @@ def layout_manifest_digest(layout: Path) -> str | None:
         return None
 
 
+MAX_CHILDREN_CHECKED = 16
+
+
+def _blob_set(manifest: bytes) -> tuple[str, tuple[str, ...]] | None:
+    """(config digest, layer digests) of an image manifest (Docker schema 2 or OCI), else None."""
+    try:
+        doc = json.loads(manifest)
+    except ValueError:
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("layers"), list) or not isinstance(doc.get("config"), dict):
+        return None
+    cfg = str(doc["config"].get("digest") or "").lower()
+    layers = tuple(str((x or {}).get("digest") or "").lower() for x in doc["layers"])
+    if not cfg or not all(layers):
+        return None
+    return cfg, layers
+
+
 def _children(manifest: bytes) -> set[str]:
     try:
         doc = json.loads(manifest)
@@ -155,10 +173,10 @@ class LocalImageCache:
                 digest = await asyncio.to_thread(layout_manifest_digest, tmp / "layout")
                 if not digest:
                     raise RuntimeError("copied layout has no verifiable manifest")
-                if digest != source_digest:  # platform manifest of a multi-arch source
-                    raw = await self.mirror._raw_bytes(pinned, src_insecure, authfile=True)
-                    if raw is None or "sha256:" + hashlib.sha256(raw).hexdigest() != source_digest \
-                            or digest not in _children(raw):
+                if digest != source_digest:  # platform manifest / format conversion
+                    copied = await asyncio.to_thread(
+                        (tmp / "layout" / "blobs" / "sha256" / digest.split(":", 1)[1]).read_bytes)
+                    if not await self._belongs(src, pinned, src_insecure, source_digest, digest, copied):
                         raise RuntimeError(f"copied manifest {digest} is not part of source {source_digest}")
                 size = await asyncio.to_thread(_dir_size, tmp / "layout")
                 (tmp / "layout" / MARKER).write_text(json.dumps({
@@ -171,6 +189,30 @@ class LocalImageCache:
             self.pin(layout)
         await asyncio.to_thread(self.cleanup)
         return layout, digest
+
+    async def _belongs(self, src: ImageRef, pinned: str, insecure: bool, source_digest: str, digest: str,
+                       copied: bytes) -> bool:
+        """The copied manifest is the source (or one of its platform manifests): either listed by the
+        source index, or - when skopeo converted a Docker schema 2 manifest to OCI for the layout
+        (the manifest bytes change, the content-addressed config and layer blobs do not) - it
+        references exactly the blobs of the source manifest / of one of the index's children,
+        each of which is verified against its digest."""
+        raw = await self.mirror._raw_bytes(pinned, insecure, authfile=True)
+        if raw is None or "sha256:" + hashlib.sha256(raw).hexdigest() != source_digest:
+            return False
+        children = _children(raw)
+        if digest in children:
+            return True
+        want = _blob_set(copied)
+        if want is None:
+            return False
+        if _blob_set(raw) == want:
+            return True
+        for child in sorted(children)[:MAX_CHILDREN_CHECKED]:
+            craw = await self.mirror._raw_bytes(f"{src.registry}/{src.repository}@{child}", insecure, authfile=True)
+            if craw and "sha256:" + hashlib.sha256(craw).hexdigest() == child and _blob_set(craw) == want:
+                return True
+        return False
 
     # ---------------------------------------------------------------- LRU
     def entries(self) -> list[tuple[float, int, Path]]:

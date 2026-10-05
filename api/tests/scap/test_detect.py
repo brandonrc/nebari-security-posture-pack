@@ -75,3 +75,28 @@ def test_builtin_catalogue_is_well_formed_and_extra_file(tmp_path):
                      ' datastreams: ["a.xml"], profiles: ["p"]}\n')
     det = Detection(os={"id": "x"})
     assert [c["key"] for c in candidates_for(det, extra=str(extra))] == ["mine"]
+
+
+def test_stage_copies_from_the_mirror_in_registry_mode():
+    """MIRROR_MODE=registry: the scap stage copies the verified mirror digest, not upstream."""
+    from types import SimpleNamespace
+
+    from posture.images import parse_image_ref
+    from posture.scap.stage import ScapStage
+
+    class M:
+        mode = "registry"
+        cache = object()
+
+        def plan(self, ref):
+            return ref, False, False
+
+    st = ScapStage.__new__(ScapStage)
+    st.mirror, st.s = M(), SimpleNamespace(mirror_insecure=True)
+    d = "sha256:" + "a" * 64
+    m = "sha256:" + "b" * 64
+    ref = parse_image_ref(f"docker.io/library/nginx@{d}")
+    img = SimpleNamespace(mirrored=True, mirror_ref=f"mirror:5000/posture-mirror/nginx@{m}")
+    assert st._source(img, ref) == (f"mirror:5000/posture-mirror/nginx@{m}", m, True)
+    st.mirror.mode = "local"
+    assert st._source(img, ref) == (ref.pullable, d, False)

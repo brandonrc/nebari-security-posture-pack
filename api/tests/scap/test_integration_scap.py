@@ -136,6 +136,16 @@ async def test_01_split_workers_hand_off_and_results(scap_env):
     assert alp["status"] == "notApplicable" and alp["benchmarks"] == [] and "alpine" in alp["reason"]
     assert (await c.get("/images/999999/stig")).status_code == 404
 
+    # /images: sort=stig (nulls last in both orders) and stig=evaluated|na|cat1 filters
+    for order in ("asc", "desc"):
+        items = (await c.get("/images", params={"sort": "stig", "order": order})).json()["items"]
+        assert items[0]["id"] == ids["web"] and all(i["stig"] is None or i["stig"]["score"] is None for i in items[1:])
+    names = lambda r: sorted(i["id"] for i in r.json()["items"])  # noqa: E731
+    assert names(await c.get("/images", params={"stig": "evaluated"})) == [ids["web"]]
+    assert names(await c.get("/images", params={"stig": "na"})) == [ids["alpine"]]
+    assert names(await c.get("/images", params={"stig": "cat1"})) == []  # web's only failure is CAT III
+    assert names(await c.get("/images", params={"stig": "evaluated,na"})) == sorted([ids["web"], ids["alpine"]])
+
     bms = (await c.get("/stig/benchmarks")).json()
     assert bms[0]["id"] == "test-posture" and bms[0]["imagesEvaluated"] == 1 and bms[0]["fail"] == 1
     rules = (await c.get("/stig/benchmarks/test-posture/rules")).json()
