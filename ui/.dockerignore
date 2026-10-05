@@ -3,3 +3,4 @@ dist
 screenshots
 *.tsbuildinfo
 dist-mock
+dist-mock-provenance

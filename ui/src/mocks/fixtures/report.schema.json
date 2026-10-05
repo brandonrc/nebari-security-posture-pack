@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/nebari-dev/provenance-collector-pack/main/schema/report.schema.json",
+  "$ref": "#/$defs/ProvenanceReport",
+  "$defs": {
+    "HelmRecord": {
+      "properties": {
+        "releaseName": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "chart": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "appVersion": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "update": {
+          "$ref": "#/$defs/UpdateInfo"
+        }
+      },
+      "type": "object",
+      "required": [
+        "releaseName",
+        "namespace",
+        "chart",
+        "version",
+        "appVersion",
+        "status"
+      ],
+      "description": "HelmRecord captures provenance data for a deployed Helm release."
+    },
+    "ImageRecord": {
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Image is the reference from the pod spec, as written there."
+        },
+        "digest": {
+          "type": "string",
+          "description": "Digest is the registry digest of Image. Absent when it could not be\nresolved; a matching entry in the report's warnings says why."
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "workload": {
+          "$ref": "#/$defs/WorkloadRef"
+        },
+        "signature": {
+          "$ref": "#/$defs/SignatureInfo",
+          "description": "Signature is absent when signature checks are disabled."
+        },
+        "sbom": {
+          "$ref": "#/$defs/SBOMInfo",
+          "description": "SBOM is present only when an SBOM was found."
+        },
+        "provenance": {
+          "$ref": "#/$defs/ProvenanceInfo",
+          "description": "Provenance is present only when SLSA provenance was found."
+        },
+        "update": {
+          "$ref": "#/$defs/UpdateInfo",
+          "description": "Update is present only when a newer version meets the update level."
+        }
+      },
+      "type": "object",
+      "required": [
+        "image",
+        "namespace",
+        "workload"
+      ],
+      "description": "ImageRecord captures provenance data for a single container image."
+    },
+    "ProvenanceInfo": {
+      "properties": {
+        "hasProvenance": {
+          "type": "boolean"
+        },
+        "predicateType": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "hasProvenance"
+      ],
+      "description": "ProvenanceInfo records SLSA provenance attestation results."
+    },
+    "ProvenanceReport": {
+      "properties": {
+        "metadata": {
+          "$ref": "#/$defs/ReportMetadata"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/ImageRecord"
+          },
+          "type": "array"
+        },
+        "helmReleases": {
+          "items": {
+            "$ref": "#/$defs/HelmRecord"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/ReportSummary"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Warnings lists problems that made the report incomplete without failing\nthe run, e.g. Helm releases that could not be listed or images whose\ndigest could not be resolved. Empty or absent means nothing was skipped."
+        }
+      },
+      "type": "object",
+      "required": [
+        "metadata",
+        "images",
+        "summary"
+      ],
+      "description": "ProvenanceReport is the top-level output artifact produced by the collector."
+    },
+    "ReportMetadata": {
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$",
+          "description": "SchemaVersion is the report format version (see report.SchemaVersion).",
+          "examples": [
+            "1.1.0"
+          ]
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "GeneratedAt is when the collection ran (UTC, RFC 3339)."
+        },
+        "collectorVersion": {
+          "type": "string",
+          "description": "CollectorVersion is the collector build that wrote the report\n(informational; use SchemaVersion for compatibility decisions)."
+        },
+        "clusterName": {
+          "type": "string",
+          "description": "ClusterName is PROVENANCE_CLUSTER_NAME, when set."
+        },
+        "namespacesScanned": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "NamespacesScanned lists the namespaces in which images were found, sorted."
+        }
+      },
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "generatedAt",
+        "collectorVersion",
+        "namespacesScanned"
+      ],
+      "description": "ReportMetadata describes when and where the report was generated."
+    },
+    "ReportSummary": {
+      "properties": {
+        "totalImages": {
+          "type": "integer"
+        },
+        "uniqueImages": {
+          "type": "integer"
+        },
+        "signedImages": {
+          "type": "integer"
+        },
+        "verifiedImages": {
+          "type": "integer"
+        },
+        "imagesWithSBOM": {
+          "type": "integer"
+        },
+        "imagesWithProvenance": {
+          "type": "integer"
+        },
+        "imagesWithUpdates": {
+          "type": "integer"
+        },
+        "totalHelmReleases": {
+          "type": "integer"
+        },
+        "helmReleasesWithUpdates": {
+          "type": "integer"
+        }
+      },
+      "type": "object",
+      "required": [
+        "totalImages",
+        "uniqueImages",
+        "signedImages",
+        "verifiedImages",
+        "imagesWithSBOM",
+        "imagesWithProvenance",
+        "imagesWithUpdates",
+        "totalHelmReleases",
+        "helmReleasesWithUpdates"
+      ],
+      "description": "ReportSummary provides aggregate counts for quick compliance review."
+    },
+    "SBOMInfo": {
+      "properties": {
+        "hasSBOM": {
+          "type": "boolean"
+        },
+        "format": {
+          "type": "string",
+          "description": "Format is \"spdx\" or \"cyclonedx\" when known."
+        }
+      },
+      "type": "object",
+      "required": [
+        "hasSBOM"
+      ],
+      "description": "SBOMInfo records whether an SBOM attestation is attached to an image."
+    },
+    "SignatureInfo": {
+      "properties": {
+        "signed": {
+          "type": "boolean",
+          "description": "Signed is true when a cosign signature exists for the image."
+        },
+        "verified": {
+          "type": "boolean",
+          "description": "Verified is true when the signature verified against the configured\npublic key. Always false when no key is configured."
+        },
+        "error": {
+          "type": "string",
+          "description": "Error explains why the check could not complete (unreachable registry,\nbad key, failed verification)."
+        }
+      },
+      "type": "object",
+      "required": [
+        "signed",
+        "verified"
+      ],
+      "description": "SignatureInfo records cosign signature verification results."
+    },
+    "UpdateInfo": {
+      "properties": {
+        "currentTag": {
+          "type": "string"
+        },
+        "latestInMajor": {
+          "type": "string"
+        },
+        "newestAvailable": {
+          "type": "string"
+        },
+        "updateAvailable": {
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "required": [
+        "currentTag",
+        "updateAvailable"
+      ],
+      "description": "UpdateInfo records available version updates for an image or chart."
+    },
+    "WorkloadRef": {
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Kind is the pod's controlling owner kind (ReplicaSet, StatefulSet,\nDaemonSet, Job, ...) or \"Pod\" for a bare pod."
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "kind",
+        "name"
+      ],
+      "description": "WorkloadRef identifies the Kubernetes workload that owns a container."
+    }
+  },
+  "title": "Provenance collector report",
+  "description": "Report written by provenance-collector (schemaVersion 1.1.0). Consumers should accept any report whose metadata.schemaVersion has the same major version and ignore unknown fields."
+}

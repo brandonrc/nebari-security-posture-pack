@@ -1,9 +1,13 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// End-to-end smoke against the mock-mode bundle (VITE_API_MOCK=1, MSW in the browser): no API,
-// no cluster. CI builds `dist-mock` first (`npx vite build --outDir dist-mock` with VITE_API_MOCK=1)
-// and runs this in mcr.microsoft.com/playwright:v1.63.0-noble (matches @playwright/test).
+// End-to-end smoke against the mock-mode bundles (MSW in the browser): no API, no cluster.
+// CI builds `dist-mock` (VITE_API_MOCK=1, the posture API) and `dist-mock-provenance`
+// (VITE_API_MOCK=provenance, only provenance-collector's Go dashboard) first and runs this in
+// mcr.microsoft.com/playwright:v1.63.0-noble (matches @playwright/test). `provenance.spec.ts` runs
+// against the second bundle on PORT+1.
 const PORT = Number(process.env.PORT ?? 4173);
+const PROVENANCE_PORT = PORT + 1;
+const external = Boolean(process.env.BASE_URL);
 
 export default defineConfig({
   testDir: '.',
@@ -21,14 +25,38 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } }],
-  webServer: process.env.BASE_URL
-    ? undefined
-    : {
-        command: `npx vite preview --outDir dist-mock --host 127.0.0.1 --port ${PORT} --strictPort`,
-        cwd: '..',
-        url: `http://127.0.0.1:${PORT}`,
-        reuseExistingServer: !process.env.CI,
-        timeout: 60_000,
+  projects: [
+    {
+      name: 'chromium',
+      testIgnore: 'provenance.spec.ts',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
+    },
+    {
+      name: 'provenance',
+      testMatch: 'provenance.spec.ts',
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1440, height: 900 },
+        baseURL: process.env.PROVENANCE_BASE_URL ?? `http://127.0.0.1:${PROVENANCE_PORT}`,
       },
+    },
+  ],
+  webServer: external
+    ? undefined
+    : [
+        {
+          command: `npx vite preview --outDir dist-mock --host 127.0.0.1 --port ${PORT} --strictPort`,
+          cwd: '..',
+          url: `http://127.0.0.1:${PORT}`,
+          reuseExistingServer: !process.env.CI,
+          timeout: 60_000,
+        },
+        {
+          command: `npx vite preview --outDir dist-mock-provenance --host 127.0.0.1 --port ${PROVENANCE_PORT} --strictPort`,
+          cwd: '..',
+          url: `http://127.0.0.1:${PROVENANCE_PORT}`,
+          reuseExistingServer: !process.env.CI,
+          timeout: 60_000,
+        },
+      ],
 });

@@ -13,6 +13,7 @@ import {
   PackageCheck,
 } from 'lucide-react';
 import { NavLink as RouterNavLink, useLocation } from 'react-router';
+import { type Feature, productTitle, useCapabilities } from '@/capabilities';
 import {
   Sidebar,
   SidebarContent,
@@ -28,37 +29,43 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar';
 
-const GROUPS = [
+const GROUPS: Array<{ label: string; provenanceLabel: string; items: Array<{ to: string; label: string; icon: typeof Boxes; feature: Feature; end?: boolean }> }> = [
   {
     label: 'Posture',
+    provenanceLabel: 'Supply chain',
     items: [
-      { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-      { to: '/images', label: 'Images', icon: Boxes },
-      { to: '/vulnerabilities', label: 'Vulnerabilities', icon: Bug },
-      { to: '/workloads', label: 'Workloads', icon: Layers },
-      { to: '/namespaces', label: 'Namespaces', icon: Folders },
-      { to: '/checks', label: 'Posture checks', icon: ClipboardCheck },
-      { to: '/supply-chain', label: 'Supply chain', icon: PackageCheck },
+      { to: '/', label: 'Overview', icon: LayoutDashboard, feature: 'overview', end: true },
+      { to: '/images', label: 'Images', icon: Boxes, feature: 'images' },
+      { to: '/vulnerabilities', label: 'Vulnerabilities', icon: Bug, feature: 'vulnerabilities' },
+      { to: '/workloads', label: 'Workloads', icon: Layers, feature: 'workloads' },
+      { to: '/namespaces', label: 'Namespaces', icon: Folders, feature: 'namespaces' },
+      { to: '/checks', label: 'Posture checks', icon: ClipboardCheck, feature: 'checks' },
+      { to: '/supply-chain', label: 'Supply chain', icon: PackageCheck, feature: 'supplyChain' },
     ],
   },
   {
     label: 'Compliance',
+    provenanceLabel: 'History',
     items: [
-      { to: '/compliance', label: 'Compliance', icon: Landmark },
-      { to: '/reports', label: 'Reports', icon: FileText },
+      { to: '/compliance', label: 'Compliance', icon: Landmark, feature: 'compliance' },
+      { to: '/reports', label: 'Reports', icon: FileText, feature: 'reports' },
     ],
   },
   {
     label: 'Operations',
+    provenanceLabel: 'Operations',
     items: [
-      { to: '/scans', label: 'Scans', icon: History },
-      { to: '/settings', label: 'Settings', icon: Settings },
+      { to: '/scans', label: 'Scans', icon: History, feature: 'scans' },
+      { to: '/settings', label: 'Settings', icon: Settings, feature: 'settings' },
     ],
   },
 ];
 
 export function AppSidebar() {
   const { pathname } = useLocation();
+  const caps = useCapabilities();
+  const provenance = caps.mode === 'provenance';
+  const groups = GROUPS.map((g) => ({ label: provenance ? g.provenanceLabel : g.label, items: g.items.filter((i) => caps.features[i.feature]) })).filter((g) => g.items.length);
   const isActive = (to: string, end?: boolean) => (end ? pathname === to : pathname === to || pathname.startsWith(`${to}/`));
 
   return (
@@ -69,13 +76,13 @@ export function AppSidebar() {
             <ShieldCheck className="size-4" />
           </span>
           <span className="min-w-0 flex-1">
-            <SidebarMenuLabel className="block font-medium text-sm leading-5">Security Posture</SidebarMenuLabel>
-            <SidebarMenuDescription>Trivy · Grype · Clair</SidebarMenuDescription>
+            <SidebarMenuLabel className="block font-medium text-sm leading-5">{productTitle(caps)}</SidebarMenuLabel>
+            <SidebarMenuDescription>{provenance ? 'cosign · SBOM · SLSA' : 'Trivy · Grype · Clair'}</SidebarMenuDescription>
           </span>
         </div>
       </SidebarHeader>
       <SidebarContent className="gap-3">
-        {GROUPS.map((group) => (
+        {groups.map((group) => (
           <SidebarGroup key={group.label}>
             <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
             <SidebarMenu>

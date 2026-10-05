@@ -2,6 +2,8 @@ import { ArrowRight, BadgeCheck, FileCheck, PackageCheck, ShieldCheck, ShieldHal
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useHelmReleases, useImages, useSummary, useSupplyChain } from '@/api/queries';
+import { useCapabilities } from '@/capabilities';
+import { DatasetBanner } from '@/components/provenance';
 import type { HelmRelease, ImageSummary, SupplyChainSummary } from '@/api/types';
 import { CardsSkeleton, EmptyState, ErrorAlert, errorMessage, PageHeader } from '@/components/page';
 import { GradeRing, StatusBadge } from '@/components/posture';
@@ -26,7 +28,7 @@ function Meter({ value }: { value: number | null }) {
   );
 }
 
-function StatTile({ label, icon, value, of, unit = 'images', pct = true }: { label: string; icon: ReactNode; value: number; of: number; unit?: string; pct?: boolean }) {
+export function StatTile({ label, icon, value, of, unit = 'images', pct = true }: { label: string; icon: ReactNode; value: number; of: number; unit?: string; pct?: boolean }) {
   const p = percent(value, of);
   return (
     <Card size="sm">
@@ -151,6 +153,7 @@ function OutdatedTable({ images }: { images: ImageSummary[] }) {
 }
 
 export function SupplyChainPage() {
+  const pv = useCapabilities().mode === 'provenance';
   const sc = useSupplyChain();
   const summary = useSummary();
   const helm = useHelmReleases();
@@ -171,6 +174,7 @@ export function SupplyChainPage() {
   return (
     <>
       <PageHeader title="Supply chain" description="Image signatures (cosign), SBOM and SLSA provenance attestations, and available updates for images and Helm releases." />
+      {pv ? <DatasetBanner /> : null}
       {imagesQuery.error ? <ErrorAlert error={imagesQuery.error} onRetry={() => void imagesQuery.refetch()} /> : null}
       {loading ? <CardsSkeleton count={3} /> : null}
       {data ? (
@@ -178,7 +182,7 @@ export function SupplyChainPage() {
           <Card>
             <CardHeader>
               <CardTitle>Supply-chain score</CardTitle>
-              <CardDescription>Container-weighted mean; 15% of the cluster score</CardDescription>
+              <CardDescription>{pv ? 'Container-weighted mean of the per-image scores' : 'Container-weighted mean; 15% of the cluster score'}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col items-center gap-3">
               <GradeRing score={data.score} grade={data.grade ?? gradeForScore(data.score)} size={140} stroke={12} />
@@ -201,7 +205,9 @@ export function SupplyChainPage() {
         <Card>
           <CardContent>
             <EmptyState title="No supply-chain data yet">
-              The provenance stage hasn’t reported for any image. It runs after inventory on the next scan when enabled in Settings → Supply chain.
+              {pv
+                ? 'The collector’s signature, SBOM, provenance and update checks are all disabled or couldn’t reach any registry.'
+                : 'The provenance stage hasn’t reported for any image. It runs after inventory on the next scan when enabled in Settings → Supply chain.'}
             </EmptyState>
           </CardContent>
         </Card>

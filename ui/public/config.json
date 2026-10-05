@@ -1,4 +1,3 @@
 {
-  "apiBase": "/api/v1",
-  "title": "Security Posture"
+  "apiBase": "/api/v1"
 }

@@ -2,6 +2,7 @@ import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import { createBrowserRouter, createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
 import { AppLayout } from '@/components/app-layout';
+import { ByMode, Gate } from '@/components/mode-gate';
 import { RootErrorBoundary, RouteErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toast';
 import { ThemeProvider } from '@/hooks/theme-provider';
@@ -13,6 +14,9 @@ import { ImagesPage } from '@/pages/images';
 import { NamespacesPage } from '@/pages/namespaces';
 import { NotFoundPage } from '@/pages/not-found';
 import { OverviewPage } from '@/pages/overview';
+import { ProvenanceOverviewPage } from '@/pages/provenance/overview';
+import { ProvenanceReportsPage } from '@/pages/provenance/reports';
+import { ProvenanceScansPage } from '@/pages/provenance/scans';
 import { ReportsPage } from '@/pages/reports';
 import { ScanDetailPage } from '@/pages/scan-detail';
 import { ScansPage } from '@/pages/scans';
@@ -33,21 +37,21 @@ export const routes: RouteObject[] = [
         // pathless layout route: a page error renders inside the app shell (sidebar stays usable)
         errorElement: <RouteErrorBoundary />,
         children: [
-          { index: true, element: <OverviewPage /> },
+          { index: true, element: <ByMode posture={<OverviewPage />} provenance={<ProvenanceOverviewPage />} /> },
           { path: 'images', element: <ImagesPage /> },
           { path: 'images/:id', element: <ImageDetailPage /> },
-          { path: 'vulnerabilities', element: <VulnerabilitiesPage /> },
-          { path: 'vulnerabilities/:vulnId', element: <VulnerabilityDetailPage /> },
-          { path: 'workloads', element: <WorkloadsPage /> },
-          { path: 'namespaces', element: <NamespacesPage /> },
-          { path: 'checks', element: <ChecksPage /> },
+          { path: 'vulnerabilities', element: <Gate feature="vulnerabilities"><VulnerabilitiesPage /></Gate> },
+          { path: 'vulnerabilities/:vulnId', element: <Gate feature="vulnerabilities"><VulnerabilityDetailPage /></Gate> },
+          { path: 'workloads', element: <Gate feature="workloads"><WorkloadsPage /></Gate> },
+          { path: 'namespaces', element: <Gate feature="namespaces"><NamespacesPage /></Gate> },
+          { path: 'checks', element: <Gate feature="checks"><ChecksPage /></Gate> },
           { path: 'supply-chain', element: <SupplyChainPage /> },
-          { path: 'checks/:id', element: <CheckDetailPage /> },
-          { path: 'scans', element: <ScansPage /> },
-          { path: 'scans/:id', element: <ScanDetailPage /> },
-          { path: 'reports', element: <ReportsPage /> },
-          { path: 'compliance', element: <CompliancePage /> },
-          { path: 'settings', element: <SettingsPage /> },
+          { path: 'checks/:id', element: <Gate feature="checks"><CheckDetailPage /></Gate> },
+          { path: 'scans', element: <ByMode posture={<ScansPage />} provenance={<ProvenanceScansPage />} /> },
+          { path: 'scans/:id', element: <Gate feature="scanDetail"><ScanDetailPage /></Gate> },
+          { path: 'reports', element: <ByMode posture={<ReportsPage />} provenance={<ProvenanceReportsPage />} /> },
+          { path: 'compliance', element: <Gate feature="compliance"><CompliancePage /></Gate> },
+          { path: 'settings', element: <Gate feature="settings"><SettingsPage /></Gate> },
           { path: '*', element: <NotFoundPage /> },
         ],
       },

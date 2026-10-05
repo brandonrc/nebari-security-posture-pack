@@ -563,3 +563,66 @@ short-lived verify pods.
   - Event scans: CronJob pods and verify pods no longer trigger them, and bursts collapse into one
     per 5 min, so K should drop to a handful a day, around deployments.
 
+
+## 2026-10-05: UI provenance-only mode (replacing provenance-collector-pack's `frontend/`)
+
+- **One bundle, two backends.** The SPA probes `GET {apiBase}/summary` at startup. Any 2xx, 401,
+  403 or 5xx means `posture` mode. A 404, an HTML 200 or a network error means `provenance` mode:
+  only provenance-collector-pack's Go dashboard is behind `/api/` (`/api/reports*`, `/api/me`,
+  `/api/scan`, `/api/export`).
+  - 5xx counts as posture so that an unhealthy posture API still shows its error states.
+  - The cost is that a gateway 502 at page load against the Go dashboard would pick posture. A
+    deployment that knows its backend sets `"mode"` in `/config.json` to skip the probe.
+  - `useCapabilities()` gates the sidebar and routes; hidden routes redirect to `/`.
+  - In provenance mode Overview, Scans and Reports render separate pages
+    (`ui/src/pages/provenance/`). Images, image detail and Supply chain are the existing pages,
+    fed by an adapter.
+- **Adapter, not a second UI.** `ui/src/api/provenance-adapter.ts` maps report schema 1.x onto
+  the existing `ImageSummary.provenance`, `SupplyChainSummary`, `HelmRelease[]`, `Namespace[]`
+  and `ImageDetail` shapes. `api.images`, `api.image`, `api.namespaces`, `api.supplyChain`,
+  `api.helmReleases` and `api.me` in `client.ts` switch to it in provenance mode, so the existing
+  pages need only small changes: column and tab gating, and wording.
+  - Images are keyed by reference, the collector's `uniqueImages` key.
+  - Counts are recomputed per unique image; the collector counts signed, SBOM and so on per
+    container record.
+  - The score comes from `lib/supply-chain.ts`, and the cluster value is the mean of the image
+    scores weighted by container count.
+- **"Not found" vs "not checked".** The report omits `sbom`, `provenance` and `update` in both
+  cases. The adapter treats a check as enabled if any record in that report has the object. It
+  then reads a missing object on an image with a resolved digest as a negative. Images with no
+  digest never reached the registry checks and stay "not checked", with no score deduction.
+- **History.** "View" on a `/api/reports` row switches the active dataset, a module store
+  (`setDataset`), and invalidates every query except the list. Timestamped reports are cached for
+  the session; `latest` is cached for 15 s.
+- **Scans without a status endpoint.** The dashboard only has `POST /api/scan`, and `GET` returns
+  405. After a successful POST, the UI shows the job name and namespace, then polls
+  `/api/reports` every 5 s for up to 5 min. A report newer than the one present at request time
+  completes the job and becomes the active dataset. This is the same approach as the old
+  frontend's `useRunScan`. Pod status and logs are not available.
+  - In provenance mode a 403 is not a global "admins only" lock: reads are open to any
+    authenticated user, and only Run scan is gated, on `canRunScan`. The UI shows a toast instead.
+- **Auth plug.** `client.ts` stays the single fetch layer. It takes headers from an
+  `AuthStrategy` (`ui/src/auth/strategy.ts`).
+  - Posture mode uses gateway cookies and `/logout`.
+  - Provenance mode with a `keycloak` block uses keycloak-js 26 with `login-required`, PKCE S256
+    and no session iframe, matching the old `frontend/src/auth/keycloak.ts`. The token is
+    refreshed when less than 30 s remain. After a 401 the client forces a refresh and retries
+    once. Sign out calls Keycloak logout.
+  - Provenance mode without a `keycloak` block sends no auth header (dashboard OIDC disabled).
+  - The PKCE test runs the real keycloak-js against a fake Keycloak realm in MSW. The fake
+    realm checks `SHA-256(code_verifier)` against the challenge from the authorize URL and checks
+    the nonce.
+- **Config.** `/config.json` accepts both packs' keys: `apiBase`, `title`, `mode`,
+  `provenanceApiBase` (default `/api`), and `keycloak.{url,realm,clientId}`. The branding keys
+  `logoUrl`, `logoUrlDark`, `faviconUrl` and `theme` are ignored. The baked `config.json` no
+  longer pins `title`; the default title depends on the mode.
+- **nginx.** No change was needed. The variable `proxy_pass` under `location /api/` already
+  forwards the URI and all headers unchanged, including Authorization and Sec-Fetch-Site, and
+  `/healthz` stays local. This was verified against `go run ./cmd/dashboard`.
+  provenance-collector-pack's chart mounts its own `nginx.conf` and `config.json` over the image's
+  copies, which also works.
+- **Mock / e2e.** `VITE_API_MOCK=provenance` serves an MSW copy of the Go dashboard built from
+  the vendored golden report and schema (`ui/src/mocks/fixtures/`).
+  - `build:mock-preview` now also builds `dist-mock-provenance`, so the CI e2e job runs the new
+    `playwright/provenance.spec.ts`, a second Playwright project on `PORT+1`, without a workflow
+    change.

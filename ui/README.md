@@ -17,7 +17,7 @@ engine) and `../docs/SCORING.md`.
 | `API_UPSTREAM` | `host:port` of the API, scheme optional (`http://security-posture-api:8000` and `security-posture-api:8000` both work). Default `security-posture-api:8000`. |
 | `/healthz` | static `200 ok` (unauthenticated public route) |
 | `/icon.svg` | shield icon for the landing-page tile (public route) |
-| `/config.json` | runtime config `{"apiBase": "/api/v1", "title": "Security Posture"}`; the chart ConfigMap is mounted over `/usr/share/nginx/html/config.json` (subPath). Served `no-store`. |
+| `/config.json` | runtime config; the image ships `{"apiBase": "/api/v1"}`, and the chart ConfigMap (`{"apiBase", "title"}`) is mounted over `/usr/share/nginx/html/config.json` (subPath). Served `no-store`. All keys, including provenance-collector-pack's `keycloak` block, are listed under [Running against provenance-collector only](#running-against-provenance-collector-only). |
 | Caching | `index.html` / SPA routes `no-cache`; `/assets/*` (content-hashed) `max-age=1y, immutable`; gzip on. |
 
 How the config is rendered: `/etc/nginx/templates/default.conf.template` is processed by the
@@ -48,6 +48,7 @@ cd ui
 alias dnode='docker run --rm -it -u "$(id -u):$(id -g)" -v "$PWD":/app -w /app -e HOME=/tmp -p 5173:5173 node:22-alpine'
 dnode npm ci
 dnode npm run dev:mock      # http://localhost:5173 — fully demoable with MSW fixtures, no API needed
+dnode npm run dev:mock-provenance  # same, provenance-only mode (mock Go dashboard, see below)
 dnode npm run dev           # proxies /api to $API_PROXY (default http://localhost:8000)
 dnode npm run lint          # eslint
 dnode npm run typecheck     # tsc -b --noEmit
@@ -83,6 +84,117 @@ tab with one control expanded, and STIG tab) and Reports in light and dark (plus
 900 px) with Playwright in `mcr.microsoft.com/playwright:v1.63.0-noble`. Both containers use
 `--network host` (preview on `127.0.0.1:$PORT`, default 4173); the script must never run
 `docker network create`, which restarts MicroK8s on the grace host.
+
+## Running against provenance-collector only
+
+The same bundle can stand in for `frontend/` in
+[provenance-collector-pack](https://github.com/nebari-dev/provenance-collector-pack): with only that
+pack's Go dashboard behind `/api/`, the UI runs in **provenance-only mode**.
+
+**Detection.** At startup the SPA probes `GET {apiBase}/summary` (`/api/v1/summary`). Any 2xx, 401,
+403 or 5xx means the posture API is there (`posture` mode, every section, gateway cookies). A 404, an
+HTML 200 (a static SPA fallback) or a network error means `provenance` mode. `"mode": "posture"` or
+`"mode": "provenance"` in `/config.json` skips the probe; set it when the backend may be briefly
+down at page load, since a gateway 502 counts as posture. `useCapabilities()` (`src/capabilities.ts`)
+returns `{mode, features}`. The sidebar, routes, Overview, Images, image detail and Supply chain
+read it.
+
+**What provenance mode shows.**
+
+| Section | Source | Notes |
+|---|---|---|
+| Overview | `GET /api/reports/{latest\|file}` | Supply-chain score ring, signed / verified / SBOM / provenance / update tiles, report metadata (cluster, collector, schema version, namespaces), collector warnings, last 5 reports, Run scan. |
+| Images, image detail | same report, adapted | Provenance columns only (supply-chain grade, signed, SBOM, provenance, update, namespaces, workloads); filter, sort and paging run in the browser. Detail has the Used by and Supply chain tabs. |
+| Supply chain | same report | Unchanged page (tiles, Helm releases, unsigned and outdated lists). |
+| Reports | `GET /api/reports` | One row per collector run. **View** switches the dataset that Overview, Images and Supply chain show; a banner offers *Back to latest*. Downloads: JSON (`/api/reports/{file}`), CSV and Markdown (`/api/export?format=csv\|markdown&filename=`). Each download is a fetch with the bearer token, saved as a blob. A Δ column of unique images appears when `/api/me` sets `features.timelineDeltas`. |
+| Scans | `POST /api/scan` + `GET /api/reports` | **Run scan** shows only when `/api/me` returns `canRunScan`. After the POST, the job name and namespace are shown and `/api/reports` is polled every 5 s for up to 5 min until a newer report appears; that report is then loaded. 409, 403 and 503 responses show a toast. History lists one row per report. |
+
+Vulnerabilities, Workloads, Namespaces, Posture checks, Compliance, Settings and scan detail are
+hidden, and their routes redirect to `/`.
+
+**Report adapter** (`src/api/provenance-adapter.ts`). This maps the collector report
+(`src/api/provenance-report.ts`, hand-written from `schema/report.schema.json` 1.x) onto
+`ImageSummary.provenance`, `SupplyChainSummary`, `HelmRelease[]`, `Namespace[]` and `ImageDetail`.
+
+- Images are grouped by reference, the collector's own `uniqueImages` key.
+- The supply-chain score is computed with `lib/supply-chain.ts`. The cluster score is the mean of
+  the image scores, weighted by container count.
+- The collector counts signed, SBOM, provenance and update images per container record. The
+  adapter recounts them per unique image, so percentages stay at or below 100%.
+- The report omits `sbom`, `provenance` and `update` both when nothing was found and when the
+  check is off. The adapter treats a check as on if any record in the report has that object. It
+  then reads a missing object on an image with a resolved digest as a negative (no SBOM, up to
+  date). Images whose digest could not be resolved show "not checked".
+- `src/api/provenance-adapter.test.ts` walks the vendored schema and fails if a field has no
+  mapping.
+
+**Auth.** If `/config.json` has a complete `keycloak` block (`url`, `realm`, `clientId`, the
+shape of provenance-collector-pack's `frontend-configmap.yaml`), keycloak-js logs in before the
+first render, using `login-required`, PKCE `S256` and no session iframe. Every request then
+carries `Authorization: Bearer`. The token is refreshed when less than 30 s of validity is left.
+After a 401 the client forces a refresh and retries once. A second 401 shows the Session expired
+screen. Sign out calls Keycloak logout.
+
+Without a `keycloak` block the dashboard is assumed to run with auth disabled, and no header is
+sent. In posture mode the gateway-cookie behaviour is unchanged.
+
+`src/api/client.ts` is still the only fetch layer. It reads its auth from the strategy in
+`src/auth/strategy.ts`. The browser adds `Sec-Fetch-Site: same-origin` to `POST /api/scan`, and
+nginx forwards it.
+
+**Runtime config** (`/config.json`; both packs' keys are accepted, unknown keys are ignored):
+
+| Key | Default | Used by |
+|---|---|---|
+| `apiBase` | `/api/v1` | posture API base; also the capability probe |
+| `provenanceApiBase` | `/api` | Go dashboard base (`/reports`, `/me`, `/scan`, `/export`) |
+| `title` | per mode: "Security Posture" / "Supply-chain provenance" | header, sidebar, tab title |
+| `mode` | `auto` | `auto` \| `posture` \| `provenance` |
+| `keycloak.url`, `.realm`, `.clientId` | unset | provenance-mode PKCE login (all three required) |
+| `logoUrl`, `logoUrlDark`, `faviconUrl`, `theme` | ignored | provenance-collector-pack branding; not implemented |
+
+**Deploying in provenance-collector-pack's chart.** Set `frontend.image` to this image. That
+chart mounts its own `nginx.conf` over `/etc/nginx/nginx.conf`, which proxies `/api/` to the
+dashboard Service and serves `/healthz` locally, and its `config.json` over
+`/usr/share/nginx/html/config.json`. Both work unchanged.
+
+To use this image's nginx instead, mount only `config.json` and set
+`API_UPSTREAM=<fullname>-web:<webUI.port>`. `location /api/` proxies `/api/reports*`, `/api/me`,
+`/api/scan` and `/api/export` with the URI and all headers unchanged; `/healthz` stays local.
+
+Checked against the real dashboard (`go run ./cmd/dashboard` with the golden report, auth off),
+both behind this image's nginx:
+
+- `/api/v1/summary` returns 404, so the UI starts in provenance mode.
+- `POST /api/scan` without `Sec-Fetch-Site` returns 403. With `Sec-Fetch-Site: same-origin` it
+  returns 503 ("not configured"), which shows the header is forwarded.
+- In a browser, Overview, Images, Reports and the CSV export all work.
+
+**Mock mode.** `VITE_API_MOCK=provenance` (`npm run dev:mock-provenance`, `npm run
+build:mock-provenance` → `dist-mock-provenance/`) starts an MSW copy of the Go dashboard
+(`src/mocks/provenance-backend.ts`). It serves the golden report (`src/mocks/fixtures/report.golden.json`)
+plus two older runs, answers 404 for `/api/v1/*`, and uses a stand-in keycloak-js session whose
+bearer the mock requires. A manual scan finishes after about 8 s. Add `?mockAuth=viewer` for a
+user without `canRunScan`, `?mockAuth=401` for a rejected token, or `?mockAuth=noauth` for a
+dashboard with OIDC off.
+
+`npm run build:mock-preview` builds both mock bundles. Playwright runs `provenance.spec.ts`
+against the provenance bundle on `PORT+1`, with `PROVENANCE_BASE_URL` to override:
+
+```sh
+dnode npm run build:mock-preview
+docker run --rm --network host --ipc=host -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/app -w /app \
+  mcr.microsoft.com/playwright:v1.63.0-noble npx playwright test -c playwright/playwright.config.ts
+```
+
+**Not supported from their API.**
+
+- There is no job-status endpoint (`GET /api/scan` returns 405), so a run is followed by polling
+  for a new report. The job's pod status and logs are not shown, and a failed Job shows up only
+  as the 5-minute timeout.
+- `/api/me` returns `email` but no display name. The name comes from the ID token.
+- Branding keys in `config.json` are ignored.
+- The dashboard's `/healthz` is not proxied.
 
 ## API assumptions (§12 / §13)
 

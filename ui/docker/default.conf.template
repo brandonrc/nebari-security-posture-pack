@@ -18,6 +18,13 @@ server {
         return 200 'ok';
     }
 
+    # One prefix for both backends: the posture API (/api/v1/*) or, in provenance-only mode,
+    # provenance-collector-pack's Go dashboard (/api/reports*, /api/me, /api/scan, /api/export);
+    # point API_UPSTREAM at whichever Service is deployed. The URI is passed through unchanged
+    # (variable proxy_pass, no URI part) and every request header is forwarded, including
+    # Authorization (keycloak-js bearer) and Sec-Fetch-Site (the dashboard's POST /api/scan CSRF
+    # guard requires `same-origin`). /healthz above stays local; the dashboard's own /healthz is
+    # not proxied.
     location /api/ {
         set $api_upstream ${API_UPSTREAM};
         proxy_pass http://$api_upstream;

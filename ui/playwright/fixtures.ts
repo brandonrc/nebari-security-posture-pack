@@ -9,6 +9,8 @@ export const test = base.extend<{ errors: string[] }>({
       if (msg.type() !== 'error') return;
       const text = msg.text();
       if (/Download the React DevTools|\[MSW\]/.test(text)) return;
+      // the startup capability probe: a 404 from /api/v1/summary is how provenance-only mode is detected
+      if (/Failed to load resource/.test(text) && msg.location().url.includes('/api/v1/summary')) return;
       errors.push(`console: ${text}`);
     });
     await use(errors);

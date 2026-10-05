@@ -2,6 +2,8 @@ import { Menu as MenuPrimitive } from '@base-ui/react/menu';
 import { ChevronDown, LogOut, Monitor, Moon, Sun } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useMe } from '@/api/queries';
+import { getAuthStrategy } from '@/auth/strategy';
+import { productTitle, useCapabilities } from '@/capabilities';
 import { Avatar, AvatarFallback } from '@/components/avatar';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -29,8 +31,9 @@ function initialsOf(name: string): string {
   return ((parts[0]?.[0] ?? '?') + (parts[1]?.[0] ?? '')).toUpperCase();
 }
 
+/** Gateway `/logout` in posture mode; keycloak-js logout in provenance mode (auth strategy). */
 export function signOut() {
-  window.location.assign('/logout');
+  getAuthStrategy().signOut();
 }
 
 function ProfileMenu() {
@@ -113,6 +116,7 @@ function ProfileMenu() {
 export function AppHeader() {
   const { isDarkMode } = useTheme();
   const navigate = useNavigate();
+  const caps = useCapabilities();
   return (
     <NavigationMenu className="h-14 shrink-0 justify-between border-border bg-header pl-4 text-header-foreground">
       <MenuBarBrand
@@ -130,7 +134,7 @@ export function AppHeader() {
         />
       </MenuBarBrand>
       <MenuBarNav aria-label="Application" className="hidden md:flex">
-        <span className="ml-2 border-border border-l pl-4 font-medium text-muted-foreground-strong text-sm">Security Posture</span>
+        <span className="ml-2 border-border border-l pl-4 font-medium text-muted-foreground-strong text-sm">{productTitle(caps)}</span>
       </MenuBarNav>
       <MenuBarActions className="gap-2">
         <ProfileMenu />

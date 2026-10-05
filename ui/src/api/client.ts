@@ -1,4 +1,8 @@
+import { getAuthStrategy } from '@/auth/strategy';
+import { isProvenanceMode } from '@/capabilities';
 import { getConfig } from '@/config';
+import { adaptMe, loadDataset, queryImages } from './provenance-adapter';
+import type { PcMe, PcProvenanceReport, PcReportEntry, PcScanResponse } from './provenance-report';
 import type {
   Assertion,
   AssertionRun,
@@ -62,31 +66,108 @@ export function apiUrl(path: string, params?: Params): string {
   return `${getConfig().apiBase}${path}${buildQuery(params)}`;
 }
 
-async function request<T>(method: string, path: string, options: { params?: Params; body?: unknown } = {}): Promise<T> {
-  const response = await fetch(apiUrl(path, options.params), {
-    method,
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
-  if (!response.ok) {
-    let detail = response.statusText;
+/**
+ * The single fetch layer. Auth comes from the active strategy (`src/auth/strategy.ts`): gateway
+ * cookies in posture mode, a keycloak-js bearer in provenance mode (refreshed and retried once on
+ * a 401).
+ */
+async function send(url: string, method: string, body?: unknown, accept = 'application/json'): Promise<Response> {
+  const strategy = getAuthStrategy();
+  const exec = async (forceRefresh: boolean) => {
+    let auth: Record<string, string>;
     try {
-      const data = (await response.json()) as { detail?: unknown };
+      auth = await strategy.headers(forceRefresh);
+    } catch (error) {
+      throw new ApiError(401, error instanceof Error ? error.message : 'Session expired');
+    }
+    return fetch(url, {
+      method,
+      credentials: 'same-origin',
+      headers: {
+        Accept: accept,
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...auth,
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  };
+  let response = await exec(false);
+  if (response.status === 401 && strategy.retryOn401) response = await exec(true);
+  if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+  return response;
+}
+
+/** FastAPI `{detail}` bodies, or the Go dashboard's `http.Error` plain text. */
+async function errorDetail(response: Response): Promise<string> {
+  let detail = response.statusText;
+  try {
+    const text = await response.text();
+    try {
+      const data = JSON.parse(text) as { detail?: unknown };
       if (typeof data.detail === 'string') detail = data.detail;
       else if (data.detail) detail = JSON.stringify(data.detail);
     } catch {
-      /* non-JSON error body */
+      if ((response.headers.get('content-type') ?? '').startsWith('text/plain') && text.trim()) detail = text.trim().slice(0, 300);
     }
-    throw new ApiError(response.status, detail);
+  } catch {
+    /* unreadable body */
   }
+  return detail;
+}
+
+async function parse<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   return (text ? JSON.parse(text) : undefined) as T;
 }
+
+async function request<T>(method: string, path: string, options: { params?: Params; body?: unknown } = {}): Promise<T> {
+  return parse<T>(await send(apiUrl(path, options.params), method, options.body));
+}
+
+// ── provenance-collector dashboard (`/api/reports`, `/api/me`, `/api/scan`, `/api/export`) ──
+
+export function pcUrl(path: string, params?: Params): string {
+  return `${getConfig().provenanceApiBase}${path}${buildQuery(params)}`;
+}
+
+async function pcRequest<T>(method: string, path: string, params?: Params): Promise<T> {
+  return parse<T>(await send(pcUrl(path, params), method));
+}
+
+const fetchReport = (name: string) => pcRequest<PcProvenanceReport>('GET', `/reports/${encodeURIComponent(name)}`);
+const dataset = () => loadDataset(fetchReport);
+
+/** Saves an authenticated GET (the bearer can't ride on a plain `<a href>`) as a file. */
+export async function downloadFile(url: string, fallbackName: string): Promise<string> {
+  const response = await send(url, 'GET', undefined, '*/*');
+  const blob = await response.blob();
+  const cd = response.headers.get('content-disposition') ?? '';
+  const name = /filename="?([^";]+)"?/i.exec(cd)?.[1] ?? fallbackName;
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+  return name;
+}
+
+export const provenanceApi = {
+  me: async () => adaptMe(await pcRequest<PcMe>('GET', '/me'), getAuthStrategy().user()),
+  reports: async () => {
+    const r = await pcRequest<PcReportEntry[] | null>('GET', '/reports');
+    return Array.isArray(r) ? r : [];
+  },
+  report: fetchReport,
+  dataset,
+  /** POST /api/scan — the browser adds `Sec-Fetch-Site: same-origin`, which the dashboard requires. */
+  startScan: () => pcRequest<PcScanResponse>('POST', '/scan'),
+  reportUrl: (filename: string | null) => pcUrl(`/reports/${encodeURIComponent(filename ?? 'latest')}`),
+  exportUrl: (format: 'csv' | 'markdown', filename: string | null) => pcUrl('/export', { format, filename: filename ?? undefined }),
+};
 
 /** Accept either a bare array or a `{items}` envelope for list endpoints. */
 function asArray<T>(data: T[] | { items: T[] } | null | undefined): T[] {
@@ -98,13 +179,19 @@ function asArray<T>(data: T[] | { items: T[] } | null | undefined): T[] {
 type RawScanDetail = Omit<ScanDetail, 'log'> & { log?: string[] | string; logs?: string[]; logTail?: string[] };
 
 export const api = {
-  me: () => request<Me>('GET', '/me'),
+  me: (): Promise<Me> => (isProvenanceMode() ? provenanceApi.me() : request<Me>('GET', '/me')),
   summary: async (): Promise<Summary> => normalize.summary(await request<unknown>('GET', '/summary')),
 
   images: async (query: ImageQuery): Promise<Page<ImageSummary>> =>
-    normalize.page(await request<unknown>('GET', '/images', { params: { ...query } }), normalize.imageSummary),
-  image: async (id: string, query: ImageFindingsQuery = {}): Promise<ImageDetail> =>
-    normalize.imageDetail(await request<unknown>('GET', `/images/${encodeURIComponent(id)}`, { params: { ...query } })),
+    isProvenanceMode() ? queryImages(await dataset(), query) : normalize.page(await request<unknown>('GET', '/images', { params: { ...query } }), normalize.imageSummary),
+  image: async (id: string, query: ImageFindingsQuery = {}): Promise<ImageDetail> => {
+    if (isProvenanceMode()) {
+      const detail = (await dataset()).details.get(id);
+      if (!detail) throw new ApiError(404, `Image ${id} is not in this report`);
+      return detail;
+    }
+    return normalize.imageDetail(await request<unknown>('GET', `/images/${encodeURIComponent(id)}`, { params: { ...query } }));
+  },
 
   vulnerabilities: async (query: VulnQuery): Promise<VulnList> =>
     normalize.vulnList(await request<unknown>('GET', '/vulnerabilities', { params: { ...query } })),
@@ -113,7 +200,7 @@ export const api = {
 
   workloads: async (params: { namespace?: string; kind?: string } = {}) =>
     asArray(await request<Workload[] | { items: Workload[] }>('GET', '/workloads', { params })),
-  namespaces: async () => asArray(await request<Namespace[] | { items: Namespace[] }>('GET', '/namespaces')),
+  namespaces: async () => isProvenanceMode() ? (await dataset()).namespaces : asArray(await request<Namespace[] | { items: Namespace[] }>('GET', '/namespaces')),
 
   checks: async () => asArray(await request<Check[] | { items: Check[] }>('GET', '/checks')),
   check: async (id: string): Promise<CheckDetail> => normalize.checkDetail(await request<unknown>('GET', `/checks/${encodeURIComponent(id)}`)),
@@ -149,8 +236,9 @@ export const api = {
   assertions: async () => asArray(await request<Assertion[] | { items: Assertion[] }>('GET', '/compliance/assertions')),
   runAssertions: () => request<AssertionRun | undefined>('POST', '/compliance/assertions/run'),
 
-  supplyChain: async (): Promise<SupplyChainSummary> => normalize.supplyChain(await request<unknown>('GET', '/supply-chain')),
-  helmReleases: async () => asArray(await request<HelmRelease[] | { items: HelmRelease[] }>('GET', '/helm-releases')),
+  supplyChain: async (): Promise<SupplyChainSummary> =>
+    isProvenanceMode() ? (await dataset()).supplyChain : normalize.supplyChain(await request<unknown>('GET', '/supply-chain')),
+  helmReleases: async () => isProvenanceMode() ? (await dataset()).helmReleases : asArray(await request<HelmRelease[] | { items: HelmRelease[] }>('GET', '/helm-releases')),
 
   complianceStig: async () => asArray(await request<StigRule[] | { items: StigRule[] }>('GET', '/compliance/stig')),
 

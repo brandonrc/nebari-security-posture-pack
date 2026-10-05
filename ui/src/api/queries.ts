@@ -1,4 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { getCapabilities } from '@/capabilities';
 import { api } from './client';
 import type { ImageFindingsQuery, ImageQuery, VulnQuery } from './types';
 
@@ -28,7 +29,9 @@ export const qk = {
 };
 
 export const useMe = () => useQuery({ queryKey: qk.me, queryFn: api.me, staleTime: 5 * 60_000 });
-export const useSummary = () => useQuery({ queryKey: qk.summary, queryFn: api.summary, refetchInterval: 60_000 });
+/** Posture-only: provenance mode has no `/summary` (pages that share it treat it as absent). */
+export const useSummary = () =>
+  useQuery({ queryKey: qk.summary, queryFn: api.summary, refetchInterval: 60_000, enabled: getCapabilities().mode === 'posture' });
 export const useImages = (q: ImageQuery) =>
   useQuery({ queryKey: qk.images(q), queryFn: () => api.images(q), placeholderData: keepPreviousData });
 /** Image detail; `q` pages/filters the findings server-side. Keeps the previous page while the next loads. */

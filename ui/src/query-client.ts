@@ -1,11 +1,14 @@
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import { setAuthState } from '@/api/auth-state';
 import { ApiError } from '@/api/client';
+import { isProvenanceMode } from '@/capabilities';
 
 function onAuthError(error: unknown) {
   if (error instanceof ApiError) {
     if (error.status === 401) setAuthState('expired');
-    else if (error.status === 403) setAuthState('forbidden');
+    // provenance mode: only POST /api/scan answers 403 (not in an admin group / CSRF guard);
+    // reads stay available, so the scan control toasts instead of locking the whole app
+    else if (error.status === 403 && !isProvenanceMode()) setAuthState('forbidden');
   }
 }
 

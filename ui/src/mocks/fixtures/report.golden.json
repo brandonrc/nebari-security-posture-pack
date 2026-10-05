@@ -1,0 +1,144 @@
+{
+  "metadata": {
+    "schemaVersion": "1.1.0",
+    "generatedAt": "2026-10-03T12:00:00Z",
+    "collectorVersion": "v0.0.0-golden",
+    "clusterName": "golden",
+    "namespacesScanned": [
+      "default",
+      "kube-system",
+      "monitoring"
+    ]
+  },
+  "images": [
+    {
+      "image": "ghcr.io/example/unreachable:0.1.0",
+      "namespace": "default",
+      "workload": {
+        "kind": "Pod",
+        "name": "debug"
+      },
+      "signature": {
+        "signed": false,
+        "verified": false,
+        "error": "fetching signed entity: GET https://ghcr.io: 401 Unauthorized"
+      }
+    },
+    {
+      "image": "ghcr.io/example/web:1.4.2",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "namespace": "default",
+      "workload": {
+        "kind": "ReplicaSet",
+        "name": "web-7d9f"
+      },
+      "signature": {
+        "signed": true,
+        "verified": true
+      },
+      "sbom": {
+        "hasSBOM": true,
+        "format": "spdx"
+      },
+      "provenance": {
+        "hasProvenance": true,
+        "predicateType": "https://slsa.dev/provenance/v1"
+      },
+      "update": {
+        "currentTag": "1.4.2",
+        "latestInMajor": "1.6.0",
+        "newestAvailable": "2.0.1",
+        "updateAvailable": true
+      }
+    },
+    {
+      "image": "busybox:1.36",
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "namespace": "default",
+      "workload": {
+        "kind": "ReplicaSet",
+        "name": "web-7d9f"
+      },
+      "signature": {
+        "signed": false,
+        "verified": false
+      }
+    },
+    {
+      "image": "registry.k8s.io/coredns/coredns:v1.11.1",
+      "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "namespace": "kube-system",
+      "workload": {
+        "kind": "ReplicaSet",
+        "name": "coredns-5d78"
+      },
+      "signature": {
+        "signed": true,
+        "verified": false
+      }
+    },
+    {
+      "image": "quay.io/prometheus/prometheus:v2.53.0",
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "namespace": "monitoring",
+      "workload": {
+        "kind": "StatefulSet",
+        "name": "prometheus"
+      },
+      "signature": {
+        "signed": false,
+        "verified": false
+      },
+      "sbom": {
+        "hasSBOM": true,
+        "format": "cyclonedx"
+      }
+    },
+    {
+      "image": "busybox:1.36",
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "namespace": "monitoring",
+      "workload": {
+        "kind": "StatefulSet",
+        "name": "prometheus"
+      },
+      "signature": {
+        "signed": false,
+        "verified": false
+      }
+    }
+  ],
+  "helmReleases": [
+    {
+      "releaseName": "prometheus",
+      "namespace": "monitoring",
+      "chart": "prometheus",
+      "version": "25.8.0",
+      "appVersion": "v2.53.0",
+      "status": "deployed"
+    },
+    {
+      "releaseName": "web",
+      "namespace": "default",
+      "chart": "web",
+      "version": "0.3.1",
+      "appVersion": "1.4.2",
+      "status": "failed"
+    }
+  ],
+  "summary": {
+    "totalImages": 6,
+    "uniqueImages": 5,
+    "signedImages": 2,
+    "verifiedImages": 1,
+    "imagesWithSBOM": 2,
+    "imagesWithProvenance": 1,
+    "imagesWithUpdates": 1,
+    "totalHelmReleases": 2,
+    "helmReleasesWithUpdates": 0
+  },
+  "warnings": [
+    "helm: listing helm releases in namespace kube-system: secrets is forbidden: User \"system:serviceaccount:provenance:collector\" cannot list resource \"secrets\"",
+    "image ghcr.io/example/unreachable:0.1.0: digest not resolved: resolving digest for ghcr.io/example/unreachable:0.1.0: GET https://ghcr.io: 401 Unauthorized"
+  ]
+}

@@ -5,6 +5,7 @@ import { Download, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { api } from '@/api/client';
 import { useImage } from '@/api/queries';
+import { useCapabilities } from '@/capabilities';
 import type { ImageDetail } from '@/api/types';
 import { SCANNERS } from '@/api/types';
 import { DEFAULT_FINDINGS_QUERY, FindingsTable, type FindingsQuery } from '@/components/findings-table';
@@ -25,7 +26,7 @@ import { latestTag, supplyChainScore, updateLevel } from '@/lib/supply-chain';
 import { gradeClass } from '@/lib/severity-styles';
 import { cn } from '@/lib/utils';
 
-function Header({ image }: { image: ImageDetail }) {
+function Header({ image, pv }: { image: ImageDetail; pv: boolean }) {
   const rescan = useMutation({
     mutationFn: () => api.startScan({ imageIds: [image.id], force: true }),
     onSuccess: (scan) => toast.add({ title: `Rescan queued (scan #${scan.id})`, description: image.ref, type: 'info' }),
@@ -34,7 +35,11 @@ function Header({ image }: { image: ImageDetail }) {
   return (
     <Card>
       <CardContent className="flex flex-col gap-5 md:flex-row md:items-center">
-        <GradeRing score={image.score} grade={image.grade} size={112} stroke={10} />
+        {pv ? (
+          <GradeRing score={image.provenance?.score ?? null} grade={image.provenance?.grade ?? '?'} size={112} stroke={10} />
+        ) : (
+          <GradeRing score={image.score} grade={image.grade} size={112} stroke={10} />
+        )}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex min-w-0 items-center gap-1">
             <h2 className="truncate font-mono font-semibold text-base" title={image.ref}>
@@ -48,34 +53,42 @@ function Header({ image }: { image: ImageDetail }) {
             </span>
             {image.digest ? <CopyButton value={`${image.registry}/${image.repository}@${image.digest}`} label="Copy pinned reference" /> : null}
           </div>
+          {pv ? null : (
           <div className="flex flex-wrap items-center gap-3">
             <SeverityChips counts={image.counts} />
             <span className="text-muted-foreground text-xs">
               {totalCount(image.counts)} findings · {totalCount(image.fixable)} fixable
             </span>
           </div>
+          )}
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
             <Meta label="Registry">{image.registry}</Meta>
             <Meta label="Tag">{image.tag ?? '—'}</Meta>
-            <Meta label="Agreement">
-              <AgreementDots value={image.agreementIndex} />
-            </Meta>
+            {pv ? null : (
+              <Meta label="Agreement">
+                <AgreementDots value={image.agreementIndex} />
+              </Meta>
+            )}
             <Meta label="Usage">
               {image.workloads} workloads · {image.containers} containers
             </Meta>
-            <Meta label="Last scanned">{formatRelative(image.lastScannedAt)}</Meta>
-            <Meta label="Source">
-              {image.mirrored ? 'mirrored' : 'original ref'}
-              {image.confidence === 'low' ? <Badge variant="destructive" className="ml-1">low confidence</Badge> : null}
-            </Meta>
+            <Meta label={pv ? 'Collected' : 'Last scanned'}>{formatRelative(image.lastScannedAt)}</Meta>
+            {pv ? null : (
+              <Meta label="Source">
+                {image.mirrored ? 'mirrored' : 'original ref'}
+                {image.confidence === 'low' ? <Badge variant="destructive" className="ml-1">low confidence</Badge> : null}
+              </Meta>
+            )}
           </div>
         </div>
-        <div className="flex shrink-0 flex-col gap-2">
-          <Button variant="outline" onClick={() => rescan.mutate()} loading={rescan.isPending}>
-            <RefreshCw />
-            Rescan image
-          </Button>
-        </div>
+        {pv ? null : (
+          <div className="flex shrink-0 flex-col gap-2">
+            <Button variant="outline" onClick={() => rescan.mutate()} loading={rescan.isPending}>
+              <RefreshCw />
+              Rescan image
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -370,11 +383,15 @@ function SupplyChain({ image }: { image: ImageDetail }) {
 }
 
 const TABS = ['findings', 'used-by', 'runs', 'posture', 'supply-chain'] as const;
+/** provenance mode has no scanner data: only the collector's view of the image */
+const PROVENANCE_TABS = ['used-by', 'supply-chain'] as const;
 
 export function ImageDetailPage() {
   const [params, setParams] = useSearchParams();
-  const tabParam = params.get('tab') ?? 'findings';
-  const tab = (TABS as readonly string[]).includes(tabParam) ? tabParam : 'findings';
+  const pv = useCapabilities().mode === 'provenance';
+  const defaultTab = pv ? 'supply-chain' : 'findings';
+  const tabParam = params.get('tab') ?? defaultTab;
+  const tab = ((pv ? PROVENANCE_TABS : TABS) as readonly string[]).includes(tabParam) ? tabParam : defaultTab;
   const { id = '' } = useParams();
   // findings tab state = the server-side findings query; back to defaults on another image
   const [findingsQuery, setFindingsQuery] = useState<{ id: string; q: FindingsQuery }>({ id, q: DEFAULT_FINDINGS_QUERY });
@@ -400,11 +417,11 @@ export function ImageDetailPage() {
       {isLoading ? <CardsSkeleton count={2} className="xl:grid-cols-2" /> : null}
       {image ? (
         <>
-          <Header image={image} />
+          <Header image={image} pv={pv} />
           {image.warnings.length || failedScanners.length ? (
             <Alert variant="warning">
               <TriangleAlert />
-              <AlertTitle>{image.score === null ? 'No scanner succeeded — image is not scored' : 'Partial scan coverage'}</AlertTitle>
+              <AlertTitle>{pv ? 'Collector warnings' : image.score === null ? 'No scanner succeeded — image is not scored' : 'Partial scan coverage'}</AlertTitle>
               <AlertDescription>
                 <ul className="list-disc pl-4">
                   {failedScanners.map((s) => (
@@ -427,7 +444,7 @@ export function ImageDetailPage() {
                   setParams(
                     (prev) => {
                       const next = new URLSearchParams(prev);
-                      if (v === 'findings') next.delete('tab');
+                      if (v === defaultTab) next.delete('tab');
                       else next.set('tab', String(v));
                       return next;
                     },
@@ -436,16 +453,22 @@ export function ImageDetailPage() {
                 }
               >
                 <TabsList variant="underline" aria-label="Image detail sections">
-                  <TabsTab value="findings">
-                    Findings <Badge variant="secondary">{(image.findingsSummary?.total ?? image.findingsTotal ?? image.findings.length).toLocaleString()}</Badge>
-                  </TabsTab>
+                  {pv ? null : (
+                    <TabsTab value="findings">
+                      Findings <Badge variant="secondary">{(image.findingsSummary?.total ?? image.findingsTotal ?? image.findings.length).toLocaleString()}</Badge>
+                    </TabsTab>
+                  )}
                   <TabsTab value="used-by">
                     Used by <Badge variant="secondary">{image.usedBy.length}</Badge>
                   </TabsTab>
-                  <TabsTab value="runs">Scanner runs</TabsTab>
-                  <TabsTab value="posture">
-                    Posture <Badge variant={image.postureFindings.length ? 'destructive' : 'secondary'}>{image.postureFindings.length}</Badge>
-                  </TabsTab>
+                  {pv ? null : (
+                    <>
+                      <TabsTab value="runs">Scanner runs</TabsTab>
+                      <TabsTab value="posture">
+                        Posture <Badge variant={image.postureFindings.length ? 'destructive' : 'secondary'}>{image.postureFindings.length}</Badge>
+                      </TabsTab>
+                    </>
+                  )}
                   <TabsTab value="supply-chain">
                     Supply chain
                     {image.provenance ? <SupplyChainTabBadge image={image} /> : null}

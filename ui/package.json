@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:mock": "VITE_API_MOCK=1 vite",
+    "dev:mock-provenance": "VITE_API_MOCK=provenance vite",
     "build": "tsc -b && vite build",
     "build:mock": "tsc -b && VITE_API_MOCK=1 vite build",
     "preview": "vite preview",
@@ -15,7 +16,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "e2e": "playwright test -c playwright/playwright.config.ts",
-    "build:mock-preview": "VITE_API_MOCK=1 vite build --outDir dist-mock"
+    "build:mock-preview": "VITE_API_MOCK=1 vite build --outDir dist-mock && npm run build:mock-provenance",
+    "build:mock-provenance": "VITE_API_MOCK=provenance vite build --outDir dist-mock-provenance"
   },
   "dependencies": {
     "@base-ui/react": "~1.6.0",
@@ -25,6 +27,7 @@
     "@tanstack/react-table": "9.2.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "keycloak-js": "^26.2.4",
     "lucide-react": "^1.50.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
