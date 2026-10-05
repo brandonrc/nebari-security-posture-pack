@@ -5,9 +5,13 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .scanners.base import Finding
 from .severity import max_severity, severity_rank
+
+if TYPE_CHECKING:
+    from .vex import ImageVex
 
 SCANNER_PREFERENCE = ("trivy", "grype", "clair")
 
@@ -31,6 +35,16 @@ class ConsensusFinding:
     title: str | None = None
     url: str | None = None
     extra: dict = field(default_factory=dict)
+    # VEX (posture.vex): status of the newest applicable statement; `not_affected` suppresses
+    vex_status: str | None = None
+    vex_justification: str | None = None
+    vex_source: str | None = None
+    vex_detail: str | None = None
+
+    @property
+    def suppressed(self) -> bool:
+        """A `not_affected` VEX statement applies: kept and reported, but not an open finding."""
+        return self.vex_status == "not_affected"
 
     @property
     def fixable(self) -> bool:
@@ -81,6 +95,21 @@ def correlate(findings: Iterable[Finding], succeeded: Iterable[str]) -> list[Con
         )
     out.sort(key=lambda c: (-severity_rank(c.severity), -(c.cvss or 0), c.vuln_id, c.package))
     return out
+
+
+def apply_vex(consensus: list[ConsensusFinding], vex: ImageVex | None) -> int:
+    """Mark consensus findings with the image's applicable VEX statements (authoritative,
+    whatever the scanners did with `--vex`). Returns how many are suppressed (`not_affected`)."""
+    if not vex:
+        return 0
+    suppressed = 0
+    for c in consensus:
+        d = vex.decide(c.vuln_id, c.package, c.pkg_type, c.installed_version)
+        if d is None:
+            continue
+        c.vex_status, c.vex_justification, c.vex_source, c.vex_detail = d.status, d.justification, d.source, d.detail
+        suppressed += int(d.suppressed)
+    return suppressed
 
 
 def agreement_index(consensus: list[ConsensusFinding], n_succeeded: int) -> float | None:

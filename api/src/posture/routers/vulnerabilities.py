@@ -39,7 +39,7 @@ async def _workloads_by_image(session: AsyncSession,
 
 async def _rows(session: AsyncSession, vuln_id: str | None = None):
     stmt = (select(ConsensusFindingRow, Image).join(Image, Image.id == ConsensusFindingRow.image_id)
-            .where(Image.running.is_(True)))
+            .where(Image.running.is_(True), ConsensusFindingRow.open_filter()))  # as the rollup
     if vuln_id:
         stmt = stmt.where(ConsensusFindingRow.vuln_id == vuln_id)
     return (await session.execute(stmt)).all()

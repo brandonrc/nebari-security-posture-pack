@@ -26,7 +26,7 @@ WITH f AS (
     SELECT c.image_id, c.vuln_id, c.package, c.severity, c.scanners, c.agreement, c.fixable, c.cvss,
            c.title, c.url, c.first_seen_at, {_RANK_SQL.format(col="c.severity")} AS r
     FROM consensus_findings c JOIN images i ON i.id = c.image_id
-    WHERE i.running
+    WHERE i.running AND c.vex_status IS DISTINCT FROM 'not_affected'  -- VEX-suppressed: not open
 ), wl AS (
     SELECT DISTINCT image_fk, namespace, workload_kind, workload_name
     FROM containers WHERE scan_id = :scan_id AND image_fk IS NOT NULL

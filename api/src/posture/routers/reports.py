@@ -183,7 +183,7 @@ async def stig_snapshot(session: AsyncSession, scan: Scan) -> dict[str, Any]:
                  "fixed_version": f.fixed_version or "", "fixable": True, "first_seen_at": f.first_seen_at}
                 for f in (await session.execute(
                     select(c.image_id, c.vuln_id, c.severity, c.package, c.fixed_version, c.first_seen_at)
-                    .where(c.image_id.in_(img_ids), c.fixable.is_(True),
+                    .where(c.image_id.in_(img_ids), c.fixable.is_(True), c.open_filter(),
                            c.severity.in_(("critical", "high", "medium", "low")))
                 )).all()]
     hit = {f["image_id"] for f in findings}

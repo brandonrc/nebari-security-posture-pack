@@ -370,6 +370,34 @@
           "type": "number",
           "minimum": 0
         },
+        "vex": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "VEX_ENABLED: apply OpenVEX statements to findings at correlation time"
+            },
+            "existingConfigMap": {
+              "type": "string",
+              "description": "ConfigMap whose *.json keys are OpenVEX documents (mounted, listed in VEX_DIR)"
+            },
+            "extraVex": {
+              "type": "object",
+              "description": "file name -> OpenVEX document (object or JSON string), rendered into <fullname>-vex",
+              "additionalProperties": {
+                "type": [
+                  "object",
+                  "string"
+                ]
+              }
+            },
+            "scannerFlags": {
+              "type": "boolean",
+              "description": "VEX_SCANNER_FLAGS: also pass --vex to trivy/grype when scanning by image reference"
+            }
+          }
+        },
         "events": {
           "type": "object",
           "additionalProperties": false,

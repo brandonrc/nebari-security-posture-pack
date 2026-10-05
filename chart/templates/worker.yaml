@@ -23,6 +23,23 @@
   also serves /metrics for the PodMonitor in monitoring.yaml) (503 when the main loop
   has not beaten for max(600 s, 3 x scan timeout)).
 */}}
+{{- /*
+  VEX (posture.vex): the pack's statements ship in the image at /etc/posture/vex
+  (VEX_BUILTIN_DIR); scanner.vex.existingConfigMap and scanner.vex.extraVex are
+  mounted under /etc/posture/vex.d/ and listed in VEX_DIR. The worker re-reads
+  changed files before each image, so a ConfigMap edit needs no restart.
+*/}}
+{{- define "security-posture.vex.env" -}}
+- name: VEX_ENABLED
+  value: {{ .Values.scanner.vex.enabled | quote }}
+- name: VEX_SCANNER_FLAGS
+  value: {{ .Values.scanner.vex.scannerFlags | quote }}
+{{- $dirs := list }}
+{{- if .Values.scanner.vex.existingConfigMap }}{{ $dirs = append $dirs "/etc/posture/vex.d/existing" }}{{ end }}
+{{- if .Values.scanner.vex.extraVex }}{{ $dirs = append $dirs "/etc/posture/vex.d/extra" }}{{ end }}
+- name: VEX_DIR
+  value: {{ join "," $dirs | quote }}
+{{- end }}
 {{- define "security-posture.worker.deployment" -}}
 {{- $ctx := .ctx }}
 {{- $component := .component }}
@@ -110,6 +127,7 @@ spec:
               value: {{ .Values.scanner.events.minPodAgeSeconds | quote }}
             - name: EVENT_SCANS_INCLUDE_JOBS
               value: {{ .Values.scanner.events.includeJobs | quote }}
+            {{- include "security-posture.vex.env" . | nindent 12 }}
             {{- end }}
             {{- if .Values.registryAuth.existingSecret }}
             - name: DOCKER_CONFIG
@@ -159,6 +177,16 @@ spec:
               mountPath: /etc/posture/docker
               readOnly: true
             {{- end }}
+            {{- if and $scan .Values.scanner.vex.enabled .Values.scanner.vex.existingConfigMap }}
+            - name: vex-existing
+              mountPath: /etc/posture/vex.d/existing
+              readOnly: true
+            {{- end }}
+            {{- if and $scan .Values.scanner.vex.enabled .Values.scanner.vex.extraVex }}
+            - name: vex-extra
+              mountPath: /etc/posture/vex.d/extra
+              readOnly: true
+            {{- end }}
             {{- if and $final .Values.provenance.cosign.existingSecret }}
             - name: cosign-key
               mountPath: /etc/posture/cosign
@@ -191,6 +219,16 @@ spec:
             items:
               - key: .dockerconfigjson
                 path: config.json
+        {{- end }}
+        {{- if and $scan .Values.scanner.vex.enabled .Values.scanner.vex.existingConfigMap }}
+        - name: vex-existing
+          configMap:
+            name: {{ .Values.scanner.vex.existingConfigMap }}
+        {{- end }}
+        {{- if and $scan .Values.scanner.vex.enabled .Values.scanner.vex.extraVex }}
+        - name: vex-extra
+          configMap:
+            name: {{ include "security-posture.componentName" (dict "ctx" . "component" "vex") }}
         {{- end }}
         {{- if and $final .Values.provenance.cosign.existingSecret }}
         - name: cosign-key
@@ -242,4 +280,18 @@ spec:
 {{- else }}
 {{ include "security-posture.worker.deployment" (dict "ctx" . "component" "worker" "sa" "controls"
      "stages" "all" "scan" true "final" true "resources" .Values.worker.resources) }}
+{{- end }}
+{{- if and .Values.scanner.vex.enabled .Values.scanner.vex.extraVex }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "vex") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "vex") | nindent 4 }}
+data:
+  {{- range $name, $doc := .Values.scanner.vex.extraVex }}
+  {{ ternary $name (printf "%s.json" $name) (hasSuffix ".json" $name) }}: {{ ternary $doc (toJson $doc) (kindIs "string" $doc) | quote }}
+  {{- end }}
 {{- end }}

@@ -40,7 +40,7 @@ async def compute_sla_overdue(session: AsyncSession, sla: dict[str, int]) -> dic
             continue
         out[sev] = await session.scalar(
             select(func.count()).select_from(c).join(Image, Image.id == c.image_id)
-            .where(Image.running.is_(True), Image.score.isnot(None), c.severity == sev,
+            .where(Image.running.is_(True), Image.score.isnot(None), c.severity == sev, c.open_filter(),
                    c.first_seen_at < now - timedelta(days=days))) or 0
     return out
 
@@ -52,7 +52,7 @@ async def kev_exposure(session: AsyncSession) -> dict[str, Any]:
 
     rows = (await session.execute(
         select(ConsensusFindingRow.vuln_id, func.count()).join(Image, Image.id == ConsensusFindingRow.image_id)
-        .where(Image.running.is_(True), ConsensusFindingRow.vuln_id.like("CVE-%"))
+        .where(Image.running.is_(True), ConsensusFindingRow.vuln_id.like("CVE-%"), ConsensusFindingRow.open_filter())
         .group_by(ConsensusFindingRow.vuln_id))).all()
     today = utcnow().date()
     findings, cves, overdue, due = 0, [], 0, None
@@ -70,6 +70,14 @@ async def kev_exposure(session: AsyncSession) -> dict[str, Any]:
     return {"kev": findings, "kevCves": len(cves), "kevOverdue": overdue,
             "kevEarliestDue": due.isoformat() if due else None, "kevCatalogVersion": cat.get("version"),
             "topKev": sorted(cves)[:20]}
+
+
+async def vex_suppressed_count(session: AsyncSession) -> int:
+    """Findings on running images that a `not_affected` VEX statement suppresses (kept, not open)."""
+    c = ConsensusFindingRow
+    return int(await session.scalar(
+        select(func.count()).select_from(c).join(Image, Image.id == c.image_id)
+        .where(Image.running.is_(True), c.vex_status == "not_affected")) or 0)
 
 
 async def build_summary(session: AsyncSession) -> dict[str, Any]:
@@ -169,6 +177,7 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
         },
         "counts": counts,
         "fixable": fixable,
+        "vexSuppressed": await vex_suppressed_count(session),  # not in counts / fixable / score
         "images": images,
         "workloads": workloads,
         "namespaces": namespaces,

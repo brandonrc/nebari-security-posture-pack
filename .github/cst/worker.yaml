@@ -43,6 +43,10 @@ commandTests:
     args: ["-c", "import posture.worker; print('ok')"]
     expectedOutput: ["ok"]
 fileExistenceTests:
+  - name: the pack's VEX ships at VEX_BUILTIN_DIR, root-owned
+    path: /etc/posture/vex/posture-images.vex.json
+    shouldExist: true
+    uid: 0
   - name: cache volume owned by the runtime user
     path: /cache
     shouldExist: true

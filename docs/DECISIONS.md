@@ -996,3 +996,79 @@ carry the triage.
   binaries.
 - Dependabot keeps tag+digest pins current for python/node/nginx. The Go builder image and the
   tool versions are manual (see .github/dependabot.yml).
+
+## 2026-10-05: VEX applied in the worker (generic, any image)
+
+Supersedes "VEX in the worker's own scans: not wired" in the image hardening entry above (and
+its `SCAN_SELF_VEX` follow-up).
+
+**Where the decision is made.** In Python, at correlation time (`posture.vex`,
+`correlate.apply_vex`, `analysis.analyze(results, vex=...)`), once per consensus finding. Not
+through the scanners' `--vex`: in the default `MIRROR_MODE=local` trivy and grype get an
+`oci-dir:` path, so the image name never matches a product, and clair has no VEX support. The
+worker builds an identity per image from every name it has (inventory key and ref, tags, the
+rewritten pull source, index digest and the scanned platform-manifest digest) and asks the store
+for the statements whose product matches any of them.
+
+**Store.** OpenVEX 0.2.0 only (what trivy and grype also consume; CycloneDX/CSAF VEX input is not
+read). Sources in load order: `VEX_BUILTIN_DIR` (`/etc/posture/vex`, the pack's
+`api/vex/posture-images.vex.json` copied in by Dockerfile.worker; a source checkout falls back to
+`api/vex/`), then `VEX_DIR` (chart `scanner.vex.existingConfigMap` -> `/etc/posture/vex.d/existing`,
+`scanner.vex.extraVex` -> `<fullname>-vex` ConfigMap at `/etc/posture/vex.d/extra`). Every
+`*.json` directly in those directories is read; a file that does not parse is logged
+(`vex.file_rejected`) and skipped, never fatal. The store is re-read when any file's mtime/size
+changes, checked before each image, so ConfigMap edits need no restart.
+
+**Matching.** Product forms: `pkg:oci/<name>` (last repository segment, any registry), optionally
+narrowed by digest version, `repository_url` and `tag`; `pkg:docker/...`; plain image refs; bare
+digests. Any other purl as a product is a package-level statement applied in every image.
+Subcomponents narrow to packages by normalized name (`name`, `namespace/name`,
+`namespace:name`), purl type vs scanner package type (deb vs debian/dpkg, golang vs gobinary,
+...) and, when given, exact installed version. Vulnerability ids match name, `@id` and aliases.
+The newest statement wins (OpenVEX), ties go to the later-loaded document (operator over pack).
+
+**Effect.** `not_affected` = suppressed: the consensus row is kept with
+`vex_status/vex_justification/vex_source/vex_detail` (migration `0008_vex`), but it is excluded
+from the image score and `counts`/`fixable` (so from workload/namespace/cluster aggregates), the
+SLA-overdue and KEV exposure counts, the `vuln_rollup` (`/vulnerabilities`), control coverage, the
+controls engine snapshot, the remediation snapshot, and from POA&M / SAR / OSCAL (report status
+`not_affected`, outside `open_findings`). The vuln export lists it with the justification
+(csv/json columns; CycloneDX `analysis.state: not_affected` + mapped justification, one entry per
+CVE and statement). `under_investigation`, `affected`, `fixed` are recorded only. API:
+`/images/{id}` findings carry `vexStatus`, `vexJustification`, `vexSource`, `vexDetail`,
+`suppressed`; filter `vex=suppressed|open`; `findingsSummary.vexSuppressed`; `/summary`
+`vexSuppressed` (running images); `/export` csv gains `vexStatus`, `vexJustification`,
+`vexSource`. Stored findings change on the image's next scan, not when a statement is added
+(force a scan to apply at once): re-deciding stored rows without a scan would need the score
+recomputed outside the scan path, and the rescan already does that.
+
+**Scanner flags.** With `VEX_SCANNER_FLAGS=true` (default) trivy gets `--vex <file>...
+--show-suppressed` and grype `--vex <file>...` when they scan by image reference (registry / off
+mirror modes, never for `oci-dir:`). Because the Python decision is authoritative, the findings
+they suppress are recovered: trivy's `ExperimentalModifiedFindings` (type vulnerability) and
+grype's `ignoredMatches` whose applied rule is a VEX rule are parsed as normal findings. User
+ignore rules in grype stay ignored. So the flags change nothing in the result; they keep the raw
+scanner JSON consistent with the decision.
+
+**Expected effect on grace** (pack images `01cb9a1`, scanned 2026-10-05 by the grace worker's own
+trivy server, grype DB and Clair; the stored scans and this analysis were run offline through
+`analyze()` with and without the pack VEX; counts are open consensus findings
+critical / high / medium / low):
+
+| image | without VEX | with the pack VEX | suppressed | recorded (under_investigation) |
+|---|---|---|---|---|
+| security-posture-api | 0.0 F, 0 / 59 / 57 / 58, penalty 304 | 12.2 F, 0 / 4 / 57 / 58, penalty 84 | 55 | 4 |
+| security-posture-worker | 0.0 F, 9 / 107 / 71 / 107, penalty 605 | 1.2 F, 1 / 19 / 71 / 107, penalty 176 | 96 | 19 |
+
+The grades stay F: the VEX triages CRITICAL/HIGH only, and the remaining mediums and lows (with
+the under_investigation highs) are still a penalty of 84 / 176, where a D needs <= 27.7. The
+`ui` image has no statements (no change). The images grace runs today (`065cc06`, bookworm) are
+scored by a worker without this change; the statements target the trixie builds, so the effect
+shows once this worker and the hardened images are rolled out together.
+
+**Tests**: `tests/test_vex.py` (store, product forms by ref / digest / purl, subcomponents and
+package products, aliases and precedence, reload, invalid files, score/counts effect, trivy and
+grype flags and suppressed-finding recovery), `tests/reports/test_vex_reports.py` (csv/json
+columns, CycloneDX merge, POA&M and `open_findings`), `tests/test_vex_integration.py` (Postgres:
+local mirror mode, `/images` filter and summary, `/summary`, `/vulnerabilities`, control
+coverage, `/export`, report snapshot -> CycloneDX and POA&M, statement removal reopens).

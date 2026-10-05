@@ -461,9 +461,92 @@ version = tag + digest).
   trackers or to pre-fill Iron Bank VAT justifications.
 - **cyclonedx-vex** is a CycloneDX 1.6 JSON BOM. Its components are the images
   (`pkg:oci` purls), and its vulnerabilities are one per CVE with `affects` = images,
-  ratings from the consensus and each scanner, and `analysis.state: in_triage`. Update
-  the analysis (`not_affected`, `exploitable`, ...) after triage. This format is not yet
-  validated against the CycloneDX schema.
+  ratings from the consensus and each scanner, and `analysis.state: in_triage`. Findings an
+  OpenVEX statement covers (see "VEX: recording your own justifications" below) get their own
+  entry per statement, with the statement merged in: `not_affected` becomes
+  `analysis.state: not_affected` plus the mapped `justification` (`component_not_present` /
+  `vulnerable_code_not_present` -> `code_not_present`, `vulnerable_code_not_in_execute_path` ->
+  `code_not_reachable`, `vulnerable_code_cannot_be_controlled_by_adversary` ->
+  `requires_environment`, `inline_mitigations_already_exist` ->
+  `protected_by_mitigating_control`); `under_investigation` -> `in_triage`, `affected` ->
+  `exploitable`, `fixed` -> `resolved`. `analysis.detail` carries the impact statement and the
+  source document. This format is not yet validated against the CycloneDX schema.
+- csv / json carry `Status` (`open`, or `not_affected` when suppressed) and four VEX columns:
+  `VEX Status`, `VEX Justification`, `VEX Source`, `VEX Impact Statement`.
+
+## VEX: recording your own justifications
+
+The worker applies [OpenVEX](https://openvex.dev) 0.2.0 statements to every image it scans.
+A finding covered by a **`not_affected`** statement is *suppressed*: it stays in the database
+and in the exports, marked with the justification, but it is not an open finding. It is left
+out of the image score and severity counts, the SLA clock, the KEV exposure count, control
+coverage, the POA&M, the SAR and OSCAL AR / POA&M. `under_investigation`, `affected` and
+`fixed` statements are recorded on the finding (shown in the API and exports) and change
+nothing else. This is the Iron Bank / eMASS model: the reviewer sees each suppressed finding
+next to the justification that suppresses it.
+
+Where statements come from:
+- the pack's own (`api/vex/posture-images.vex.json`, shipped in the worker image at
+  `/etc/posture/vex/`), scoped to the pack's image names, so they never touch your images;
+- yours, from a ConfigMap. Either create one and point the chart at it:
+
+  ```bash
+  kubectl -n <ns> create configmap site-vex --from-file=site.vex.json
+  # values: scanner.vex.existingConfigMap: site-vex
+  ```
+
+  or put the documents inline under `scanner.vex.extraVex` (file name -> document; see
+  `chart/values.yaml`). Every `*.json` key is read. The worker re-reads the directory before
+  each image, so a ConfigMap edit applies to the next scan without a restart. Findings already
+  stored change only when their image is rescanned (force a scan from the UI or
+  `POST /api/v1/scans {"force": true}` to apply at once).
+
+A statement, with the fields that matter here:
+
+```json
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://example.org/vex/site-2026-10",
+  "author": "Jane Example, ISSO",
+  "timestamp": "2026-10-05T00:00:00Z",
+  "version": 1,
+  "statements": [{
+    "vulnerability": {"name": "CVE-2026-12345", "aliases": ["GHSA-xxxx-xxxx-xxxx"]},
+    "products": [{
+      "@id": "pkg:oci/jupyterhub?repository_url=quay.io/nebari/nebari-jupyterhub",
+      "subcomponents": [{"@id": "pkg:deb/debian/libxml2"}]
+    }],
+    "status": "not_affected",
+    "justification": "vulnerable_code_not_in_execute_path",
+    "impact_statement": "Only xmllint uses the affected parser; the hub never invokes it."
+  }]
+}
+```
+
+- **products** name the image. Accepted forms: `pkg:oci/<name>` (any image whose repository
+  ends in `<name>`, in any registry or mirror), narrowed by `@sha256%3A<digest>`,
+  `?repository_url=<registry>/<repository>` and/or `&tag=<tag>`; `pkg:docker/<ns>/<name>`;
+  a plain reference (`quay.io/nebari/nebari-jupyterhub`, with or without `:tag` / `@digest`);
+  or a bare `sha256:` digest. An image matches by any of its names: the reference in the pod
+  spec, its tags, the rewritten pull source and its index and platform digests, so a
+  statement written against the upstream name still applies when the worker scans a local
+  copy (`MIRROR_MODE=local`). A non-image purl (`pkg:deb/debian/libxml2`) as the product
+  applies to that package in **every** image: use it only for site-wide decisions.
+- **subcomponents** (optional) restrict the statement to findings on those packages. Name and
+  ecosystem must match the finding (`pkg:deb/...` does not cover an apk or a Python package of
+  the same name); a version in the purl must equal the installed version. Without
+  subcomponents the statement covers the CVE on every package of the image.
+- **justification** is required by OpenVEX for `not_affected`, and reviewers expect an
+  `impact_statement` explaining it. Use `status_notes` / `action_statement` for the other
+  statuses.
+- When several statements match a finding, the newest `timestamp` wins (statement, else
+  document); on a tie, your ConfigMap wins over the pack's file.
+
+Check the result in the image page (`GET /api/v1/images/{id}?vex=suppressed` lists exactly the
+suppressed findings, `vex=open` the rest) and in `/summary` (`vexSuppressed`). A document that
+does not parse is skipped with a `vex.file_rejected` line in the worker log; the other
+documents still apply. Review statements when the image changes: a statement keyed by name
+(no digest) keeps applying to new builds, which is convenient but can outlive its evidence.
 
 ## Caveats
 

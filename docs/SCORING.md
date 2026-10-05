@@ -156,3 +156,16 @@ definition used by scoring, posture checks and reports; the control evidence eng
 Each scanner reports `dbUpdatedAt`. If any enabled scanner DB is older than 72h, the
 summary carries `warnings: ["trivy database is 5 days old"]`; it does not change the
 score.
+
+## VEX (suppressed findings)
+
+A consensus finding covered by an OpenVEX `not_affected` statement (posture.vex; REPORTS.md,
+"VEX") is **suppressed**: it is stored and exported with its justification, but it adds no
+penalty to the image vulnerability score and is not counted in `counts` / `fixable` (image,
+workload, namespace, cluster), the SLA-overdue and KEV exposure counts, the CVE rollup
+(`/vulnerabilities`) or control coverage. `/summary` reports the number on running images as
+`vexSuppressed`. Statements with any other status (`under_investigation`, `affected`, `fixed`)
+are recorded on the finding and change nothing in the score. The decision is made in Python at
+correlation time, once per consensus finding, whatever the individual scanners did with
+`--vex`.
+

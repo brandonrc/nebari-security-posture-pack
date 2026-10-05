@@ -82,6 +82,7 @@ from .scanners.base import pack_raw_text, raw_summary
 from .admission import order_for_admission, probe_size
 from .rollup import write_vuln_rollup
 from .views import ACTIVE_SCAN_STATUSES  # queued, running, scanned, finalizing
+from .vex import ImageIdentity, VexStore
 
 log = get_logger("posture.worker")
 
@@ -312,6 +313,35 @@ class Worker:
         self.provenance_stage: provenance_stage.ProvenanceStage | None = (
             provenance_stage.ProvenanceStage(settings, sessionmaker) if "provenance" in self.stages else None)
         self._scap_stage = None  # posture.scap.stage.ScapStage, created on first use
+        # VEX (posture.vex): loaded on the scan side only; re-read when the files change
+        self.vex: VexStore | None = (VexStore.from_settings(settings)
+                                     if self.scan_side and getattr(settings, "vex_enabled", True) else None)
+        self._vex_files_set: tuple[str, ...] | None = None
+
+    def refresh_vex(self) -> None:
+        """Re-read changed VEX documents and hand the valid ones to trivy/grype (`--vex`)."""
+        if self.vex is None:
+            return
+        try:
+            self.vex.reload_if_changed()
+        except Exception as e:  # noqa: BLE001  (never fail a scan over a VEX directory)
+            log.warning("vex.reload_failed", error=str(e)[:300])
+        files = tuple(self.vex.files) if getattr(self.s, "vex_scanner_flags", True) else ()
+        if files != self._vex_files_set:
+            for sc in self.scanners.values():
+                if isinstance(sc, (TrivyScanner, GrypeScanner)):
+                    sc.vex_files = files
+            self._vex_files_set = files
+
+    def image_vex(self, img: Image, target: ScanTarget):
+        """Statements applicable to an image by any of its names: inventory key and ref, tags,
+        the (rewritten) source it was pulled from, its index digest and the scanned manifest."""
+        if self.vex is None or not self.vex.statements:
+            return None
+        ident = ImageIdentity.of([img.key, img.ref, getattr(target, "source_ref", None)],
+                                 digests=[img.digest, getattr(target, "mirror_digest", None)],
+                                 tags=[img.tag, *(img.tags or [])])
+        return self.vex.for_image(ident)
 
     # ------------------------------------------------------------------ queue
     async def enqueue(self, trigger: str = "scheduled", requested_by: str | None = None, force: bool = False) -> int | None:
@@ -995,6 +1025,7 @@ class Worker:
             ref = self._image_ref(img)
             display = img.ref
         started = now()
+        self.refresh_vex()
         target = await self.mirror.prepare(ref)
         for w in target.warnings:
             ctx.add_log(f"{display}: {w}")
@@ -1004,7 +1035,7 @@ class Worker:
             release = getattr(self.mirror, "release", None)
             if callable(release):
                 release(target)
-        analysis = analyze(list(results))
+        analysis = analyze(list(results), vex=self.image_vex(img, target))
         for r in results:
             metrics.observe_scanner(r.scanner, r.status, r.duration_ms)
             bucket = ctx.per_scanner.setdefault(r.scanner, {"ok": 0, "error": 0})
@@ -1016,8 +1047,9 @@ class Worker:
         ctx.done += 1
         if analysis.score.score is None:
             ctx.failed += 1
+        vex_note = f" ({analysis.vex_suppressed} suppressed by VEX)" if analysis.vex_suppressed else ""
         ctx.add_log(f"{display}: score {analysis.score.score} ({analysis.score.grade}), "
-                    f"{len(analysis.consensus)} findings, scanners ok: {','.join(analysis.succeeded) or 'none'}")
+                    f"{len(analysis.consensus)} findings{vex_note}, scanners ok: {','.join(analysis.succeeded) or 'none'}")
         log.info("image.scanned", scan_id=ctx.scan_id, image_id=image_id, ref=display, score=analysis.score.score,
                  findings=len(analysis.consensus), ok=",".join(analysis.succeeded))
 
@@ -1068,6 +1100,8 @@ class Worker:
                         "pkg_type": (c.pkg_type or "")[:64] or None, "severity": c.severity, "scanners": c.scanners,
                         "per_scanner": c.per_scanner, "agreement": c.agreement, "cvss": c.cvss, "title": c.title,
                         "url": c.url, "fixable": c.fixable, "first_seen_at": prev.get(k, ts), "last_seen_at": ts,
+                        "vex_status": c.vex_status, "vex_justification": (c.vex_justification or "")[:64] or None,
+                        "vex_source": c.vex_source, "vex_detail": c.vex_detail,
                     })
                 if rows:
                     await s.execute(ConsensusFindingRow.__table__.insert(), rows)

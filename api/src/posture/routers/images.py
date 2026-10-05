@@ -145,7 +145,7 @@ def _finding_order(sort: str, order: str) -> list[Any]:
 
 async def findings_page(session: AsyncSession, img: Image, sla: dict[str, int], *, page: int | None,
                         page_size: int, severity: str | None, q: str | None, fixable: bool | None,
-                        disagree: bool | None, sort: str, order: str) -> dict[str, Any]:
+                        disagree: bool | None, sort: str, order: str, vex: str | None = None) -> dict[str, Any]:
     """Findings of one image filtered, sorted and paginated in SQL, plus a summary over the
     filtered set (totals by severity, fixable, flagged by all scanners that succeeded)."""
     c = ConsensusFindingRow
@@ -161,11 +161,16 @@ async def findings_page(session: AsyncSession, img: Image, sla: dict[str, int], 
         conds.append(c.fixable.is_(fixable))
     if disagree:
         conds.append(func.jsonb_array_length(c.scanners) < ok_scanners)
+    if vex == "suppressed":
+        conds.append(c.vex_status == "not_affected")
+    elif vex == "open":
+        conds.append(c.open_filter())
     all_agree = func.jsonb_array_length(c.scanners) >= ok_scanners
     by_sev = dict((await session.execute(select(c.severity, func.count()).where(*conds).group_by(c.severity))).all())
     agg = (await session.execute(select(
         func.count(), func.count().filter(c.fixable.is_(True)),
         func.count().filter(all_agree) if ok_scanners > 1 else func.sum(0),
+        func.count().filter(c.vex_status == "not_affected"),
     ).where(*conds))).one()
     filtered = int(agg[0] or 0)
     image_total = filtered if len(conds) == 1 else (await session.scalar(
@@ -185,7 +190,7 @@ async def findings_page(session: AsyncSession, img: Image, sla: dict[str, int], 
         "findingsSummary": {"total": image_total, "filtered": filtered,
                             "bySeverity": {sev: int(by_sev.get(sev, 0)) for sev in SEVERITIES},
                             "fixable": int(agg[1] or 0), "flaggedByAll": int(agg[2] or 0),
-                            "scannersOk": ok_scanners},
+                            "scannersOk": ok_scanners, "vexSuppressed": int(agg[3] or 0)},
     }
 
 
@@ -200,17 +205,20 @@ async def get_image(
     disagree: bool | None = None,
     sort: str = "severity",
     order: str = "desc",
+    vex: str | None = Query(None, pattern="^(suppressed|open)$"),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     """Image detail. Findings are paginated in SQL when `page` is given (`pageSize` default 50,
     max 500); without `page` the first 500 come back with `truncated: true` when there are more
-    (the UI before server-side paging; DECISIONS 2026-10-03)."""
+    (the UI before server-side paging; DECISIONS 2026-10-03). `vex=suppressed` lists only the
+    findings a `not_affected` VEX statement covers, `vex=open` only the others (default: both;
+    each finding carries vexStatus / vexJustification / vexSource / vexDetail)."""
     img = await _image_or_404(session, image_id)
     settings = await app_settings.load(session)
     sla = settings.remediation_sla_days.model_dump()
     _, page_size = page_params(page or 1, pageSize)
     fpage = await findings_page(session, img, sla, page=page, page_size=page_size, severity=severity, q=q,
-                                fixable=fixable, disagree=disagree, sort=sort, order=order)
+                                fixable=fixable, disagree=disagree, sort=sort, order=order, vex=vex)
     latest = await latest_done_scan(session)
     used_by: list[dict[str, Any]] = []
     posture: list[dict[str, Any]] = []

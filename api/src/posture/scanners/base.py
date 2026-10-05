@@ -370,6 +370,9 @@ class Scanner:
     """Adapter interface. Subclasses implement `scan`, `version`, `db_updated_at`."""
 
     name: str = "base"
+    # OpenVEX documents handed to the scanner (`--vex`) when it scans by image reference; set by
+    # the worker from posture.vex.VexStore. Never used for oci-dir: paths (no product to match).
+    vex_files: tuple[str, ...] = ()
 
     async def scan(self, ref: str, *, insecure: bool = False, timeout: float = 600) -> ScanResult:  # pragma: no cover
         raise NotImplementedError

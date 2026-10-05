@@ -185,6 +185,19 @@ class ConsensusFindingRow(Base):
     fixable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     first_seen_at: Mapped[datetime] = _now_col()
     last_seen_at: Mapped[datetime] = _now_col()
+    # VEX (posture.vex): newest applicable statement. `not_affected` = suppressed: kept and
+    # exported with its justification, but not an open finding (score, counts, POA&M, SAR).
+    vex_status: Mapped[str | None] = mapped_column(String(32))
+    vex_justification: Mapped[str | None] = mapped_column(String(64))
+    vex_source: Mapped[str | None] = mapped_column(Text)
+    vex_detail: Mapped[str | None] = mapped_column(Text)
+
+    @classmethod
+    def open_filter(cls):
+        """SQL condition: not suppressed by a `not_affected` VEX statement."""
+        from sqlalchemy import or_
+
+        return or_(cls.vex_status.is_(None), cls.vex_status != "not_affected")
 
 
 class ContainerRow(Base):

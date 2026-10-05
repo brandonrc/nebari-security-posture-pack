@@ -76,14 +76,24 @@ def grype_meta(descriptor: dict[str, Any] | None, distro: dict[str, Any] | None)
     return meta
 
 
+def vex_ignored(m: dict[str, Any]) -> bool:
+    """An `ignoredMatches` entry grype dropped because of a `--vex` statement (not a user ignore
+    rule): it is returned as a finding, and posture.vex decides (authoritative, all scanners)."""
+    return any(isinstance(r, dict) and (r.get("vex-status") or r.get("namespace") == "vex")
+               for r in m.get("appliedIgnoreRules") or [])
+
+
 def parse_grype_json(doc: dict[str, Any]) -> tuple[list[Finding], dict[str, Any]]:
-    findings = [f for m in doc.get("matches") or [] if (f := grype_finding(m)) is not None]
+    matches = list(doc.get("matches") or []) + [m for m in doc.get("ignoredMatches") or [] if vex_ignored(m)]
+    findings = [f for m in matches if (f := grype_finding(m)) is not None]
     return findings, grype_meta(doc.get("descriptor"), doc.get("distro"))
 
 
 def parse_grype_file(path: str) -> tuple[list[Finding], dict[str, Any]]:
     """Streaming parse (ijson): the matches are read one by one, the document never sits in memory."""
     findings = [f for m in iter_json_items(path, "matches.item") if (f := grype_finding(m)) is not None]
+    findings += [f for m in iter_json_items(path, "ignoredMatches.item")
+                 if vex_ignored(m) and (f := grype_finding(m)) is not None]
     return findings, grype_meta(first_json_item(path, "descriptor"), first_json_item(path, "distro"))
 
 
@@ -161,6 +171,13 @@ class GrypeScanner(Scanner):
             return False, tail(res.stderr or res.stdout)
         return True, None
 
+    def argv(self, source: str) -> list[str]:
+        argv = [self.binary, "-o", "json"]
+        if self.vex_files and source.startswith("registry:"):  # never for oci-dir: (no product to match)
+            for f in self.vex_files:
+                argv += ["--vex", f]
+        return argv + ["--", source]
+
     async def scan(self, ref: str, *, insecure: bool = False, timeout: float = 600) -> ScanResult:
         try:
             source = _source_arg(ref)
@@ -171,8 +188,7 @@ class GrypeScanner(Scanner):
             async with self.semaphore:  # the timeout starts once a slot is free
                 self.running += 1
                 try:
-                    res = await run_proc([self.binary, "-o", "json", "--", source], timeout, self.env(insecure),
-                                         stdout_file=out)
+                    res = await run_proc(self.argv(source), timeout, self.env(insecure), stdout_file=out)
                 finally:
                     self.running -= 1
             if res.timed_out:

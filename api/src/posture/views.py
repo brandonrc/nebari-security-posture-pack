@@ -182,7 +182,13 @@ def finding_dict(c: ConsensusFindingRow, sla: dict[str, int] | None = None) -> d
         "controls": vuln_controls(c.fixable),
         "firstSeenAt": iso(c.first_seen_at),
         "slaDueAt": iso(due),
-        "slaOverdue": bool(due and utcnow() > due),
+        "slaOverdue": bool(due and utcnow() > due) and c.vex_status != "not_affected",
+        # VEX (posture.vex): `not_affected` = suppressed (not open; exported with the justification)
+        "vexStatus": c.vex_status,
+        "vexJustification": c.vex_justification,
+        "vexSource": c.vex_source,
+        "vexDetail": c.vex_detail,
+        "suppressed": c.vex_status == "not_affected",
     }
 
 

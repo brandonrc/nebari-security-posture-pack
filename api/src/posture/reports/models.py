@@ -111,7 +111,11 @@ class FindingRecord(_M):
     published_at: datetime | None = None  # vulnerability publication date
     sla_due_at: datetime | None = None
     controls: list[str] = Field(default_factory=list)
-    status: str = "open"
+    status: str = "open"  # not_affected: suppressed by a VEX statement (not an open finding)
+    vex_status: str | None = None
+    vex_justification: str | None = None
+    vex_source: str | None = None
+    vex_detail: str | None = None
 
 
 class WorkloadRecord(_M):

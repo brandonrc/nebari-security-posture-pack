@@ -126,6 +126,9 @@ async def build_snapshot(session: AsyncSession, scan_id: int | None, scope: Any 
                 scanners=list(f.scanners or []), agreement=f.agreement, per_scanner=dict(f.per_scanner or {}),
                 cvss=f.cvss, title=f.title or "", url=f.url or "", fixable=f.fixable, first_seen_at=f.first_seen_at,
                 sla_due_at=sla_due(f.first_seen_at, f.severity, sla), controls=vuln_controls(f.fixable),
+                status="not_affected" if f.vex_status == "not_affected" else "open",
+                vex_status=f.vex_status, vex_justification=f.vex_justification, vex_source=f.vex_source,
+                vex_detail=f.vex_detail,
             ))
 
     refs = {i.id: i.ref for i in imgs}

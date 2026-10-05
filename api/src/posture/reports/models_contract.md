@@ -78,7 +78,10 @@ total container count using the image), `running_containers` (int), `running` (b
 severity]`), `cvss` (float|None), `title`, `description`, `url` (str), `fixable`
 (bool, default `bool(fixed_version)`), `first_seen_at` (datetime; default
 `scan.started_at`), `controls` (list[str]; default `RA-5, SI-2` + `SI-2(2)` when fixable),
-`status` (`open` (default) | `fixed` | `accepted` | `false-positive`).
+`status` (`open` (default) | `fixed` | `accepted` | `false-positive` | `not_affected` (a VEX
+statement suppresses it: excluded from `open_findings`, so from POA&M, SAR and OSCAL)),
+`vex_status` / `vex_justification` / `vex_source` / `vex_detail` (str|None; the applied OpenVEX
+statement, any status).
 
 ### WorkloadRecord
 `namespace`, `kind`, `name` (str), `pack` (str|None), `score` (float|None), `grade`,

@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     mirror_all_platforms: bool = False
     registry_auth_file: str | None = None
 
+    # VEX (posture.vex): OpenVEX documents applied to consensus findings at correlation time.
+    # VEX_BUILTIN_DIR holds the pack's own statements (baked into the worker image);
+    # VEX_DIR (comma separated) the operator's (chart scanner.vex.existingConfigMap / extraVex).
+    vex_enabled: bool = True
+    vex_builtin_dir: str = "/etc/posture/vex"
+    vex_dir: CsvList = []
+    # also pass the documents to trivy/grype (`--vex`) when they scan by image reference; the
+    # Python application stays authoritative (suppressed findings are recovered and re-decided)
+    vex_scanner_flags: bool = True
+
     # scheduling
     scan_parallelism: int = 3
     scan_timeout_seconds: int = 600
@@ -222,7 +232,7 @@ class Settings(BaseSettings):
     # <<< operations / scale
 
     @field_validator("oidc_issuers", "oidc_audiences", "oidc_client_ids", "admin_groups", "excluded_namespaces", "mirror_rewrite", "reports_auto_generate",
-                     "clair_ready_updaters", "provenance_helm_chart_repos",
+                     "clair_ready_updaters", "provenance_helm_chart_repos", "vex_dir",
                      mode="before")
     @classmethod
     def _csv(cls, v: object) -> list[str]:

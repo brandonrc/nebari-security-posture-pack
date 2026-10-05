@@ -20,10 +20,15 @@ NAME = "trivy"
 
 
 def trivy_findings(result: dict[str, Any]) -> list[Finding]:
-    """Findings of one entry of trivy's top-level `Results`."""
+    """Findings of one entry of trivy's top-level `Results`. Vulnerabilities trivy suppressed
+    with `--vex --show-suppressed` (`ExperimentalModifiedFindings`) are returned too: the VEX
+    decision is made once, in Python (posture.vex), for every scanner alike."""
     findings: list[Finding] = []
     rtype = result.get("Type") or result.get("Class")
-    for v in result.get("Vulnerabilities") or []:
+    vulns = list(result.get("Vulnerabilities") or [])
+    vulns += [m.get("Finding") or {} for m in result.get("ExperimentalModifiedFindings") or []
+              if isinstance(m, dict) and str(m.get("Type") or "").lower() == "vulnerability"]
+    for v in vulns:
         vid = v.get("VulnerabilityID") or ""
         if not vid:
             continue
@@ -128,6 +133,10 @@ class TrivyScanner(Scanner):
                 raise ValueError(f"refusing OCI layout path: {path[:80]!r}")
             argv += ["--input", path]
             return argv
+        if self.vex_files:  # registry mode; the suppressed findings are kept (--show-suppressed)
+            for f in self.vex_files:
+                argv += ["--vex", f]
+            argv.append("--show-suppressed")
         argv += ["--", safe_ref_arg(ref)]
         return argv
 

@@ -24,7 +24,8 @@ router = APIRouter(tags=["export"])
 
 CSV_COLUMNS = ["imageId", "imageRef", "digest", "running", "namespaces", "imageScore", "imageGrade", "vulnId",
                "severity", "package", "installedVersion", "fixedVersion", "fixable", "pkgType", "scanners",
-               "agreement", "trivy", "grype", "clair", "cvss", "title", "url", "controls", "firstSeenAt", "slaDueAt"]
+               "agreement", "trivy", "grype", "clair", "cvss", "title", "url", "controls", "firstSeenAt", "slaDueAt",
+               "vexStatus", "vexJustification", "vexSource"]
 
 
 async def build_export(session: AsyncSession) -> dict[str, Any]:
@@ -68,7 +69,7 @@ async def export(format: str = "json", session: AsyncSession = Depends(get_sessi
                 "namespaces": " ".join(img["namespaces"]), "imageScore": img["score"], "imageGrade": img["grade"],
                 **{k: f.get(k) for k in ("vulnId", "severity", "package", "installedVersion", "fixedVersion",
                                          "fixable", "pkgType", "agreement", "cvss", "title", "url", "firstSeenAt",
-                                         "slaDueAt")},
+                                         "slaDueAt", "vexStatus", "vexJustification", "vexSource")},
                 "scanners": " ".join(f["scanners"]), "controls": " ".join(f["controls"]),
                 "trivy": f["perScanner"].get("trivy", ""), "grype": f["perScanner"].get("grype", ""),
                 "clair": f["perScanner"].get("clair", ""),

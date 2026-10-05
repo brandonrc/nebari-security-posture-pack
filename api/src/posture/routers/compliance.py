@@ -24,7 +24,7 @@ async def control_coverage(session: AsyncSession) -> list[dict[str, Any]]:
     if latest is not None:
         for fixable, n in (await session.execute(
             select(ConsensusFindingRow.fixable, func.count()).join(Image, Image.id == ConsensusFindingRow.image_id)
-            .where(Image.running.is_(True)).group_by(ConsensusFindingRow.fixable)
+            .where(Image.running.is_(True), ConsensusFindingRow.open_filter()).group_by(ConsensusFindingRow.fixable)
         )).all():
             for c in vuln_controls(bool(fixable)):
                 findings[c] = findings.get(c, 0) + n

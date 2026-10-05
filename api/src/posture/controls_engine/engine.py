@@ -509,10 +509,11 @@ async def load_snapshot(session: AsyncSession, st: Any | None = None) -> dict[st
         "grade": full.grade}
     snap["openFindings"] = int(await session.scalar(
         select(func.count()).select_from(ConsensusFindingRow).join(Image, Image.id == ConsensusFindingRow.image_id)
-        .where(Image.running.is_(True))) or 0)
+        .where(Image.running.is_(True), ConsensusFindingRow.open_filter())) or 0)
     snap["findingsByFixable"] = {("fixable" if fx else "unfixable"): int(n) for fx, n in (await session.execute(
         select(ConsensusFindingRow.fixable, func.count()).join(Image, Image.id == ConsensusFindingRow.image_id)
-        .where(Image.running.is_(True)).group_by(ConsensusFindingRow.fixable))).all()}
+        .where(Image.running.is_(True), ConsensusFindingRow.open_filter())
+        .group_by(ConsensusFindingRow.fixable))).all()}
     snap["slaOverdue"] = await compute_sla_overdue(session, st.remediation_sla_days.model_dump())
     snap["postureFailures"] = [
         {"checkId": r.check_id, "namespace": r.namespace, "kind": r.kind, "name": r.name, "severity": r.severity}

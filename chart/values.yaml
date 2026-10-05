@@ -205,6 +205,40 @@ scanner:
     # MIRROR_REWRITE="src=dst,...".
     rewrite:
       "localhost:32000": registry.container-registry.svc.cluster.local:5000
+  # VEX (docs/REPORTS.md "VEX"): OpenVEX statements applied to the worker's
+  # findings at correlation time. A `not_affected` statement keeps the finding
+  # but marks it suppressed (out of the score, counts, POA&M and SAR; listed
+  # with its justification in the vulnerability / CycloneDX VEX exports). Other
+  # statuses are recorded only. The pack's own statements are in the worker
+  # image (/etc/posture/vex); add yours with either option below.
+  vex:
+    enabled: true
+    # ConfigMap (same namespace) whose keys are OpenVEX *.json documents,
+    # mounted at /etc/posture/vex.d/existing (VEX_DIR).
+    existingConfigMap: ""
+    # Inline documents rendered into the <fullname>-vex ConfigMap: file name ->
+    # OpenVEX document (YAML object or JSON string); ".json" is appended when
+    # missing. Example:
+    #   extraVex:
+    #     site.vex.json:
+    #       "@context": https://openvex.dev/ns/v0.2.0
+    #       "@id": https://example.org/vex/site-2026-10
+    #       author: ISSO, Example Org
+    #       timestamp: "2026-10-05T00:00:00Z"
+    #       version: 1
+    #       statements:
+    #         - vulnerability: { name: CVE-2026-12345 }
+    #           products:
+    #             - "@id": pkg:oci/app?repository_url=ghcr.io/example/app
+    #               subcomponents: [{ "@id": pkg:deb/debian/libfoo1 }]
+    #           status: not_affected
+    #           justification: vulnerable_code_not_in_execute_path
+    #           impact_statement: "..."
+    extraVex: {}
+    # VEX_SCANNER_FLAGS: also pass the documents to trivy/grype (`--vex`) when
+    # they scan by image reference (MIRROR_MODE registry/off). The Python
+    # application is authoritative either way.
+    scannerFlags: true
   # SCAP scanner (DESIGN §14): OS / product STIGs inside each image with
   # OpenSCAP, in the <fullname>-scap-worker Deployment (root in its container
   # with a minimal capability set; see templates/scap-worker.yaml and

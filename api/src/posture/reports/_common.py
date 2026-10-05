@@ -365,6 +365,7 @@ def normalize(snapshot: Any, options: dict[str, Any] | None = None) -> View:
             "cvss": None, "title": "", "description": "", "url": "", "fixable": None, "first_seen_at": None,
             "controls": list, "status": "open", "fix_published_at": None, "published_at": None,
             "kev": None, "kev_due": None,
+            "vex_status": None, "vex_justification": None, "vex_source": None, "vex_detail": None,
         }), "first_seen_at", "fix_published_at", "published_at", "kev_due")
         o.severity = sev(o.severity)
         o.per_scanner = {k: sev(v) for k, v in (o.per_scanner or {}).items()}

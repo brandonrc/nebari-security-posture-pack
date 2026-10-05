@@ -122,6 +122,9 @@ RUN apt-get update \
 COPY --from=tools /dl/trivy /dl/grype /dl/oscap-chroot /usr/local/bin/
 COPY --from=gobuild /dl/clairctl /dl/cosign /dl/skopeo /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
+# The pack's own OpenVEX statements (VEX_BUILTIN_DIR): applied to the worker's scans of its own
+# images; operators add theirs under VEX_DIR (chart scanner.vex).
+COPY vex/ /etc/posture/vex/
 # fail the build when the SCAP toolchain is incomplete
 # OpenSCAP probe environment (validated on grace, DESIGN §14):
 # - dpkginfo reads the image's /var/lib/dpkg/status through libapt-pkg with RootDir=<rootfs>; the
