@@ -85,12 +85,22 @@ scanner:
 worker:
   splitPrivileged: true
   resources:
-    requests: { cpu: "1", memory: 1Gi }
+    # 768Mi (was 1Gi): with the scap-worker added, revision 18 could not
+    # schedule its hook pod at 99% allocated (2026-10-05).
+    requests: { cpu: "1", memory: 768Mi }
     limits: { cpu: "8", memory: 16Gi }
   privileged:
     resources:
       requests: { cpu: 100m, memory: 256Mi }
       limits: { cpu: "2", memory: 2Gi }
+
+# scap-worker: idle between scans; one oscap process at a time. Requests
+# below the chart default (512Mi) for the same reason as the worker's; the
+# chart's 3Gi limit stays.
+scapWorker:
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "2", memory: 3Gi }
 
 # Reports (all six auto-generated after each scan; OSCAL AR ~87 MB built in
 # memory) run in the report-worker, one at a time.
