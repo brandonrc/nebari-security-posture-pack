@@ -635,13 +635,17 @@ interface StigBenchmarkRules { benchmark: StigBenchmarkRow|null; total: number; 
 // GET /summary -> stig; coverage = evaluated / images of the latest done scan, percent (1 decimal)
 interface SummaryStig { evaluated: number; pass: number; fail: number; cat1Open: number; cat2Open: number;
   cat3Open: number; coverage: number|null; notApplicable: number; noContent: number; errors: number;
-  pending: number; images: number; score: number|null /* mean image STIG score */ }
+  pending: number; stale: number; images: number; score: number|null /* mean image STIG score */ }
 // GET /compliance/stig -> { items: <Kubernetes STIG rules, §11>, product: SummaryStig & {benchmarks: StigBenchmarkRow[]} }
 // GET /scanners -> also {name: 'scap', ..., content: {file, benchmarkId, title, version, source, sourceName,
 //   fetchedAt, sha256, profiles: number, rules: number}[]}
 // Scan rows: scapStatus null|'queued'|'running'|'done'|'skipped'|'failed'; scapImages: number|null;
-//   scapStats: {evaluated, notApplicable, noContent, error, timeout}|null. A done scan whose scapStatus is
-//   still queued/running finished with "scap pending".
+//   scapStats: {evaluated, notApplicable, noContent, error, timeout, stale}|null;
+//   scapProgress: {done, total}|null; scapPending: boolean (the scan was finalized before its scap stage
+//   completed: scores without the new STIG results, auto-reports / controls deferred = scapDeferred[]);
+//   cleared by the scap_completed re-aggregation. UI: "STIG evaluation in progress (done/total)".
+// ImageSummary.stig adds stale: boolean, staleError, staleSince: the last re-evaluation failed
+//   transiently (registry 429, copy timeout, oscap timeout); the result shown is the previous genuine one.
 ```
 
 `GET /images` STIG parameters (semantics the UI relies on):

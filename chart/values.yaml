@@ -258,10 +258,18 @@ scanner:
     timeoutSeconds: 900
     # Rootfs size cap in GB (uncompressed, SCAP_MAX_ROOTFS_GB).
     maxRootfsGB: 10
-    # The privileged worker waits this long for a scan's SCAP stage before the
-    # posture snapshot (SCAP_FINALIZE_WAIT_SECONDS); afterwards the scan
-    # finishes with `scap pending` and uses the previous STIG results.
-    finalizeWaitSeconds: 600
+    # Images evaluated concurrently by the scap-worker (SCAP_PARALLELISM).
+    # oscap is single-threaded and peaks at ~1.1 GiB per evaluation, so the
+    # worker caps this at what scapWorker.resources.limits.memory holds
+    # ((limit - 384Mi) / 1152Mi: 3 at the default 4Gi limit).
+    parallelism: 3
+    # How long the privileged worker waits for a scan's SCAP stage before the
+    # posture snapshot (SCAP_FINALIZE_WAIT_SECONDS). 0 = not at all: the scan
+    # finishes at once with `scapPending` (scores use the STIG results stored
+    # so far; auto-reports and the controls run are deferred). When the SCAP
+    # stage completes, the scores are re-aggregated with the new STIG results
+    # and the deferred stages run.
+    finalizeWaitSeconds: 0
     # OCI layout cache of the scap-worker (IMAGE_CACHE_MAX_BYTES), on
     # persistence.scapWork next to the rootfs scratch.
     imageCacheMaxBytes: 8Gi
@@ -748,9 +756,11 @@ reportWorker:
 # SYS_CHROOT for OpenSCAP's rpm probes (they chroot() into the rootfs to read
 # the image's rpmdb). Sized from oscap on a RHEL 9 STIG profile.
 scapWorker:
+  # limits: scanner.scap.parallelism (3) oscap runs of ~1.1 GiB each plus the
+  # worker itself; a lower memory limit lowers the effective parallelism.
   resources:
     requests: { cpu: 250m, memory: 512Mi }
-    limits: { cpu: "2", memory: 3Gi }
+    limits: { cpu: "3", memory: 4Gi }
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 10001

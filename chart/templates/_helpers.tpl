@@ -388,6 +388,8 @@ Environment shared by api and worker (DESIGN.md section 5).
   value: {{ .Values.scanner.scap.timeoutSeconds | quote }}
 - name: SCAP_FINALIZE_WAIT_SECONDS
   value: {{ .Values.scanner.scap.finalizeWaitSeconds | quote }}
+- name: SCAP_PARALLELISM
+  value: {{ .Values.scanner.scap.parallelism | quote }}
 - name: SCAP_EMBEDDED
   value: {{ .Values.scanner.scap.embedded | quote }}
 {{- with .Values.scanner.scap.content.sources }}

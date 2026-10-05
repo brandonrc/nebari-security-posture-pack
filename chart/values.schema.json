@@ -457,6 +457,11 @@
               "type": "number",
               "minimum": 0
             },
+            "parallelism": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32
+            },
             "imageCacheMaxBytes": {
               "type": [
                 "string",

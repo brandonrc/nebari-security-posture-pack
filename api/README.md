@@ -133,7 +133,9 @@ docker run --rm -u 0 -v "$PWD":/src:ro -w /src --entrypoint sh security-posture-
 | `SCAP_CONTENT_OFFLINE` / `SCAP_CONTENT_REFRESH_HOURS` | `false` / `24` | worker | air-gapped (index only) / refresh interval |
 | `SCAP_PREFER_DISA` / `SCAP_TIMEOUT_SECONDS` | `true` / `900` | both | defaults for settings `scap.preferDisa` / `scap.timeoutSeconds` (per image) |
 | `SCAP_MAX_ROOTFS_GB` | `10` | worker | uncompressed rootfs cap |
-| `SCAP_FINALIZE_WAIT_SECONDS` | `600` | worker | privileged worker waits this long for a queued / running scap stage before the posture snapshot |
+| `SCAP_FINALIZE_WAIT_SECONDS` | `0` | worker | privileged worker waits this long for a queued / running scap stage before the posture snapshot; `0` = finalize at once with `scapPending`, re-aggregate and run the deferred auto-reports / controls when the stage completes (`scap_completed`) |
+| `SCAP_PARALLELISM` / `SCAP_MEMORY_PER_EVAL_MB` | `3` / `1152` | worker | images evaluated concurrently by the scap stage, capped by the cgroup memory limit at `(limit - 384 MiB) / SCAP_MEMORY_PER_EVAL_MB` |
+| `SCAP_DEFERRED_MAX_HOURS` | `12` | worker | a scap-pending scan whose stage is still queued / running after this long runs its deferred stages anyway |
 | `SCAP_SKIP_VALIDATION` | `false` | worker | `oscap --skip-valid` |
 | `SCAP_BENCHMARKS_FILE` | empty | worker | extra os-release / product -> benchmark candidates (`scap/data/benchmarks.yaml` format) |
 | `OSCAP_BIN` / `OSCAP_CHROOT_BIN` | `oscap` / `oscap-chroot` | worker | OpenSCAP binaries (worker image: openscap-scanner 1.3.7) |

@@ -180,13 +180,14 @@ The table lists the main settings. For everything else, see the comments in
 | `scanner.events.includeJobs` | `false` | Pods owned by Jobs / CronJobs (backups, one-off jobs) trigger event scans too (`EVENT_SCANS_INCLUDE_JOBS`). |
 | `scanner.scap.enabled` | `false` | SCAP scanner (DESIGN §14): `<fullname>-scap-worker` evaluates the OS / product STIGs inside each image with OpenSCAP. Root in its container with a minimal capability set: the pack's one privilege exception ([docs/CONTROLS.md](docs/CONTROLS.md)). Settings `scanners.scap` toggles it at runtime. |
 | `scanner.scap.preferDisa` / `timeoutSeconds` / `maxRootfsGB` | `true` / `900` / `10` | Evaluate a DISA SCAP benchmark instead of the SSG profile for the same OS when both exist; per-image time budget; uncompressed rootfs cap. |
-| `scanner.scap.finalizeWaitSeconds` | `600` | How long the privileged worker waits for a scan's SCAP stage before the posture snapshot; afterwards the scan finishes with `scap pending`. |
+| `scanner.scap.parallelism` | `3` | Images the scap-worker evaluates concurrently (`SCAP_PARALLELISM`; oscap is single-threaded, ~1.1 GiB each); capped by `scapWorker.resources.limits.memory` at `(limit - 384Mi) / 1152Mi`. |
+| `scanner.scap.finalizeWaitSeconds` | `0` | How long the privileged worker waits for a scan's SCAP stage before the posture snapshot. `0`: not at all; the scan finishes with `scapPending` ("STIG evaluation in progress (n/m)"), auto-reports and the controls run are deferred, and when the stage completes the scores are re-aggregated and the deferred stages run. |
 | `scanner.scap.content.sources[]` | `[]` (= pinned SSG 0.1.82) | `{name, kind: ssg\|disa\|custom, url, sha256, include[]}`; fetched to `persistence.scapContent`, verified by sha256 before unpacking, refreshed every `content.refreshHours` (24). |
 | `scanner.scap.content.offline` | `false` | Air-gapped: never fetch, index the datastreams copied to the content volume (`<volume>/local/`). |
 | `scanner.scap.disa.urls[]` | `[]` | DISA `U_*_STIG_SCAP_1-3_Benchmark.zip` (or manual STIG zips) as `{url, sha256, name?, include?}`. |
 | `scanner.scap.embedded` | `false` | Run the stage in the scan worker instead (dev only; non-root, so results are flagged `rootfsFidelity: degraded`). |
 | `scanner.scap.imageCacheMaxBytes` | `8Gi` | scap-worker's own OCI layout cache on `persistence.scapWork`. |
-| `scapWorker.resources` / `containerSecurityContext` | 250m/512Mi-2/3Gi, root + `CHOWN FOWNER DAC_OVERRIDE FSETID SETFCAP SYS_CHROOT` | Measured peak ~1.1 GiB on a RHEL 9 STIG evaluation. |
+| `scapWorker.resources` / `containerSecurityContext` | 250m/512Mi-3/4Gi, root + `CHOWN FOWNER DAC_OVERRIDE FSETID SETFCAP SYS_CHROOT` | Measured peak ~1.1 GiB on a RHEL 9 STIG evaluation. |
 | `scanner.rawMaxGzBytes` | `null` (4Mi) | `RAW_MAX_GZ_BYTES`: raw scanner JSON kept per image scan (gzip, bytes or quantity); larger output keeps a summary only. |
 | `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the workers for private registries. |
 | `provenance.helmReleases.enabled` / `iUnderstandClusterSecretsRead` | `false` / `false` | Helm release discovery needs get/list on every Secret (bound to `<fullname>-controls` only); both must be true. |

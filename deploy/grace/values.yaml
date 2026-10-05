@@ -94,13 +94,14 @@ worker:
       requests: { cpu: 100m, memory: 256Mi }
       limits: { cpu: "2", memory: 2Gi }
 
-# scap-worker: idle between scans; one oscap process at a time. Requests
+# scap-worker: idle between scans; up to scanner.scap.parallelism (3) oscap
+# runs at a time during one (~1.1 GiB each). Requests
 # below the chart default (512Mi) for the same reason as the worker's; the
-# chart's 3Gi limit stays.
+# chart's 4Gi limit (3 concurrent evaluations) stays.
 scapWorker:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
-    limits: { cpu: "2", memory: 3Gi }
+    limits: { cpu: "3", memory: 4Gi }
 
 # Reports (all six auto-generated after each scan; OSCAL AR ~87 MB built in
 # memory) run in the report-worker, one at a time.

@@ -116,10 +116,16 @@ Example: 1 CAT I fail, 1 CAT II pass, 1 CAT III pass, 1 CAT II notchecked → 10
 consensus are untouched.
 
 Timing: the privileged worker takes the STIG scores present when it writes the posture
-snapshot. It waits up to `scanner.scap.finalizeWaitSeconds` for the scan's SCAP stage; when the
-scap-worker is slower (or absent), the scan finishes with `scapStatus` still queued / running
-("scap pending") and the snapshot uses the previous STIG results; the next scan picks the new
-ones up.
+snapshot. It waits up to `scanner.scap.finalizeWaitSeconds` (default 0: not at all) for the scan's
+SCAP stage; when the stage is still queued / running, the scan finishes with `scapPending: true`
+and the snapshot uses the STIG results stored so far. When the stage completes (`scap_completed`),
+the privileged worker recomputes that scan's workload / namespace / cluster scores with the new
+STIG scores, clears `scapPending` and then runs the auto-reports and the controls engine it had
+deferred. With no live scap-worker nothing is deferred (the re-aggregation still happens when the
+stage eventually completes).
+
+A failed re-evaluation (registry rate limit, copy or oscap timeout) never replaces a genuine stored
+result: the image keeps its previous STIG score, flagged `stale`, and is retried by the next scan.
 
 `/summary.stig = {evaluated, pass, fail, cat1Open, cat2Open, cat3Open, coverage, notApplicable,
 noContent, errors, pending, images, score}` over the latest scan's images; `coverage` is the
