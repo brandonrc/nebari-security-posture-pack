@@ -45,6 +45,19 @@ updates:
     directory: /chart
     schedule: { interval: weekly, day: monday }
 
+    # Dependabot cannot resolve OCI chart dependencies (nebari-app from
+
+    # oci://quay.io/nebari/charts) and the image repositories are not
+
+    # published yet; both fail the job with UNAUTHORIZED. Pin them by hand.
+
+    ignore:
+
+      - dependency-name: "nebari-app"
+
+      - dependency-name: "quay.io/nebari/*"
+
+
   - package-ecosystem: github-actions  # SHA-pinned actions in .github/workflows
     directory: /
     schedule: { interval: weekly, day: monday }
