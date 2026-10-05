@@ -48,6 +48,7 @@ scanner:
   # distroless coredns (Debian 12 via status.d), UBI 9 keycloak (RHEL 9 STIG),
   # Alpine (notApplicable), postgres:16-alpine (PostgreSQL manual STIG).
   scap:
+    imageCacheMaxBytes: 14Gi   # scapWork PVC is 20Gi incl. rootfs scratch; 8Gi thrashed
     enabled: true
     # SSG over DISA for the same OS: the DISA RHEL 9 SCAP benchmark has no
     # container applicability, so host-only rules (services, kernel, boot,
