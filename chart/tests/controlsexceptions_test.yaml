@@ -1,0 +1,48 @@
+suite: risk acceptances (controlsEngine.exceptions -> CONTROLS_EXCEPTIONS)
+templates:
+  - templates/api.yaml
+release:
+  name: security-posture
+  namespace: security-posture
+tests:
+  - it: no scap-worker, no exceptions
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CONTROLS_EXCEPTIONS, value: "[]" }
+
+  - it: ships the scap-worker's own exception when the scap-worker runs
+    documentIndex: 1
+    set:
+      scanner.scap.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONTROLS_EXCEPTIONS
+            value: "[{\"approvedBy\":\"nebari-security-posture-pack chart default (confirm with the ISSO / AO)\",\"assertions\":[\"k8s-workload-least-privilege\"],\"checks\":[\"added-capabilities\",\"run-as-root\"],\"expiresAt\":\"\",\"kind\":\"Deployment\",\"name\":\"security-posture-scap-worker\",\"namespace\":\"security-posture\",\"reason\":\"OpenSCAP evaluates OS / product STIG rules that check owners, modes, setuid/setgid bits and file capabilities of image files, so the scap-worker extracts image layers as root inside its container. Capabilities are limited to CHOWN, FOWNER, DAC_OVERRIDE, FSETID, SETFCAP and SYS_CHROOT; no privilege escalation, read-only root filesystem, seccomp RuntimeDefault, no host namespaces or hostPath, no service account token; image content is only read, never executed (docs/CONTROLS.md, SCAP worker privilege exception).\",\"reviewBy\":\"2027-04-03\",\"ticket\":\"\"}]"
+
+  - it: embedded SCAP (no scap-worker) or scapWorker.enabled=false ships none; items pass through
+    documentIndex: 1
+    set:
+      scanner.scap.enabled: true
+      controlsEngine.exceptions.scapWorker.enabled: false
+      controlsEngine.exceptions.items:
+        - { kind: Deployment, namespace: apps, name: web, checks: [privileged], reason: r, approvedBy: AO }
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONTROLS_EXCEPTIONS
+            value: "[{\"approvedBy\":\"AO\",\"checks\":[\"privileged\"],\"kind\":\"Deployment\",\"name\":\"web\",\"namespace\":\"apps\",\"reason\":\"r\"}]"
+
+  - it: embedded mode renders no scap-worker exception
+    documentIndex: 1
+    set:
+      scanner.scap.enabled: true
+      scanner.scap.embedded: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: CONTROLS_EXCEPTIONS, value: "[]" }

@@ -11,6 +11,8 @@
   value: {{ join "," ($c.adminSubjectsAllowlist | default list) | quote }}
 - name: CONTROLS_SYSTEM_NAMESPACES
   value: {{ join "," ($c.systemNamespaces | default list) | quote }}
+- name: CONTROLS_EXCEPTIONS
+  value: {{ include "security-posture.controlsExceptions" . | quote }}
 - name: CONTROLS_KEYCLOAK_URL
   value: {{ $c.keycloak.url | quote }}
 - name: CONTROLS_KEYCLOAK_REALM
@@ -60,4 +62,33 @@
   value: /etc/posture/keycloak/client-secret
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{/*
+  Risk acceptances (controlsEngine.exceptions -> env CONTROLS_EXCEPTIONS, read-only entries of
+  settings controlsEngine.exceptions; docs/CONTROLS.md "Risk acceptances"): `items` as given plus
+  the scap-worker's own exception (added-capabilities, run-as-root, k8s-workload-least-privilege)
+  when the scap-worker Deployment is rendered and exceptions.scapWorker.enabled. A plain list under
+  controlsEngine.exceptions is accepted as `items`. reviewBy is a chart value (not `now`), so
+  `helm template` output is deterministic; bump it when the acceptance is re-reviewed.
+*/}}
+{{- define "security-posture.controlsExceptions" -}}
+{{- $ex := .Values.controlsEngine.exceptions | default dict -}}
+{{- $out := list -}}
+{{- if kindIs "slice" $ex -}}
+{{- $out = $ex -}}
+{{- $ex = dict -}}
+{{- else -}}
+{{- $out = $ex.items | default list -}}
+{{- end -}}
+{{- $sw := $ex.scapWorker | default dict -}}
+{{- if and $sw.enabled .Values.scanner.scap.enabled (not .Values.scanner.scap.embedded) -}}
+{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "scap-worker") -}}
+{{- $out = append $out (dict "kind" "Deployment" "namespace" .Release.Namespace "name" $name
+      "checks" (list "added-capabilities" "run-as-root")
+      "assertions" (list "k8s-workload-least-privilege")
+      "reason" $sw.reason "approvedBy" $sw.approvedBy "reviewBy" ($sw.reviewBy | default "")
+      "expiresAt" "" "ticket" ($sw.ticket | default "")) -}}
+{{- end -}}
+{{- toJson $out -}}
 {{- end }}

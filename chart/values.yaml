@@ -451,6 +451,30 @@ controlsEngine:
   # Namespaces exempt from the per-namespace checks (PodSecurity, default-deny,
   # default ServiceAccount automount, workload least privilege).
   systemNamespaces: [kube-system, kube-public, kube-node-lease]
+  # Risk acceptances (docs/CONTROLS.md "Risk acceptances"; env CONTROLS_EXCEPTIONS): a covered
+  # failing posture check / assertion of one workload is reported `accepted-risk` (never pass,
+  # no score penalty) and listed as a "Risk acceptance" row in the POA&M, SAR and CRM. Entries
+  # here are read-only in settings; more can be added under settings controlsEngine.exceptions.
+  exceptions:
+    # The scap-worker's own exception (rendered only with scanner.scap.enabled and not embedded):
+    # root in its container + six capabilities (docs/CONTROLS.md "SCAP worker privilege exception").
+    scapWorker:
+      enabled: true
+      reason: >-
+        OpenSCAP evaluates OS / product STIG rules that check owners, modes, setuid/setgid bits and
+        file capabilities of image files, so the scap-worker extracts image layers as root inside its
+        container. Capabilities are limited to CHOWN, FOWNER, DAC_OVERRIDE, FSETID, SETFCAP and
+        SYS_CHROOT; no privilege escalation, read-only root filesystem, seccomp RuntimeDefault, no host
+        namespaces or hostPath, no service account token; image content is only read, never executed
+        (docs/CONTROLS.md, SCAP worker privilege exception).
+      approvedBy: "nebari-security-posture-pack chart default (confirm with the ISSO / AO)"
+      # No expiry; re-review every 180 days. A fixed date keeps `helm template` deterministic:
+      # set it to the review date + 180 days after each review.
+      reviewBy: "2027-04-03"
+      ticket: ""
+    # Further acceptances: [{kind, namespace, name, checks: [...], assertions: [...], reason,
+    # approvedBy, expiresAt: YYYY-MM-DD (optional, inclusive), reviewBy, ticket}]
+    items: []
   keycloak:
     url: http://keycloak-keycloakx-http.keycloak.svc.cluster.local:80/auth
     realm: nebari

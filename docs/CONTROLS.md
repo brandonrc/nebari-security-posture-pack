@@ -292,6 +292,60 @@ Controls: AC-6 (least privilege; the exception is scoped to one optional compone
 with a documented need), CM-7 (only the capabilities listed), SC-39 (process isolation:
 separate pod, no host access), SI-7 (sha256-pinned content).
 
+The chart records this exception as a risk acceptance (next section,
+`controlsEngine.exceptions.scapWorker`, on by default whenever the scap-worker Deployment is
+rendered): its `added-capabilities` and `run-as-root` posture results and its entry in
+`k8s-workload-least-privilege` are reported `accepted-risk` with the reason above, approved by
+the chart default (confirm with the ISSO / AO and set `approvedBy` / `ticket`), no expiry and
+`reviewBy` 180 days after the last review (a fixed chart value, so `helm template` stays
+deterministic; bump it after each review).
+
+## Risk acceptances (`controlsEngine.exceptions`)
+
+Before this mechanism the only way to stop a justified exception from failing was
+`controlsEngine.systemNamespaces`, which exempts a whole namespace from every per-namespace
+check. A risk acceptance is scoped to **one workload** and named checks / assertions:
+
+```yaml
+controlsEngine:
+  exceptions:
+    scapWorker: { enabled: true, approvedBy: "...", reviewBy: "2027-04-03", ticket: "" }
+    items:
+      - kind: Deployment          # or * ; matched case-insensitively
+        namespace: apps
+        name: legacy-proxy        # fnmatch glob allowed (legacy-*)
+        checks: [run-as-root]     # posture check ids (docs/SCORING.md)
+        assertions: [k8s-workload-least-privilege]   # controls-engine assertion ids
+        reason: vendor image requires root until v3 (2027-Q1)
+        approvedBy: AO Jane Smith
+        expiresAt: 2027-01-31     # optional, inclusive (UTC); omit for no expiry
+        reviewBy: 2026-12-31      # optional, informational
+        ticket: RISK-123          # optional
+```
+
+The chart renders `items` plus the scap-worker entry into `CONTROLS_EXCEPTIONS` (JSON) for the
+api, workers and report worker; these entries are read-only in settings (`source: values`) and
+re-applied on every settings load. More acceptances can be added through `PUT /settings`
+(`controlsEngine.exceptions[]`, `source: settings`). `reason` and `approvedBy` are required,
+and each entry must list at least one check or assertion.
+
+Effect:
+
+| where | covered result |
+|---|---|
+| posture checks | status `accepted-risk` (never `pass`), weight 0: no posture / workload / cluster score penalty, not counted in `failed`; the detail keeps the finding and appends the reason, approver and expiry |
+| `k8s-workload-least-privilege` | a workload whose least-privilege failures are all accepted (posture `accepted-risk`, or the exception lists the assertion) is listed under `acceptedRisk`; with no other failing workload the assertion is `accepted-risk` |
+| control status | an `accepted-risk` assertion makes its objectives `risk-accepted` (neither satisfied nor failing): the control is at most `partial`, never `passing`; accepted posture results are not failing scan evidence |
+| `/compliance/controls` (§11 view) | `checksAcceptedRisk`; a control with only accepted results is `risk_accepted`, never `satisfied` |
+| POA&M | one "Risk acceptance: ns/kind/name" item per active acceptance that covers a finding: POA&M Status `Risk Accepted`, requested risk acceptance expiration date = `expiresAt`, Mitigations / Deviation Rationale = reason, Operational Requirement `Yes` |
+| SAR | "Risk acceptances" table under the posture results (active, review overdue, or expired with the results failing again) and an "Accepted risk" column per check |
+| CRM | "Risk acceptances" sheet; the mapped controls' Detail names the acceptance |
+| Kubernetes STIG checklist | accepted results stay **Open** (the finding detail carries the acceptance) |
+
+Expiry: from the day after `expiresAt` the acceptance no longer applies and the results are
+`fail` again (detail: "risk acceptance expired …"). A past `reviewBy` does not change any
+status; reports flag it "review overdue".
+
 ## Where to find the results
 
 | API (`/api/v1`) | returns |
