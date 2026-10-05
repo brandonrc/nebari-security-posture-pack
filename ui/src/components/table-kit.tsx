@@ -1,5 +1,5 @@
 import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, SearchIcon, XIcon } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { SimpleSelect } from '@/components/simple-select';
 import { Button } from '@/components/ui/button';
@@ -69,23 +69,26 @@ export function SortableHead({
 export function SearchInput({ value, onChange, placeholder, label }: { value: string; onChange: (v: string) => void; placeholder: string; label: string }) {
   const [draft, setDraft] = useState(value);
   const [committed, setCommitted] = useState(value);
-  // adopt external changes (e.g. "Clear filters") without an effect
+  // the last value this input emitted, until the URL echoes it back
+  const [sent, setSent] = useState<string | null>(null);
+  // adopt external changes (e.g. "Clear filters") without an effect — but not the echo of
+  // our own debounced commit: the user may have kept typing (or cleared the box) since.
   if (value !== committed) {
     setCommitted(value);
-    setDraft(value);
+    if (value !== sent) setDraft(value);
+    setSent(null);
   }
-  const first = useRef(true);
+  const emit = (v: string) => {
+    setSent(v);
+    onChange(v);
+  };
+  // `value` is a dep so a draft typed before the echo landed is compared with the current value
   useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
-    const t = window.setTimeout(() => {
-      if (draft !== value) onChange(draft);
-    }, 300);
+    if (draft === value) return;
+    const t = window.setTimeout(() => emit(draft), 300);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft]);
+  }, [draft, value]);
   return (
     <div className="relative w-full sm:w-[280px]">
       <SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 z-10 size-[18px] -translate-y-1/2 text-muted-foreground" />
@@ -105,7 +108,7 @@ export function SearchInput({ value, onChange, placeholder, label }: { value: st
           variant="ghost"
           onClick={() => {
             setDraft('');
-            onChange('');
+            emit('');
           }}
         >
           <XIcon />
