@@ -1,0 +1,707 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/nebari-dev/nebari-security-posture-pack/blob/master/api/vex/posture-images.vex.json",
+  "author": "nebari-security-posture-pack maintainers",
+  "role": "Document Creator",
+  "timestamp": "2026-10-05T00:00:00Z",
+  "version": 1,
+  "tooling": "hand-reviewed; regenerate per docs/DECISIONS.md (2026-10-05: image hardening)",
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-16742"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libsystemd0"
+            },
+            {
+              "@id": "pkg:deb/debian/libudev1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libsystemd0"
+            },
+            {
+              "@id": "pkg:deb/debian/libudev1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in systemd-homed. Only the libsystemd0/libudev1 client libraries (dependencies of apt/util-linux) are installed; systemd-homed is not in the image and there is no init system."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-102010"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in the header-only binary-heap priority-queue template (erase_if). Template code is compiled into consumers; the shared runtime libraries (libstdc++6, libgcc-s1, libatomic1) do not contain it, no libstdc++ headers are installed, and no binary in the image is built from that container."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-95619"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "Integer overflow in libstdc++'s aligned operator new. The C++ consumers are HarfBuzz/Pango (WeasyPrint report rendering) and, in the worker, OpenSCAP. Whether an attacker-sized aligned allocation is reachable from report data has not been established; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-19499"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Requires a caller of strfmon/strfmon_l. No ELF object in the image imports either symbol (checked with nm -D across the exported filesystem); CPython's locale.currency is pure Python."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-5435"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Requires a caller of the deprecated ns_printrr/ns_printrrf/fp_nquery resolver printers. No ELF object in the image imports them (nm -D across the exported filesystem)."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-76642"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged (SUID or root) mount invocation. The mount package is purged from the image; As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints, so libmount's mount context is never driven."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-78409"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged (SUID or root) mount invocation. The mount package is purged from the image; As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints, so libmount's mount context is never driven."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-78410"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged (SUID or root) mount invocation. The mount package is purged from the image; As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints, so libmount's mount context is never driven."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-78408"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The flaw is in nsenter --join-cgroup run as root. As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints; nsenter is never executed and could not open a cgroup.procs file as root."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2025-69720"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/ncurses-bin"
+            },
+            {
+              "@id": "pkg:deb/debian/ncurses-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libtinfo6"
+            },
+            {
+              "@id": "pkg:deb/debian/libncursesw6"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/ncurses-bin"
+            },
+            {
+              "@id": "pkg:deb/debian/ncurses-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libtinfo6"
+            },
+            {
+              "@id": "pkg:deb/debian/libncursesw6"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The overflow is in the infocmp command-line program (progs/infocmp.c), not in the ncurses libraries. infocmp is never executed; the containers have no TTY and no terminfo input."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-82560"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Pod::Text is shipped in perl-modules, which is not installed; perl-base in the image contains no Pod/Text.pm."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-9538"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Archive::Tar is shipped in perl-modules, which is not installed; perl-base in the image contains no Archive/Tar.pm."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54369"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Requires a privileged process applying libacl pathname functions to an attacker-controlled path. The only libacl consumers are coreutils/sed/tar, which the API never executes (its only child process is `python -m posture.report_worker`); it runs as uid 10001 without capabilities."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54370"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Requires a privileged process applying libacl pathname functions to an attacker-controlled path. The only libacl consumers are coreutils/sed/tar, which the API never executes (its only child process is `python -m posture.report_worker`); it runs as uid 10001 without capabilities."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-66046"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-76956"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-76957"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-93990"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-85091"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/zlib1g"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Requires gzprintf/gzvprintf after a non-blocking gzwrite stall. No ELF object in the API image imports gzprintf or gzvprintf (nm -D across the exported filesystem)."
+    }
+  ]
+}

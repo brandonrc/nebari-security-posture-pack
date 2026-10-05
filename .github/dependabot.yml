@@ -33,7 +33,7 @@ updates:
       - dependency-name: "@base-ui/react"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
-  - package-ecosystem: docker        # python:3.12-slim-bookworm, node:22-alpine, nginx-unprivileged
+  - package-ecosystem: docker        # python:3.13-slim-trixie, node:22-alpine, nginx-unprivileged (tag+digest)
     directories: [/api, /ui]
     schedule: { interval: weekly, day: monday }
     groups:

@@ -44,7 +44,7 @@ Reference material (read-only clones) at
 | Component | Image | Notes |
 |---|---|---|
 | `ui` | `security-posture-ui` (nginx:alpine, static SPA) | Only ingress target. Proxies `/api/` → `api:8000`. `/healthz` static 200. |
-| `api` | `security-posture-api` (python:3.12-slim) | FastAPI on :8000. Reads Postgres. Validates JWT + admin group. |
+| `api` | `security-posture-api` (python:3.13-slim-trixie) | FastAPI on :8000. Reads Postgres. Validates JWT + admin group. |
 | `worker` | `security-posture-worker` (api image + trivy, grype, clairctl, skopeo) | 1 replica, `--stages inventory,scan`, SA `<fullname>-scanner`. Inventory + CVE scans + scan scheduler (due from the DB). PVC `/cache`. Probes `:9000/healthz`. |
 | `worker-privileged` | `security-posture-worker` | 1 replica, `--stages provenance,controls,reports`, SA `<fullname>-controls`. Claims `scanned` scans: provenance, posture snapshot, `done`, controls engine, queues auto reports. `worker.splitPrivileged=false` folds it into `worker`. |
 | `report-worker` | `security-posture-api` | 1 replica, `python -m posture.report_worker`, no SA token. Generates queued reports (lease, child process per report); reports PVC shared with the api (podAffinity). |

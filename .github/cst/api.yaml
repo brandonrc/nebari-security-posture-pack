@@ -29,3 +29,9 @@ fileExistenceTests:
   - name: no package manager caches or build tools in the venv
     path: /opt/venv/bin/uv
     shouldExist: false
+  - name: no pip in the runtime image (the app runs from /opt/venv)
+    path: /usr/local/bin/pip
+    shouldExist: false
+  - name: mount(8) purged (CVE triage in api/vex/posture-images.vex.json relies on it)
+    path: /usr/bin/mount
+    shouldExist: false

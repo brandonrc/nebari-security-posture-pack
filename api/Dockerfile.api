@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
 # Nebari Security Posture API (FastAPI). Build context: api/
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+# Base: Debian 13 (trixie) slim, pinned by digest (Dependabot bumps tag + digest together). Chosen
+# over python:3.12-slim-bookworm (+ apt-get upgrade) and gcr.io/distroless/python3-debian12 by
+# measured CRITICAL/HIGH counts: docs/DECISIONS.md "2026-10-05: image hardening". The remaining
+# unfixed Debian CVEs are triaged in vex/posture-images.vex.json (OpenVEX).
+ARG PYTHON_IMAGE=python:3.13-slim-trixie@sha256:3dd7cc108ec1493442514f5c2a871af6af0ec31d768ff6e378a93340c3b3db5f
 
 FROM ${PYTHON_IMAGE} AS builder
 # Dependencies come from uv.lock (hash-pinned, transitive deps included), so the
@@ -22,11 +26,22 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \
     CACHE_DIR=/tmp
-# WeasyPrint (SAR PDF) system libraries + a font
+# - apt-get upgrade: Debian security fixes published after the base digest.
+# - WeasyPrint (SAR PDF) system libraries + a font.
+# - mount (util-linux; priority "required" but neither Essential nor Protected) is purged: an
+#   unprivileged container cannot mount anything. (login is Protected in trixie and stays.)
+# - No build tooling at runtime: the app runs from /opt/venv (no pip inside), so the base image's
+#   pip/setuptools/wheel and their vendored deps (urllib3, msgpack, ...) are removed.
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
       libharfbuzz-subset0 fonts-dejavu-core \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get purge -y mount \
+ && apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/apt /var/log/dpkg.log \
+ && rm -rf /usr/local/bin/pip* /usr/local/bin/idle* /usr/local/bin/pydoc* \
+      /usr/local/lib/python3*/site-packages/pip* /usr/local/lib/python3*/site-packages/setuptools* \
+      /usr/local/lib/python3*/site-packages/wheel* /usr/local/lib/python3*/ensurepip \
+      /usr/local/lib/python3*/idlelib /usr/local/lib/python3*/tkinter
 RUN groupadd --gid 10001 posture && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture \
  && mkdir -p /data/reports && chown 10001:10001 /data/reports
 COPY --from=builder /opt/venv /opt/venv
