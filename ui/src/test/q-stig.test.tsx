@@ -63,7 +63,11 @@ describe('Image detail → STIG tab', () => {
     await user.click(await screen.findByRole('option', { name: 'CAT II' }));
     await waitFor(() => expect(seen.at(-1)?.get('severity')).toBe('cat2'));
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search rules' }), { target: { value: 'zzz-no-such-rule' } });
-    expect(await screen.findByText('No rules match')).toBeInTheDocument();
+    // Fail + CAT II alone can already be empty ("No rules match"), and the debounced q refetch then
+    // swaps it for skeleton rows: wait for the q request and its result, not the first match.
+    await waitFor(() => expect(seen.at(-1)?.get('q')).toBe('zzz-no-such-rule'));
+    await waitFor(() => expect(within(table).getByText('No rules match')).toBeInTheDocument());
+    expect(table).not.toHaveAttribute('aria-busy');
     await user.click(screen.getByRole('button', { name: 'Clear filters' }));
     await waitFor(() => expect(within(table).getAllByRole('row').length).toBe(31));
     await user.click(screen.getByRole('combobox', { name: 'Rows per page' }));

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SCAN_POLL } from '@/api/provenance-queries';
+import { getConfig, setConfig } from '@/config';
 import { mockScan } from '@/mocks/provenance-backend';
 import { server } from '@/mocks/server';
 import { renderProvenanceApp } from './render';
@@ -81,6 +82,11 @@ describe('provenance-only mode: pages', () => {
     expect(within(tabs).getAllByRole('tab').map((t) => t.textContent?.replace(/\d+$/, '').trim())).toEqual(['Used by', expect.stringMatching(/^Supply chain/)]);
     expect(screen.queryByRole('button', { name: /Rescan image/ })).toBeNull();
     expect((await screen.findAllByText(/No SBOM attestation/)).length).toBeGreaterThan(0);
+    // provenance mode has no cluster posture score to weigh into, and counts are pluralised
+    expect(screen.getByText(/^Supply-chain score/)).toBeInTheDocument();
+    expect(screen.queryByText(/weighs 15%/)).toBeNull();
+    expect(screen.getByText(/^\d+ workloads? · \d+ containers?$/)).toBeInTheDocument();
+    expect(screen.queryByText(/\b1 workloads\b|\b1 containers\b/)).toBeNull();
     await user.click(within(tabs).getByRole('tab', { name: /Used by/ }));
     const used = await screen.findByRole('table', { name: 'Containers using this image' });
     expect(within(used).getByText('web-7d9f')).toBeInTheDocument();
@@ -222,6 +228,19 @@ describe('provenance-only mode: Run scan', () => {
     expect(screen.queryByRole('button', { name: /Run scan/ })).toBeNull();
     const table = await screen.findByRole('table', { name: 'Scans' });
     await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(4));
+  });
+});
+
+describe('provenance-only mode: branding', () => {
+  const saved = getConfig();
+  afterEach(() => setConfig(saved));
+
+  it('the header uses frontend.branding.logoUrl and the title', async () => {
+    setConfig({ title: 'Acme supply chain', branding: { logoUrl: '/branding/acme.svg' } });
+    renderProvenanceApp('/');
+    const logo = await screen.findByRole('img', { name: 'Acme supply chain' });
+    expect(logo).toHaveAttribute('src', '/branding/acme.svg');
+    expect((await nav()).textContent).toContain('Acme supply chain');
   });
 });
 

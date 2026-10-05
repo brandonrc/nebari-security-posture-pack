@@ -22,7 +22,7 @@ for (const [path, heading] of ROUTES) {
   });
 }
 
-for (const path of ['/settings', '/vulnerabilities', '/compliance', '/workloads', '/checks']) {
+for (const path of ['/settings', '/vulnerabilities', '/compliance', '/workloads', '/checks', '/stig/benchmarks/disa-rhel9']) {
   test(`posture-only route ${path} redirects to the Overview`, async ({ page }) => {
     await page.goto(path);
     await shellReady(page);

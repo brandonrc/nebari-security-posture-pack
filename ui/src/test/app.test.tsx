@@ -1,7 +1,8 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { getConfig, setConfig } from '@/config';
 import { server } from '@/mocks/server';
 import { renderApp } from './render';
 
@@ -207,16 +208,19 @@ describe('Supply chain', () => {
     expect(within(deductions).getByText(/Major version behind/)).toBeInTheDocument();
     expect(screen.getByText(/none of the expected identities matched/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Download/ })).toHaveAttribute('href', '/api/v1/images/img-004/sbom');
+    expect(screen.getByText(/Supply-chain score · weighs 15% of the cluster score/)).toBeInTheDocument();
   });
 
   it('degrades when the API has no provenance', async () => {
     server.use(
       http.get('*/api/v1/images/:id', ({ params }) =>
-        HttpResponse.json({ id: params.id, ref: 'x/y:1', registry: 'x', repository: 'y', tag: '1', digest: null, score: 90, grade: 'A', counts: { critical: 0, high: 0, medium: 0, low: 0, negligible: 0, unknown: 0 }, fixable: {}, scanners: {}, agreementIndex: null, namespaces: [], workloads: 0, containers: 0, running: true, lastScannedAt: null, mirrored: true, warnings: [], findings: [], usedBy: [], scans: [], postureFindings: [] }),
+        HttpResponse.json({ id: params.id, ref: 'x/y:1', registry: 'x', repository: 'y', tag: '1', digest: null, score: 90, grade: 'A', counts: { critical: 0, high: 0, medium: 0, low: 0, negligible: 0, unknown: 0 }, fixable: {}, scanners: {}, agreementIndex: null, namespaces: [], workloads: 1, containers: 1, running: true, lastScannedAt: null, mirrored: true, warnings: [], findings: [], usedBy: [], scans: [], postureFindings: [] }),
       ),
     );
     renderApp('/images/img-001?tab=supply-chain');
     expect(await screen.findByText('No supply-chain data')).toBeInTheDocument();
+    expect(screen.getByText(/or are disabled in Settings → Supply chain/)).toBeInTheDocument();
+    expect(screen.getByText('1 workload · 1 container')).toBeInTheDocument();
   });
 });
 
@@ -241,5 +245,22 @@ describe('Settings §12/§13', () => {
     expect(screen.getAllByLabelText('Control baseline').length).toBeGreaterThan(0);
     expect(screen.getByText('User/admin')).toBeInTheDocument();
     expect(screen.getByLabelText('Certificate OIDC issuer')).toHaveValue('https://token.actions.githubusercontent.com');
+  });
+});
+
+describe('Branding (config.json logoUrl / logoUrlDark / faviconUrl / theme)', () => {
+  const saved = getConfig();
+  afterEach(() => setConfig(saved));
+
+  it('posture mode keeps the Nebari lockup when no branding is configured', async () => {
+    setConfig({ title: '', branding: {} });
+    renderApp('/');
+    expect(await screen.findByRole('img', { name: 'Nebari' })).toHaveAttribute('src', '/Nebari-Logo-Horizontal-Lockup.png');
+  });
+
+  it('posture mode honours logoUrl and the title in the header', async () => {
+    setConfig({ title: 'Acme posture', branding: { logoUrl: '/branding/acme.svg' } });
+    renderApp('/');
+    expect(await screen.findByRole('img', { name: 'Acme posture' })).toHaveAttribute('src', '/branding/acme.svg');
   });
 });

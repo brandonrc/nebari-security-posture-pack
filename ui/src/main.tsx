@@ -8,6 +8,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from '@/App';
 import type { AuthStrategy } from '@/auth/strategy';
 import { initBackend } from '@/bootstrap';
+import { applyBranding } from '@/branding';
 import { productTitle } from '@/capabilities';
 import { loadConfig } from '@/config';
 import { createQueryClient } from '@/query-client';
@@ -28,7 +29,8 @@ function renderBootstrapError(container: HTMLElement, message: string) {
 
 async function bootstrap() {
   const root = document.getElementById('root') as HTMLElement;
-  await loadConfig();
+  const config = await loadConfig();
+  applyBranding(config.branding);
   const mock = import.meta.env.VITE_API_MOCK;
   let mockStrategy: AuthStrategy | undefined;
   if (mock === 'provenance') {

@@ -22,7 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { toast } from '@/components/ui/toast';
 import { ProvenanceGlyph, SbomGlyph, SignatureGlyph, signatureState, UpdateIndicator } from '@/components/supply-chain';
-import { formatAge, formatDateTime, formatDuration, formatRelative } from '@/lib/format';
+import { formatAge, formatDateTime, formatDuration, formatRelative, pluralize } from '@/lib/format';
 import { totalCount } from '@/lib/scoring';
 import { latestTag, supplyChainScore, updateLevel } from '@/lib/supply-chain';
 import { gradeClass } from '@/lib/severity-styles';
@@ -72,7 +72,7 @@ function Header({ image, pv }: { image: ImageDetail; pv: boolean }) {
               </Meta>
             )}
             <Meta label="Usage">
-              {image.workloads} workloads · {image.containers} containers
+              {pluralize(image.workloads ?? 0, 'workload')} · {pluralize(image.containers ?? 0, 'container')}
             </Meta>
             <Meta label={pv ? 'Collected' : 'Last scanned'}>{formatRelative(image.lastScannedAt)}</Meta>
             {pv ? null : (
@@ -257,12 +257,13 @@ function Fact({ label, glyph, children }: { label: string; glyph?: React.ReactNo
   );
 }
 
-function SupplyChain({ image }: { image: ImageDetail }) {
+function SupplyChain({ image, pv }: { image: ImageDetail; pv: boolean }) {
   const p = image.provenance;
   if (!p) {
     return (
       <EmptyState title="No supply-chain data">
-        Signature, SBOM, provenance and update checks haven’t run for this image yet (or are disabled in Settings → Supply chain).
+        Signature, SBOM, provenance and update checks haven’t run for this image yet
+        {pv ? '.' : ' (or are disabled in Settings → Supply chain).'}
       </EmptyState>
     );
   }
@@ -274,7 +275,7 @@ function SupplyChain({ image }: { image: ImageDetail }) {
       <div className="flex shrink-0 flex-col items-center gap-3 lg:w-64">
         <GradeRing score={sc?.score ?? null} grade={sc?.grade ?? '?'} size={112} stroke={10} />
         <p className="text-center text-muted-foreground text-xs">
-          Supply-chain score · weighs 15% of the cluster score
+          {pv ? 'Supply-chain score' : 'Supply-chain score · weighs 15% of the cluster score'}
           {p.checkedAt ? <span className="block">checked {formatRelative(p.checkedAt)}</span> : null}
         </p>
         <Table aria-label="Supply-chain score deductions" className="text-sm">
@@ -496,7 +497,7 @@ export function ImageDetailPage() {
                   <Posture image={image} />
                 </TabsPanel>
                 <TabsPanel value="supply-chain">
-                  <SupplyChain image={image} />
+                  <SupplyChain image={image} pv={pv} />
                 </TabsPanel>
                 {pv ? null : (
                   <TabsPanel value="stig">

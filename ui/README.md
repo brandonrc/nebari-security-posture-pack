@@ -153,7 +153,7 @@ nginx forwards it.
 | `title` | per mode: "Security Posture" / "Supply-chain provenance" | header, sidebar, tab title |
 | `mode` | `auto` | `auto` \| `posture` \| `provenance` |
 | `keycloak.url`, `.realm`, `.clientId` | unset | provenance-mode PKCE login (all three required) |
-| `logoUrl`, `logoUrlDark`, `faviconUrl`, `theme` | ignored | provenance-collector-pack branding; not implemented |
+| `logoUrl`, `logoUrlDark`, `faviconUrl`, `theme.{light,dark}` | unset | branding in both modes (`src/branding.ts`): header logo (dark falls back to light), favicon, theme-token overrides. http(s) / root-relative / base64 image URLs only; CSS values with `;{}<>"'\` or `url(`/`expression(`/`javascript:` are dropped |
 
 **Deploying in provenance-collector-pack's chart.** Set `frontend.image` to this image. That
 chart mounts its own `nginx.conf` over `/etc/nginx/nginx.conf`, which proxies `/api/` to the
@@ -195,8 +195,20 @@ docker run --rm --network host --ipc=host -u "$(id -u):$(id -g)" -e HOME=/tmp -v
   for a new report. The job's pod status and logs are not shown, and a failed Job shows up only
   as the 5-minute timeout.
 - `/api/me` returns `email` but no display name. The name comes from the ID token.
-- Branding keys in `config.json` are ignored.
 - The dashboard's `/healthz` is not proxied.
+
+**One codebase with provenance-collector-pack's `frontend/`.** That directory is this `ui/`
+plus per-pack packaging, so a change made on either side is copied to the other. The posture-only
+views (Compliance, §14 STIG pages, Settings, ...) ship there too and stay hidden by the capability
+gate in provenance mode. Check the two trees with:
+
+```sh
+ui/scripts/diff-upstream-frontend.sh ../provenance-collector-pack/frontend
+```
+
+It exits non-zero when anything differs outside its allowlist (README, Dockerfile labels and
+default `API_UPSTREAM`, `docker/05-security-posture.envsh`, `.node-version`, `screenshots/`, the
+package name). `src/` has no allowed differences.
 
 ## API assumptions (§12 / §13)
 

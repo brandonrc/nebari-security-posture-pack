@@ -676,8 +676,9 @@ short-lived verify pods.
     the nonce.
 - **Config.** `/config.json` accepts both packs' keys: `apiBase`, `title`, `mode`,
   `provenanceApiBase` (default `/api`), and `keycloak.{url,realm,clientId}`. The branding keys
-  `logoUrl`, `logoUrlDark`, `faviconUrl` and `theme` are ignored. The baked `config.json` no
-  longer pins `title`; the default title depends on the mode.
+  `logoUrl`, `logoUrlDark`, `faviconUrl` and `theme` were ignored at first; they are applied in
+  both modes since the sync entry below. The baked `config.json` no longer pins `title`; the
+  default title depends on the mode.
 - **nginx.** No change was needed. The variable `proxy_pass` under `location /api/` already
   forwards the URI and all headers unchanged, including Authorization and Sec-Fetch-Site, and
   `/healthz` stays local. This was verified against `go run ./cmd/dashboard`.
@@ -688,6 +689,31 @@ short-lived verify pods.
   - `build:mock-preview` now also builds `dist-mock-provenance`, so the CI e2e job runs the new
     `playwright/provenance.spec.ts`, a second Playwright project on `PORT+1`, without a workflow
     change.
+
+## 2026-10-05: `ui/` and provenance-collector-pack's `frontend/` kept as one codebase
+
+- **Two-way sync.** provenance-collector-pack's `nebari-design-frontend` branch (PR #107) replaced
+  its `frontend/` with `ui/` at b902ccc and added branding plus two image-detail fixes. Those came
+  back here, and the §14 SCAP views went there, so `ui/src` and `frontend/src` are identical.
+  - `src/branding.ts`: `config.json` `logoUrl`, `logoUrlDark`, `faviconUrl` and
+    `theme.{light,dark}` now apply in posture mode too. URLs must be http(s), root-relative or a
+    base64 image data URI; CSS values containing `; { } < > " ' \`, `url(`, `expression(` or
+    `javascript:` are dropped, as are token names that aren't camelCase identifiers. Overriding
+    `primary` also derives the hover and sidebar tokens. Absent keys change nothing.
+  - Image detail: usage counts are pluralised ("1 workload"), and in provenance mode the
+    supply-chain score has no "weighs 15% of the cluster score" note and the empty state doesn't
+    point at Settings, which that mode hides.
+  - SCAP views are posture-mode only; `/stig/*` and `?tab=stig` fall back in provenance mode
+    (unit test plus a Playwright check in `provenance.spec.ts`).
+- **Check.** `ui/scripts/diff-upstream-frontend.sh [path]` diffs the trees and fails on anything
+  outside its allowlist: README, Dockerfile (image labels, default `API_UPSTREAM`),
+  `docker/05-security-posture.envsh` (default `API_UPSTREAM`), `.node-version`, `screenshots/`
+  and the package name. `src/`, `playwright/` and `public/` have no allowed differences.
+- **Test flakes fixed on the way.** `q-stig` "filters rules server-side" raced: Fail + CAT II
+  can already render "No rules match", which the debounced `q` refetch then replaces with
+  skeleton rows, so the test now waits for the `q` request and its settled result. Testing
+  Library's async timeout is 5 s (`src/test/setup.ts`) because `findBy` calls hit the 1 s
+  default under v8 coverage on a loaded host.
 
 ## 2026-10-05: UI for the SCAP scanner (DESIGN §14)
 

@@ -1,3 +1,5 @@
+import { type Branding, parseBranding } from '@/branding';
+
 /** Keycloak client settings, as rendered by provenance-collector-pack's `frontend-configmap.yaml`. */
 export interface KeycloakConfig {
   url: string;
@@ -18,6 +20,8 @@ export interface RuntimeConfig {
   keycloak: KeycloakConfig | null;
   /** `auto` (default) probes `${apiBase}/summary`; `posture`/`provenance` skip the probe. */
   mode: ModeOverride;
+  /** provenance-collector-pack's `frontend.branding.*`: logo, favicon, theme tokens. */
+  branding: Branding;
 }
 
 const DEFAULT_CONFIG: RuntimeConfig = {
@@ -26,6 +30,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   title: '',
   keycloak: null,
   mode: 'auto',
+  branding: {},
 };
 
 let current: RuntimeConfig = { ...DEFAULT_CONFIG };
@@ -45,7 +50,7 @@ function parseKeycloak(v: unknown): KeycloakConfig | null {
 /**
  * Normalises a `/config.json` body. Accepts both this pack's keys (`apiBase`, `title`, `mode`,
  * `provenanceApiBase`) and provenance-collector-pack's (`keycloak.{url,realm,clientId}`, `title`,
- * plus branding keys that are ignored). Unknown or malformed values fall back to the defaults.
+ * and the branding keys `logoUrl`, `logoUrlDark`, `faviconUrl`, `theme`). Unknown or malformed values fall back to the defaults.
  */
 export function parseConfig(data: unknown): RuntimeConfig {
   const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
@@ -56,6 +61,7 @@ export function parseConfig(data: unknown): RuntimeConfig {
     title: str(o.title) ?? '',
     keycloak: parseKeycloak(o.keycloak),
     mode,
+    branding: parseBranding(o),
   };
 }
 

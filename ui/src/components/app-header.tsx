@@ -3,7 +3,9 @@ import { ChevronDown, LogOut, Monitor, Moon, Sun } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useMe } from '@/api/queries';
 import { getAuthStrategy } from '@/auth/strategy';
+import { brandLogo } from '@/branding';
 import { productTitle, useCapabilities } from '@/capabilities';
+import { getConfig } from '@/config';
 import { Avatar, AvatarFallback } from '@/components/avatar';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -128,8 +130,11 @@ export function AppHeader() {
         }}
       >
         <img
-          src={isDarkMode ? '/Nebari-Logo-Horizontal-Lockup-White-text.png' : '/Nebari-Logo-Horizontal-Lockup.png'}
-          alt="Nebari"
+          src={
+            brandLogo(getConfig().branding, isDarkMode) ??
+            (isDarkMode ? '/Nebari-Logo-Horizontal-Lockup-White-text.png' : '/Nebari-Logo-Horizontal-Lockup.png')
+          }
+          alt={getConfig().title || 'Nebari'}
           className="h-8 w-auto"
         />
       </MenuBarBrand>

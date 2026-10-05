@@ -4,3 +4,7 @@ screenshots
 *.tsbuildinfo
 dist-mock
 dist-mock-provenance
+coverage
+playwright-report
+test-results
+.node-version

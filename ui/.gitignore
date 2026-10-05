@@ -4,3 +4,5 @@ dist/
 test-results/
 dist-mock/
 dist-mock-provenance/
+coverage/
+playwright-report/

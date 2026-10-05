@@ -11,10 +11,11 @@ describe('parseConfig', () => {
       title: 'Posture',
       keycloak: null,
       mode: 'posture',
+      branding: {},
     });
   });
 
-  it('accepts provenance-collector-pack’s frontend-configmap shape (branding keys ignored)', () => {
+  it('accepts provenance-collector-pack’s frontend-configmap shape (empty branding → defaults)', () => {
     const cfg = parseConfig({
       keycloak: { url: 'https://kc.example.com/', realm: 'nebari', clientId: 'provenance-provenance-collector-spa' },
       title: '',
@@ -29,6 +30,7 @@ describe('parseConfig', () => {
       title: '',
       keycloak: { url: 'https://kc.example.com', realm: 'nebari', clientId: 'provenance-provenance-collector-spa' },
       mode: 'auto',
+      branding: {},
     });
   });
 
