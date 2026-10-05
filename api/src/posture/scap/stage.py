@@ -32,7 +32,7 @@ from . import content as content_mod
 from . import oscap as oscap_mod
 from .detect import Detection, candidates_for, detect
 from .models import ScapContent, ScapImageSummary, ScapResultRow
-from .rootfs import RootfsError, flatten, is_root, prepare_for_oscap, remove_tree
+from .rootfs import RootfsError, flatten, is_root, prepare_for_oscap, remove_tree, secure_join
 from .scoring import image_stig, open_by_cat, stig_score, weights
 
 log = get_logger(__name__)
@@ -282,6 +282,10 @@ class ScapStage:
                                            benchmark_id=entry["benchmarkId"] if multi else None, meta=meta,
                                            chroot_bin=self.s.oscap_chroot_bin,
                                            skip_validation=bool(self.s.scap_skip_validation))
+                # a dpkginfo test in RPM content (DISA benchmarks carry a few) on an image without dpkg
+                # is not a probe failure that matters
+                if not secure_join(rootfs_dir, "var/lib/dpkg", follow_final=True).is_dir():
+                    res.warnings = [w for w in res.warnings if not w.startswith("dpkginfo")]
                 out.benchmarks.append(BenchmarkOutcome(c, entry, profile, res))
             statuses = {b.result.status for b in out.benchmarks}
             out.status = ("evaluated" if "evaluated" in statuses else "timeout" if statuses == {"timeout"}

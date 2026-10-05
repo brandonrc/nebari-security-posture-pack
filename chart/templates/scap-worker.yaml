@@ -1,0 +1,164 @@
+{{/*
+  scap-worker - `python -m posture.worker --stages scap` (DESIGN §14).
+
+  Claims scans whose CVE stage queued them for SCAP (scans.scap_status), copies
+  each image digest into its own OCI cache (persistence.scapWork), flattens the
+  layers into a rootfs, runs OpenSCAP (oscap-chroot) against the applicable
+  DISA / ComplianceAsCode benchmark and stores the results. It owns the content
+  volume (persistence.scapContent) and refreshes it daily from
+  scanner.scap.content.sources / disa.urls (sha256-verified).
+
+  The pack's one privilege exception (docs/CONTROLS.md): it runs as root
+  *inside its container* so the rootfs keeps the image's owners, modes,
+  setuid bits and file capabilities, which many STIG rules check. Everything
+  else is taken away: capabilities drop ALL and add back only CHOWN, FOWNER,
+  DAC_OVERRIDE, FSETID (setuid/setgid bits survive chown) and SETFCAP
+  (security.capability xattrs); no privilege escalation; read-only root
+  filesystem; seccomp RuntimeDefault; its own ServiceAccount with no RBAC and
+  no token; egress only to DNS, the database, the registry namespaces and
+  TCP 443/80 (content hosts and registries; networkPolicy.scapEgress). Image
+  content is only read (never executed). Exactly one replica, Recreate.
+*/}}
+{{- if and .Values.scanner.scap.enabled (not .Values.scanner.scap.embedded) }}
+{{- $name := include "security-posture.componentName" (dict "ctx" . "component" "scap-worker") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.componentLabels" (dict "ctx" . "component" "scap-worker") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "scap-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "scap-worker") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "security-posture.saName" (dict "ctx" . "role" "scap") }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.scapWorker.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- include "security-posture.waitForDb" . | nindent 8 }}
+        {{- include "security-posture.caBundle.init" (dict "ctx" . "image" .Values.images.worker) | nindent 8 }}
+      containers:
+        - name: scap-worker
+          image: {{ include "security-posture.image" .Values.images.worker | quote }}
+          imagePullPolicy: {{ .Values.images.worker.pullPolicy }}
+          command: ["python", "-m", "posture.worker", "--stages", "scap"]
+          env:
+            {{- include "security-posture.commonEnv" . | nindent 12 }}
+            - name: CACHE_DIR
+              value: /work
+            - name: SCAP_WORK_DIR
+              value: /work/scap
+            - name: SCAP_CONTENT_DIR
+              value: /content
+            - name: WORKER_HEALTH_PORT
+              value: "9000"
+            - name: REPORT_WORKER_EMBEDDED
+              value: "false"
+            # local OCI layout cache of the digests it evaluates (never the scan worker's PVC)
+            - name: MIRROR_MODE
+              value: {{ .Values.scanner.mirror.mode | default (ternary "registry" "local" .Values.scanner.clair.enabled) | quote }}
+            - name: IMAGE_CACHE_MAX_BYTES
+              value: {{ .Values.scanner.scap.imageCacheMaxBytes | quote }}
+            - name: SCAP_MAX_ROOTFS_GB
+              value: {{ .Values.scanner.scap.maxRootfsGB | quote }}
+            - name: SCAP_CONTENT_OFFLINE
+              value: {{ .Values.scanner.scap.content.offline | quote }}
+            - name: SCAP_CONTENT_REFRESH_HOURS
+              value: {{ .Values.scanner.scap.content.refreshHours | quote }}
+            - name: XDG_RUNTIME_DIR
+              value: /tmp
+            {{- if .Values.registryAuth.existingSecret }}
+            - name: DOCKER_CONFIG
+              value: /etc/posture/docker
+            - name: REGISTRY_AUTH_FILE
+              value: /etc/posture/docker/config.json
+            {{- end }}
+            {{- include "security-posture.caBundle.env" . | nindent 12 }}
+            {{- with .Values.scapWorker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            # /healthz (probes) and /metrics (monitoring.enabled PodMonitor)
+            - name: metrics
+              containerPort: 9000
+              protocol: TCP
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          securityContext:
+            {{- toYaml .Values.scapWorker.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.scapWorker.resources | nindent 12 }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: content
+              mountPath: /content
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.registryAuth.existingSecret }}
+            - name: registry-auth
+              mountPath: /etc/posture/docker
+              readOnly: true
+            {{- end }}
+            {{- include "security-posture.caBundle.mount" . | nindent 12 }}
+      volumes:
+        - name: work
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-work
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.scapWork }}
+          {{- end }}
+        - name: content
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-content
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.scapContent }}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if .Values.registryAuth.existingSecret }}
+        - name: registry-auth
+          secret:
+            secretName: {{ .Values.registryAuth.existingSecret }}
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+        {{- end }}
+        {{- include "security-posture.caBundle.volumes" . | nindent 8 }}
+      {{- with .Values.scapWorker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scapWorker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scapWorker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

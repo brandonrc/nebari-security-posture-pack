@@ -205,6 +205,48 @@ scanner:
     # MIRROR_REWRITE="src=dst,...".
     rewrite:
       "localhost:32000": registry.container-registry.svc.cluster.local:5000
+  # SCAP scanner (DESIGN §14): OS / product STIGs inside each image with
+  # OpenSCAP, in the <fullname>-scap-worker Deployment (root in its container
+  # with a minimal capability set; see templates/scap-worker.yaml and
+  # docs/CONTROLS.md). OFF by default: heavy (rootfs per image) and the pack's
+  # one privilege exception. Settings `scanners.scap` toggles it at runtime.
+  scap:
+    enabled: false
+    # SCAP_EMBEDDED: run the stage inside the scan worker instead of queueing
+    # it for the scap-worker (dev only: non-root, so owners / modes / setuid
+    # bits are not preserved and results say rootfsFidelity: degraded). Keep
+    # false in clusters.
+    embedded: false
+    # With a DISA SCAP benchmark and an SSG profile for the same OS, evaluate
+    # the DISA one (SCAP_PREFER_DISA). Never both.
+    preferDisa: true
+    # Per image, all its benchmarks (SCAP_TIMEOUT_SECONDS).
+    timeoutSeconds: 900
+    # Rootfs size cap in GB (uncompressed, SCAP_MAX_ROOTFS_GB).
+    maxRootfsGB: 10
+    # The privileged worker waits this long for a scan's SCAP stage before the
+    # posture snapshot (SCAP_FINALIZE_WAIT_SECONDS); afterwards the scan
+    # finishes with `scap pending` and uses the previous STIG results.
+    finalizeWaitSeconds: 600
+    # OCI layout cache of the scap-worker (IMAGE_CACHE_MAX_BYTES), on
+    # persistence.scapWork next to the rootfs scratch.
+    imageCacheMaxBytes: 8Gi
+    content:
+      # Datastream sources, fetched to persistence.scapContent and verified by
+      # sha256 before anything is unpacked (a source without sha256 is
+      # refused). `include` = file-name globs kept from the archive.
+      # [] = the pack's pinned default (ComplianceAsCode SSG 0.1.82: Debian
+      # 11-13, Ubuntu 22.04/24.04, RHEL 8/9/10, AL2023, SLE 15, Fedora).
+      sources: []
+      # SCAP_CONTENT_OFFLINE (air-gapped): never fetch; index whatever is on
+      # the content volume (copy datastreams to <volume>/local/).
+      offline: false
+      refreshHours: 24
+    disa:
+      # DISA SCAP 1.3 benchmark zips (U_*_STIG_SCAP_1-3_Benchmark.zip,
+      # public.cyber.mil / dl.dod.cyber.mil), each {url, sha256, name?}.
+      # Preferred over SSG for the same OS when present (preferDisa).
+      urls: []
 
 # Private registry credentials (optional). Name a kubernetes.io/dockerconfigjson
 # Secret in the release namespace; it is mounted into the worker at
@@ -491,6 +533,10 @@ persistence:
   # Trivy server vulnerability DB cache (~1 GB used).
   trivy: 3Gi
   postgres: 10Gi
+  # scap-worker (scanner.scap.enabled): SCAP datastreams (SSG ~150 MB, DISA
+  # zips a few MB each) and its image cache + one rootfs at a time.
+  scapContent: 2Gi
+  scapWork: 20Gi
   # Generated compliance reports (bytes; metadata is in Postgres). Mounted at
   # reports.dir in the api AND the worker (reports.autoGenerate). With
   # ReadWriteOnce the worker gets a required podAffinity to the api pod so both
@@ -660,6 +706,39 @@ reportWorker:
   tolerations: []
   affinity: {}
 
+# scap-worker (scanner.scap.enabled, DESIGN §14). The pod runs non-root (init
+# containers); the scap-worker container overrides it with root and the
+# minimal capability set below (docs/CONTROLS.md, "SCAP worker privilege
+# exception"): CHOWN / FOWNER / DAC_OVERRIDE / FSETID / SETFCAP to recreate
+# the image's owners, modes, setuid bits and file capabilities in the rootfs,
+# SYS_CHROOT for OpenSCAP's rpm probes (they chroot() into the rootfs to read
+# the image's rpmdb). Sized from oscap on a RHEL 9 STIG profile.
+scapWorker:
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "2", memory: 3Gi }
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  containerSecurityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    runAsNonRoot: false
+    privileged: false
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    seccompProfile: { type: RuntimeDefault }
+    capabilities:
+      drop: ["ALL"]
+      add: ["CHOWN", "FOWNER", "DAC_OVERRIDE", "FSETID", "SETFCAP", "SYS_CHROOT"]
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Container-level security context applied to every container.
 containerSecurityContext:
   allowPrivilegeEscalation: false
@@ -680,6 +759,7 @@ serviceAccount:
     api: ""
     scanner: ""
     controls: ""
+    scap: ""
   annotations: {}
 
 rbac:
@@ -764,6 +844,19 @@ networkPolicy:
       - 169.254.0.0/16   # link-local / cloud metadata
     # Extra NetworkPolicyEgressRule entries appended verbatim (e.g. IPv6
     # ipBlocks, a registry on a non-standard port).
+    extraRules: []
+  # scap-worker egress (scanner.scap.enabled): DNS, the release's Postgres,
+  # allowedNamespaces (in-cluster registry), TCP `ports` to content hosts and
+  # registries. No Kubernetes API (it has no token). NetworkPolicy cannot
+  # match host names: set `cidrs` (replaces 0.0.0.0/0 minus exceptCidrs) or
+  # route through an egress proxy to pin GitHub / cyber.mil.
+  scapEgress:
+    enabled: true
+    allowedNamespaces: [container-registry]
+    ports: [443, 80]
+    cidrs: []
+    exceptCidrs:
+      - 169.254.0.0/16
     extraRules: []
 
 # =============================================================================

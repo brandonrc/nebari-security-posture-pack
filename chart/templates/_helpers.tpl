@@ -379,6 +379,23 @@ Environment shared by api and worker (DESIGN.md section 5).
   value: {{ .Values.history.retainScans | quote }}
 - name: REPORTS_AUTO_GENERATE
   value: {{ join "," (.Values.reports.autoGenerate | default list) | quote }}
+{{- /* DESIGN §14: defaults for settings scanners.scap / scap.* (api) and the scan hand-off (workers) */}}
+- name: SCANNERS_SCAP_ENABLED
+  value: {{ .Values.scanner.scap.enabled | quote }}
+- name: SCAP_PREFER_DISA
+  value: {{ .Values.scanner.scap.preferDisa | quote }}
+- name: SCAP_TIMEOUT_SECONDS
+  value: {{ .Values.scanner.scap.timeoutSeconds | quote }}
+- name: SCAP_FINALIZE_WAIT_SECONDS
+  value: {{ .Values.scanner.scap.finalizeWaitSeconds | quote }}
+- name: SCAP_EMBEDDED
+  value: {{ .Values.scanner.scap.embedded | quote }}
+{{- with .Values.scanner.scap.content.sources }}
+- name: SCAP_CONTENT_SOURCES
+  value: {{ . | toJson | quote }}
+{{- end }}
+- name: SCAP_DISA_URLS
+  value: {{ .Values.scanner.scap.disa.urls | default list | toJson | quote }}
 - name: POD_NAMESPACE
   valueFrom:
     fieldRef:

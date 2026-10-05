@@ -4,6 +4,12 @@
 {{- $pvcs = append $pvcs (dict "component" "trivy" "size" .Values.persistence.trivy) }}
 {{- end }}
 {{- $pvcs = append $pvcs (dict "component" "api" "size" .Values.persistence.reports "name" (printf "%s-reports" (include "security-posture.fullname" .))) }}
+{{- if and .Values.scanner.scap.enabled (not .Values.scanner.scap.embedded) }}
+{{- $scap := include "security-posture.componentName" (dict "ctx" . "component" "scap-worker") }}
+{{- /* DESIGN §14: SCAP content (datastreams, ~150 MB SSG + DISA zips) and the scap-worker's image cache + rootfs scratch */}}
+{{- $pvcs = append $pvcs (dict "component" "scap-worker" "size" .Values.persistence.scapContent "name" (printf "%s-content" $scap)) }}
+{{- $pvcs = append $pvcs (dict "component" "scap-worker" "size" .Values.persistence.scapWork "name" (printf "%s-work" $scap)) }}
+{{- end }}
 {{- range $pvcs }}
 ---
 apiVersion: v1

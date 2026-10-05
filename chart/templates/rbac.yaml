@@ -15,13 +15,19 @@
 
   worker.splitPrivileged=false runs a single worker with <fullname>-controls;
   it then also gets the inventory ClusterRole.
+
+    <fullname>-scap      scap-worker (scanner.scap.enabled, DESIGN §14). No RBAC
+                         at all and no token: it only talks to the database,
+                         registries and content hosts.
 */}}
 {{- include "security-posture.validate" . }}
 {{- $fullname := include "security-posture.fullname" . }}
 {{- $prefix := printf "%s-%s" $fullname .Release.Namespace }}
 {{- $split := include "security-posture.workerSplit" . }}
 {{- if .Values.serviceAccount.create }}
-{{- range $role := list "api" "scanner" "controls" }}
+{{- $roles := list "api" "scanner" "controls" }}
+{{- if and .Values.scanner.scap.enabled (not .Values.scanner.scap.embedded) }}{{ $roles = append $roles "scap" }}{{ end }}
+{{- range $role := $roles }}
 ---
 apiVersion: v1
 kind: ServiceAccount

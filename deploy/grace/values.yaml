@@ -42,6 +42,42 @@ scanner:
     insecure: true
     rewrite:
       "localhost:32000": registry.container-registry.svc.cluster.local:5000
+  # SCAP scanner (DESIGN §14): <fullname>-scap-worker. Validated on this host
+  # (2026-10-05) against posture images: Debian 12 (ssg-debian12 CIS L1),
+  # distroless coredns (Debian 12 via status.d), UBI 9 keycloak (RHEL 9 STIG),
+  # Alpine (notApplicable), postgres:16-alpine (PostgreSQL manual STIG).
+  scap:
+    enabled: true
+    # SSG over DISA for the same OS: the DISA RHEL 9 SCAP benchmark has no
+    # container applicability, so host-only rules (services, kernel, boot,
+    # audit) fail inside images (UBI 9 keycloak: 253 fail / 68 pass), while
+    # SSG's STIG profile marks them not applicable (14 fail / 67 pass). DISA
+    # content stays the source for products SSG does not cover (PostgreSQL).
+    preferDisa: false
+    content:
+      # The pinned SSG 0.1.82 release, limited to the OS families on grace
+      # (Debian/Ubuntu/RHEL; SSG has no Alpine content - Alpine images are
+      # reported notApplicable).
+      sources:
+        - name: ssg
+          kind: ssg
+          url: https://github.com/ComplianceAsCode/content/releases/download/v0.1.82/scap-security-guide-0.1.82.zip
+          sha256: 765e84bdce7f9055f9b9c2dd0ee2b713d4255f8eec94eac6d35ea4973c28919c
+          include: [ssg-debian11-ds.xml, ssg-debian12-ds.xml, ssg-debian13-ds.xml, ssg-ubuntu2204-ds.xml,
+                    ssg-ubuntu2404-ds.xml, ssg-rhel8-ds.xml, ssg-rhel9-ds.xml, ssg-rhel10-ds.xml]
+    disa:
+      # Reachable from grace (dl.dod.cyber.mil, no CAC); sha256 of the zips
+      # as downloaded 2026-10-05.
+      urls:
+        - name: disa-rhel9
+          url: https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_RHEL_9_V2R9_STIG_SCAP_1-3_Benchmark.zip
+          sha256: 95290f60a213136b728013351b1e41c97caea474443878175332ba5874d12bf8
+        # Manual STIG (XCCDF without OVAL checks): every rule notchecked; it
+        # yields complete PostgreSQL checklists for review, no score.
+        - name: disa-postgresql
+          url: https://dl.dod.cyber.mil/wp-content/uploads/stigs/zip/U_PGS_SQL_9-x_V2R5_STIG.zip
+          sha256: 4088023d34ba6aedee1ad7eb77b9625c5a89ce2eb5bfd8c0b13cb78a6434401d
+          include: ["U_PGS_SQL_9-x_STIG_*Manual-xccdf.xml"]
 
 # grype/trivy/skopeo on multi-GB images (ray, jupyter); 6Gi OOMKilled the
 # worker at parallelism 6 (peak 7.3Gi). grace's memory requests are ~99%

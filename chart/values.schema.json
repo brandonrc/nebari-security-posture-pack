@@ -402,6 +402,129 @@
           "description": "RAW_MAX_GZ_BYTES: bytes or a Kubernetes quantity; null = application default (4Mi)",
           "pattern": "^[0-9]+(\\.[0-9]+)?([KMGTPE]i?|[kmgtpe])?$",
           "minimum": 1
+        },
+        "scap": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "embedded": {
+              "type": "boolean"
+            },
+            "preferDisa": {
+              "type": "boolean"
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400
+            },
+            "maxRootfsGB": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "finalizeWaitSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "imageCacheMaxBytes": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            "content": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "url",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._+-]{1,200}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "ssg",
+                          "disa",
+                          "custom"
+                        ]
+                      },
+                      "url": {
+                        "type": "string",
+                        "pattern": "^https?://"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"
+                      },
+                      "include": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "offline": {
+                  "type": "boolean"
+                },
+                "refreshHours": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              }
+            },
+            "disa": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "urls": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "url",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9._+-]{1,200}$"
+                      },
+                      "url": {
+                        "type": "string",
+                        "pattern": "^https?://"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"
+                      },
+                      "include": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "additionalProperties": false
@@ -852,6 +975,12 @@
         },
         "reports": {
           "type": "string"
+        },
+        "scapContent": {
+          "type": "string"
+        },
+        "scapWork": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -1097,6 +1226,9 @@
             },
             "controls": {
               "type": "string"
+            },
+            "scap": {
+              "type": "string"
             }
           },
           "additionalProperties": false
@@ -1238,6 +1370,45 @@
             }
           },
           "additionalProperties": false
+        },
+        "scapEgress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "allowedNamespaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "ports": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            "cidrs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exceptCidrs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "extraRules": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
         }
       },
       "additionalProperties": false
@@ -1271,6 +1442,39 @@
         },
         "resources": {
           "type": "object"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "affinity": {
+          "type": "object"
+        }
+      }
+    },
+    "scapWorker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resources": {
+          "type": "object"
+        },
+        "podSecurityContext": {
+          "type": "object"
+        },
+        "containerSecurityContext": {
+          "type": "object"
+        },
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         },
         "nodeSelector": {
           "type": "object"

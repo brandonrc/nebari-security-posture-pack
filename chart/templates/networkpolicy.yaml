@@ -11,6 +11,9 @@
     ui             <- gatewayNamespaces + uiAllowedNamespaces (pod port)
   Egress (networkPolicy.workerEgress, both workers): DNS, this release's pods,
   allowedNamespaces, TCP `ports` to any address outside exceptCidrs.
+  Egress (networkPolicy.scapEgress, scap-worker): DNS, this release's Postgres
+  only, allowedNamespaces (in-cluster registry), TCP `ports` (443, 80: content
+  hosts and registries) outside exceptCidrs; no Kubernetes API (no token).
   Kubelet probes are not subject to these policies on common CNIs.
 */}}
 {{- if .Values.networkPolicy.enabled }}
@@ -60,7 +63,7 @@ spec:
         values: [{{ .Release.Name | quote }}]
       - key: app.kubernetes.io/component
         operator: In
-        values: [worker, worker-privileged, report-worker]
+        values: [worker, worker-privileged, report-worker, scap-worker]
   policyTypes: [Ingress]
   {{- if .Values.monitoring.enabled }}
   ingress:
@@ -92,6 +95,9 @@ spec:
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker") | nindent 8 }}
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "worker-privileged") | nindent 8 }}
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "report-worker") | nindent 8 }}
+        {{- if and .Values.scanner.scap.enabled (not .Values.scanner.scap.embedded) }}
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "scap-worker") | nindent 8 }}
+        {{- end }}
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "migrate") | nindent 8 }}
         {{- include "security-posture.np.peer" (dict "ctx" . "component" "backup") | nindent 8 }}
         {{- if not (include "security-posture.db.clairDedicated" .) }}
@@ -252,6 +258,77 @@ spec:
             except:
               {{- toYaml . | nindent 14 }}
             {{- end }}
+      ports:
+        {{- range . }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with $eg.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.scanner.scap.enabled (not .Values.scanner.scap.embedded) .Values.networkPolicy.scapEgress.enabled }}
+{{- $eg := .Values.networkPolicy.scapEgress }}
+---
+# scap-worker (DESIGN §14): it parses untrusted images as root-in-container, so
+# its egress is narrower than the scan workers': no Kubernetes API, no other
+# release pods but Postgres. NetworkPolicy cannot name hosts: `ports` to the
+# internet covers GitHub (SSG releases), public.cyber.mil / dl.dod.cyber.mil
+# (DISA SCAP zips) and registries; narrow it with `cidrs` or an egress proxy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "security-posture.componentName" (dict "ctx" . "component" "scap-worker") }}-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "security-posture.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "security-posture.componentSelectorLabels" (dict "ctx" . "component" "scap-worker") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.postgresql.enabled }}
+    - to:
+        {{- include "security-posture.np.peer" (dict "ctx" . "component" "postgres") | nindent 8 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- else }}
+    - ports:
+        - port: {{ .Values.externalDatabase.port | default 5432 }}
+          protocol: TCP
+    {{- end }}
+    {{- with $eg.allowedNamespaces }}
+    # in-cluster registry / mirror
+    - to:
+        {{- range . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- with $eg.ports }}
+    - to:
+        {{- if $eg.cidrs }}
+        {{- range $eg.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- else }}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            {{- with $eg.exceptCidrs }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        {{- end }}
       ports:
         {{- range . }}
         - port: {{ . }}

@@ -1,0 +1,116 @@
+suite: scap-worker (DESIGN §14) - the pack's one privilege exception, nothing more
+release:
+  name: security-posture
+  namespace: security-posture
+tests:
+  - it: is not rendered by default
+    templates: [templates/scap-worker.yaml]
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: runs --stages scap as root in its container with only the documented capabilities
+    template: templates/scap-worker.yaml
+    set:
+      scanner.scap.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["python", "-m", "posture.worker", "--stages", "scap"]
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: security-posture-scap
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities
+          value:
+            drop: ["ALL"]
+            add: ["CHOWN", "FOWNER", "DAC_OVERRIDE", "FSETID", "SETFCAP", "SYS_CHROOT"]
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.privileged
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: SCAP_CONTENT_DIR, value: /content }
+      - contains:
+          path: spec.template.spec.volumes
+          content: { name: work, persistentVolumeClaim: { claimName: security-posture-scap-worker-work } }
+
+  - it: the embedded mode renders no scap-worker
+    template: templates/scap-worker.yaml
+    set:
+      scanner.scap.enabled: true
+      scanner.scap.embedded: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: gets its own ServiceAccount without a token
+    template: templates/rbac.yaml
+    set:
+      scanner.scap.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: security-posture-scap
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+
+  - it: no RoleBinding / ClusterRoleBinding names the scap ServiceAccount
+    template: templates/rbac.yaml
+    set:
+      scanner.scap.enabled: true
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "name: security-posture-scap\\s+namespace: security-posture\\s+(roleRef|$)"
+
+  - it: egress is DNS, Postgres, the registry namespace and 443/80 only (no API server)
+    template: templates/networkpolicy.yaml
+    set:
+      scanner.scap.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: security-posture-scap-worker-egress
+    asserts:
+      - equal:
+          path: spec.egress[3].ports
+          value:
+            - { port: 443, protocol: TCP }
+            - { port: 80, protocol: TCP }
+      - lengthEqual:
+          path: spec.egress
+          count: 4
+
+  - it: SCAP env reaches the api and workers; the default SSG source is not overridden by []
+    template: templates/api.yaml
+    set:
+      scanner.scap.enabled: true
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: SCANNERS_SCAP_ENABLED, value: "true" }
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: SCAP_CONTENT_SOURCES, value: "[]" }

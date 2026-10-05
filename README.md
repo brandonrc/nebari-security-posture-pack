@@ -178,6 +178,15 @@ The table lists the main settings. For everything else, see the comments in
 | `scanner.events.enabled` / `debounceSeconds` | `true` / `300` | Targeted scans of new digests from a pod watcher; at most one event scan per `debounceSeconds` across namespaces, never while a full scan is queued or running (`EVENT_SCANS_DEBOUNCE_SECONDS`). |
 | `scanner.events.minPodAgeSeconds` | `120` | Pods younger than this are held, and dropped when deleted first, so short-lived verify pods never trigger a scan (`EVENT_SCANS_MIN_POD_AGE_SECONDS`). |
 | `scanner.events.includeJobs` | `false` | Pods owned by Jobs / CronJobs (backups, one-off jobs) trigger event scans too (`EVENT_SCANS_INCLUDE_JOBS`). |
+| `scanner.scap.enabled` | `false` | SCAP scanner (DESIGN §14): `<fullname>-scap-worker` evaluates the OS / product STIGs inside each image with OpenSCAP. Root in its container with a minimal capability set: the pack's one privilege exception ([docs/CONTROLS.md](docs/CONTROLS.md)). Settings `scanners.scap` toggles it at runtime. |
+| `scanner.scap.preferDisa` / `timeoutSeconds` / `maxRootfsGB` | `true` / `900` / `10` | Evaluate a DISA SCAP benchmark instead of the SSG profile for the same OS when both exist; per-image time budget; uncompressed rootfs cap. |
+| `scanner.scap.finalizeWaitSeconds` | `600` | How long the privileged worker waits for a scan's SCAP stage before the posture snapshot; afterwards the scan finishes with `scap pending`. |
+| `scanner.scap.content.sources[]` | `[]` (= pinned SSG 0.1.82) | `{name, kind: ssg\|disa\|custom, url, sha256, include[]}`; fetched to `persistence.scapContent`, verified by sha256 before unpacking, refreshed every `content.refreshHours` (24). |
+| `scanner.scap.content.offline` | `false` | Air-gapped: never fetch, index the datastreams copied to the content volume (`<volume>/local/`). |
+| `scanner.scap.disa.urls[]` | `[]` | DISA `U_*_STIG_SCAP_1-3_Benchmark.zip` (or manual STIG zips) as `{url, sha256, name?, include?}`. |
+| `scanner.scap.embedded` | `false` | Run the stage in the scan worker instead (dev only; non-root, so results are flagged `rootfsFidelity: degraded`). |
+| `scanner.scap.imageCacheMaxBytes` | `8Gi` | scap-worker's own OCI layout cache on `persistence.scapWork`. |
+| `scapWorker.resources` / `containerSecurityContext` | 250m/512Mi-2/3Gi, root + `CHOWN FOWNER DAC_OVERRIDE FSETID SETFCAP SYS_CHROOT` | Measured peak ~1.1 GiB on a RHEL 9 STIG evaluation. |
 | `scanner.rawMaxGzBytes` | `null` (4Mi) | `RAW_MAX_GZ_BYTES`: raw scanner JSON kept per image scan (gzip, bytes or quantity); larger output keeps a summary only. |
 | `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the workers for private registries. |
 | `provenance.helmReleases.enabled` / `iUnderstandClusterSecretsRead` | `false` / `false` | Helm release discovery needs get/list on every Secret (bound to `<fullname>-controls` only); both must be true. |
@@ -197,7 +206,7 @@ The table lists the main settings. For everything else, see the comments in
 | `hooks.migrate.enabled` | `true` | pre-upgrade migration Job (advisory lock). |
 | `externalDatabase.*` | | `host`, `port`, `user`, `database`, `clairDatabase`, `sslmode`, `existingSecret`, `passwordKey`. |
 | `database.driver` | `postgresql+asyncpg` | Scheme for `DATABASE_URL`. |
-| `persistence.enabled/storageClass` | `true` / `""` | PVC sizes: `worker` 15Gi, `trivy` 3Gi, `postgres` 10Gi, `reports` 2Gi. |
+| `persistence.enabled/storageClass` | `true` / `""` | PVC sizes: `worker` 15Gi, `trivy` 3Gi, `postgres` 10Gi, `reports` 2Gi, `scapContent` 2Gi and `scapWork` 20Gi (only with `scanner.scap.enabled`). |
 | `monitoring.enabled` | `false` | ServiceMonitor (api `:8000/metrics`) and PodMonitor (worker, worker-privileged, report-worker, port `metrics` `:9000/metrics`); needs the Prometheus Operator CRDs. Metrics and alerts: [docs/OPERATIONS.md](docs/OPERATIONS.md). |
 | `monitoring.namespace` / `podSelector` | `monitoring` / `{}` | Prometheus namespace (and optional pod labels) admitted by the NetworkPolicy to `:8000` and `:9000`. |
 | `monitoring.labels` | `{}` | Labels on the monitors and rule, matched by the Prometheus selectors (kube-prometheus-stack: `release: <release>`). |
@@ -206,6 +215,7 @@ The table lists the main settings. For everything else, see the comments in
 | `networkPolicy.enabled` | `true` | Ingress allow-lists (see below). |
 | `networkPolicy.gatewayNamespaces` | `[envoy-gateway-system]` | Namespaces allowed to reach the ui. |
 | `networkPolicy.uiAllowedNamespaces` | `[]` | Extra namespaces allowed to reach the ui, for example landing-page probers. |
+| `networkPolicy.scapEgress.*` | on; `ports` `[443, 80]`, `allowedNamespaces` `[container-registry]` | scap-worker egress: DNS, the release Postgres, the registry namespace, `ports` to `cidrs` (default 0.0.0.0/0 minus `exceptCidrs`). No Kubernetes API. |
 | `networkPolicy.workerEgress.*` | on; `ports` `[443, 80, 6443]`, `exceptCidrs` `[169.254.0.0/16]` | Worker egress allow-list: DNS, release pods, `allowedNamespaces`, `ports` to the internet. Add the API server port if it is not 443/6443 (MicroK8s: 16443). |
 | `ui.containerPort` | `8080` | nginx listen port inside the pod. The Service listens on 80. |
 | `nebariapp.enabled` | `false` | Render the NebariApp. |
@@ -233,6 +243,7 @@ ServiceAccounts and RBAC:
 | `<fullname>-api` | api, ui, report-worker | none; token not mounted |
 | `<fullname>-scanner` | worker (inventory, scan) | `get/list/watch` pods, namespaces, nodes, serviceaccounts, ReplicaSets, Deployments, StatefulSets, DaemonSets, Jobs, CronJobs, NetworkPolicies, NebariApps. **No Secrets.** |
 | `<fullname>-controls` | worker-privileged (provenance, controls, reports) | controls engine ClusterRole (RBAC bindings, gateway, Envoy and cert-manager CRs); `get` on the one Keycloak admin Secret (unless `viewClient`); with `helmReleases` + acknowledgement, `get/list` on all Secrets |
+| `<fullname>-scap` | scap-worker (`scanner.scap.enabled`) | none; token not mounted |
 | `<fullname>-hooks` | hook Jobs | `create` Secrets in the release namespace; `get/patch` on `<fullname>-db` and `<fullname>-compat-token` |
 
 ## Grace quickstart
