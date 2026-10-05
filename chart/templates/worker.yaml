@@ -104,8 +104,12 @@ spec:
             {{- end }}
             - name: EVENT_SCANS_ENABLED
               value: {{ .Values.scanner.events.enabled | quote }}
-            - name: EVENT_SCAN_DEBOUNCE_SECONDS
+            - name: EVENT_SCANS_DEBOUNCE_SECONDS
               value: {{ .Values.scanner.events.debounceSeconds | quote }}
+            - name: EVENT_SCANS_MIN_POD_AGE_SECONDS
+              value: {{ .Values.scanner.events.minPodAgeSeconds | quote }}
+            - name: EVENT_SCANS_INCLUDE_JOBS
+              value: {{ .Values.scanner.events.includeJobs | quote }}
             {{- end }}
             {{- if .Values.registryAuth.existingSecret }}
             - name: DOCKER_CONFIG

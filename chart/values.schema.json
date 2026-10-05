@@ -379,7 +379,17 @@
             },
             "debounceSeconds": {
               "type": "number",
-              "minimum": 0
+              "minimum": 0,
+              "description": "EVENT_SCANS_DEBOUNCE_SECONDS: at most one event scan per this many seconds (across namespaces)"
+            },
+            "minPodAgeSeconds": {
+              "type": "number",
+              "minimum": 0,
+              "description": "EVENT_SCANS_MIN_POD_AGE_SECONDS: pods younger than this do not trigger an event scan yet"
+            },
+            "includeJobs": {
+              "type": "boolean",
+              "description": "EVENT_SCANS_INCLUDE_JOBS: pods owned by Jobs / CronJobs trigger event scans too"
             }
           }
         },

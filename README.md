@@ -175,7 +175,9 @@ The table lists the main settings. For everything else, see the comments in
 | `clair.postgres.dedicated` / `size` | `true` / `15Gi` | Clair's own Postgres StatefulSet; `false` keeps its database on the main Postgres. |
 | `scanner.mirror.enabled/registry/insecure/rewrite` | on, in-cluster registry | Mirror-then-scan. |
 | `scanner.mirror.mode` / `imageCacheMaxBytes` | `""` (registry with Clair, else local) / `8Gi` | Mirror into the registry, a local OCI layout cache on the worker PVC, or off. |
-| `scanner.events.enabled` / `debounceSeconds` | `true` / `60` | Targeted scans of new digests from a pod watcher. |
+| `scanner.events.enabled` / `debounceSeconds` | `true` / `300` | Targeted scans of new digests from a pod watcher; at most one event scan per `debounceSeconds` across namespaces, never while a full scan is queued or running (`EVENT_SCANS_DEBOUNCE_SECONDS`). |
+| `scanner.events.minPodAgeSeconds` | `120` | Pods younger than this are held, and dropped when deleted first, so short-lived verify pods never trigger a scan (`EVENT_SCANS_MIN_POD_AGE_SECONDS`). |
+| `scanner.events.includeJobs` | `false` | Pods owned by Jobs / CronJobs (backups, one-off jobs) trigger event scans too (`EVENT_SCANS_INCLUDE_JOBS`). |
 | `scanner.rawMaxGzBytes` | `null` (4Mi) | `RAW_MAX_GZ_BYTES`: raw scanner JSON kept per image scan (gzip, bytes or quantity); larger output keeps a summary only. |
 | `registryAuth.existingSecret` | `""` | dockerconfigjson Secret mounted into the workers for private registries. |
 | `provenance.helmReleases.enabled` / `iUnderstandClusterSecretsRead` | `false` / `false` | Helm release discovery needs get/list on every Secret (bound to `<fullname>-controls` only); both must be true. |

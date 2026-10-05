@@ -175,7 +175,16 @@ scanner:
   # after a pod starts, between scheduled scans (reader ClusterRole `watch`).
   events:
     enabled: true
-    debounceSeconds: 60
+    # EVENT_SCANS_DEBOUNCE_SECONDS: at most one event scan per this many
+    # seconds, across namespaces (new digests meanwhile wait for the next one).
+    debounceSeconds: 300
+    # EVENT_SCANS_MIN_POD_AGE_SECONDS: a pod younger than this is held until
+    # it reaches the age (dropped when deleted first), so short-lived verify
+    # pods never trigger a scan.
+    minPodAgeSeconds: 120
+    # EVENT_SCANS_INCLUDE_JOBS: pods owned by Jobs / CronJobs (e.g. nightly
+    # backups) trigger event scans too. The scheduled scan covers them anyway.
+    includeJobs: false
   mirror:
     # skopeo-copy each digest into an in-cluster registry before scanning so
     # all three scanners see identical bytes and upstreams are pulled once.
