@@ -37,6 +37,7 @@ scanner:
   clair:
     enabled: true
   mirror:
+    imageCacheMaxBytes: 16Gi   # worker cache PVC is 20Gi; 8Gi thrashed on 42 GB of image filesystems
     enabled: true
     registry: registry.container-registry.svc.cluster.local:5000
     insecure: true
