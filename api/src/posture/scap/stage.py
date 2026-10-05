@@ -79,12 +79,13 @@ def memory_limit_bytes(path: Path = CGROUP_MEMORY_MAX) -> int | None:
 def content_fingerprint(entries: list[dict[str, Any]]) -> str | None:
     """Identity of the SCAP content set (catalogue entries or `scap_content` rows as dicts with
     path / benchmarkId / sha256 / sizeBytes). None without content. A changed fingerprint makes
-    every image due for re-evaluation (DESIGN §14)."""
+    every image due for re-evaluation (DESIGN §14). content.RULE_META_VERSION is part of it: a new
+    rule-metadata derivation (e.g. CCIs joined from the DISA benchmark) re-evaluates once too."""
     rows = sorted({(str(e.get("path") or ""), str(e.get("benchmarkId") or ""), str(e.get("sha256") or ""),
                     str(e.get("sizeBytes") or "")) for e in entries})
     if not rows:
         return None
-    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()[:16]
+    return hashlib.sha256(json.dumps([content_mod.RULE_META_VERSION, rows]).encode()).hexdigest()[:16]
 
 
 def now() -> datetime:

@@ -35,3 +35,12 @@ def test_content_fingerprint_changes_with_content_only():
     assert fp != content_fingerprint([{**a[0], "sha256": "cc"}, a[1]])  # new release
     assert fp != content_fingerprint(a[:1])  # content removed
     assert content_fingerprint([]) is None
+
+
+def test_content_fingerprint_includes_the_rule_metadata_version(monkeypatch):
+    from posture.scap import content
+
+    a = [{"path": "ssg/ssg-rhel9-ds.xml", "benchmarkId": "b1", "sha256": "aa", "sizeBytes": 10}]
+    fp = content_fingerprint(a)
+    monkeypatch.setattr(content, "RULE_META_VERSION", content.RULE_META_VERSION + 1)
+    assert content_fingerprint(a) != fp
