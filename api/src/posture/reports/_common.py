@@ -167,6 +167,10 @@ def slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", s or "").strip("-").lower() or "system"
 
 
+NO_CCI_NOTE = ("No CCI: the SCAP content carries none for this rule and no DISA benchmark on the content "
+               "volume maps its STIG id (SSG content; see scap_content).")
+
+
 def short_hash(*parts: Any, n: int = 8) -> str:
     return hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:n]
 

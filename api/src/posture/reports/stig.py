@@ -33,7 +33,8 @@ from typing import Any
 import yaml
 
 from ..logs import get_logger
-from ._common import CAT_SEVERITY, TOOL_NAME, View, filename, image_label, iso, normalize, sev_rank, slug
+from ._common import (CAT_SEVERITY, NO_CCI_NOTE, TOOL_NAME, View, filename, image_label, iso, normalize, sev_rank,
+                      slug)
 from .registry import GeneratedReport
 
 log = get_logger(__name__)
@@ -450,6 +451,8 @@ def _p_rule(v: View, b: Any, r: Any) -> dict[str, Any]:
               f"evaluated {iso(b.evaluated_at)}.")
     if r.result in ("notchecked", "error", "unknown", "informational"):
         detail += " Not evaluable automatically in a container image; review manually."
+    if not r.cci and (r.vuln_id or r.sv_id):
+        detail += " " + NO_CCI_NOTE
     return {"vuln": r.vuln_id or r.stig_id or r.rule_id, "rule": r.sv_id or r.rule_id, "ver": r.rule_version or "",
             "group": r.group_title or r.vuln_id or "", "severity": CAT_SEVERITY.get(r.severity, "low"),
             "title": r.title or r.rule_id, "fix": r.fix_text or "", "ccis": list(r.cci or []), "status": status,

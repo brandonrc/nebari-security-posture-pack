@@ -138,3 +138,17 @@ def test_oscal_ar_with_stig_validates(snap, opts):
     cls = jsonschema.validators.validator_for(schema)
     v = cls(schema, format_checker=cls.FORMAT_CHECKER)
     assert _errors(v, json.loads(generate("oscal-ar", "json", snap, opts).content)) == []
+
+
+def test_rules_without_cci_carry_a_note(snap, opts):
+    """SSG content without a DISA benchmark on the volume: no CCI_REF, but the checklist finding
+    details and the POA&M row say why (grace 2026-10-05, CCIs for SSG content)."""
+    root = ET.fromstring(generate("stig-checklist", "ckl", snap, {**opts, "imageId": 2}).content)
+    det = {[sd.findtext("ATTRIBUTE_DATA") for sd in v.findall("STIG_DATA")
+            if sd.findtext("VULN_ATTRIBUTE") == "Vuln_Num"][0]: v.findtext("FINDING_DETAILS") for v in root.iter("VULN")}
+    assert "No CCI" in det["V-260002"] and "No CCI" not in det["V-260001"]
+    wb = load_workbook(io.BytesIO(generate("poam", "xlsx", snap, opts).content))
+    hdr = [c.value for c in wb["eMASS"][1]]
+    rows = [dict(zip(hdr, [c.value for c in r])) for r in wb["eMASS"].iter_rows(min_row=2)]
+    by = {r["Security Checks"].split()[0]: r for r in rows if str(r["External UID"]).startswith("SP-STIG-")}
+    assert "No CCI" in by["V-260002"]["Comments"] and "No CCI" not in by["V-260001"]["Comments"]

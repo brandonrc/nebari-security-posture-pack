@@ -26,8 +26,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from ._common import (CAT_SEVERITY, SEVERITIES, TOOL_NAME, View, as_dt, cci_controls, filename, image_label,
-                      in_baseline, mdy, normalize, sev, sev_rank, short_hash)
+from ._common import (CAT_SEVERITY, NO_CCI_NOTE, SEVERITIES, TOOL_NAME, View, as_dt, cci_controls, filename,
+                      image_label, in_baseline, mdy, normalize, sev, sev_rank, short_hash)
 from .cells import safe_row
 from .registry import GeneratedReport
 
@@ -313,7 +313,8 @@ def _stig_items(v: View) -> list[SimpleNamespace]:
             comments=" ".join(filter(None, [
                 f"[External UID {uid}]", f"CAT {'I' * {'cat1': 1, 'cat2': 2, 'cat3': 3}.get(r.severity, 3)}.",
                 f"Rule {r.rule_id}.", f"SLA {v.sla_days.get(severity)}d from first failure {first_seen:%Y-%m-%d}.",
-                "OVERDUE." if overdue else "", fid.strip()])),
+                "OVERDUE." if overdue else "", fid.strip(),
+                NO_CCI_NOTE if not r.cci and (r.vuln_id or r.sv_id) else ""])),
         ))
     return items
 
