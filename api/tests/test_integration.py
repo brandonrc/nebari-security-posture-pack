@@ -165,7 +165,7 @@ async def test_01_empty_state_shapes(env):
     assert (await c.get("/checks/privileged")).json()["results"] == []
     assert (await c.get("/checks/nope")).status_code == 404
     assert (await c.get("/scans")).json() == []
-    assert len((await c.get("/scanners")).json()) == 3
+    assert [s_["name"] for s_ in (await c.get("/scanners")).json()] == ["trivy", "grype", "clair", "scap"]
     assert (await c.get("/export?format=csv")).status_code == 200
     assert (await c.get("/export?format=json")).json()["images"] == []
     ctl0 = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
@@ -255,7 +255,7 @@ async def test_02_scan_pipeline(env):
     ctl = {x["control"]: x for x in (await c.get("/compliance/controls")).json()}
     assert ctl["SI-2"]["findingsOpen"] == 4 and ctl["SI-2(2)"]["findingsOpen"] == 0 and ctl["AC-6"]["findingStatus"] == "open"
 
-    scanners = (await c.get("/scanners")).json()
+    scanners = [x for x in (await c.get("/scanners")).json() if x["name"] != "scap"]  # scap: disabled here
     assert all(x["version"] for x in scanners) and all(x["lastRunAt"] for x in scanners)
 
     from posture.reports.snapshot import build_snapshot

@@ -73,7 +73,8 @@ async def test_01_before_any_scan(env):
     assert t["formats"] == ["ckl", "cklb"] and t["scopes"] == ["cluster", "namespace", "workload"]
     assert t["defaultFormat"] == "cklb" and t["description"]
     assert (await c.get("/reports")).json() == []
-    assert (await c.get("/compliance/stig")).json() == []
+    st = (await c.get("/compliance/stig")).json()  # DESIGN §14: {items: k8s rules, product: {...}}
+    assert st["items"] == [] and st["product"]["benchmarks"] == [] and st["product"]["evaluated"] == 0
     r = await c.post("/reports", json={"type": "poam", "format": "xlsx"})
     assert r.status_code == 409 and r.json()["detail"] == "no completed scan yet"
 
@@ -218,7 +219,7 @@ async def test_06_generation_failure_marks_row_failed(env, monkeypatch):
 
 async def test_07_compliance_stig_and_check_refs(env):
     c = env["client"]
-    rules = (await c.get("/compliance/stig")).json()
+    rules = (await c.get("/compliance/stig")).json()["items"]
     assert len(rules) > 50
     assert {r["cat"] for r in rules} <= {"I", "II", "III"}
     assert {r["status"] for r in rules} <= {"Open", "NotAFinding", "Not_Reviewed"}

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .controls import vuln_controls
 from .db.models import ConsensusFindingRow, ContainerRow, Image, ImageScan, Scan, ScannerStatus
 from .provenance import models as _provenance_models  # noqa: F401  (maps images.provenance, DESIGN §12)
+from .scap import models as _scap_models  # noqa: F401  (maps images.stig, DESIGN §14)
 from .severity import SEVERITIES, zero_counts
 
 SCANNERS = ("trivy", "grype", "clair")
@@ -90,6 +91,11 @@ def scan_dict(s: Scan) -> dict[str, Any]:
         "targetImageIds": s.target_image_ids,
         "targetNamespaces": s.target_namespaces,
         "error": s.error,
+        # DESIGN §14: null (SCAP disabled) | queued | running | done | skipped | failed. A done scan
+        # whose scapStatus is still queued / running finished with "scap pending".
+        "scapStatus": s.scap_status,
+        "scapImages": len(s.scap_image_ids or []) if s.scap_image_ids is not None else None,
+        "scapStats": (s.scap_detail or {}).get("stats") if s.scap_detail else None,
     }
 
 
@@ -131,7 +137,21 @@ def image_summary(img: Image) -> dict[str, Any]:
         "warnings": img.warnings or [],
         "baseOs": f"{img.os_family} {img.os_name}".strip() if img.os_family else None,
         "provenance": getattr(img, "provenance", None),  # DESIGN §12, None until checked
+        "stig": stig_brief(getattr(img, "stig", None)),  # DESIGN §14, None until evaluated
     }
+
+
+def stig_brief(d: dict[str, Any] | None) -> dict[str, Any] | None:
+    """`images.stig` -> ImageSummary.stig (camelCase, fixed keys)."""
+    if not d:
+        return None
+    return {"status": d.get("status"), "score": d.get("score"), "benchmarks": int(d.get("benchmarks") or 0),
+            "benchmarkIds": list(d.get("benchmarkIds") or []), "pass": int(d.get("pass") or 0),
+            "fail": int(d.get("fail") or 0), "notapplicable": int(d.get("notapplicable") or 0),
+            "notchecked": int(d.get("notchecked") or 0), "cat1Open": int(d.get("cat1Open") or 0),
+            "cat2Open": int(d.get("cat2Open") or 0), "cat3Open": int(d.get("cat3Open") or 0),
+            "fidelity": d.get("fidelity"), "os": d.get("os"), "evaluatedAt": d.get("evaluatedAt"),
+            "error": d.get("error")}
 
 
 def sla_due(first_seen: datetime | None, severity: str, sla: dict[str, int]) -> datetime | None:

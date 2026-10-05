@@ -29,6 +29,7 @@ from .routers import (
     scanners,
     scans,
     settings,
+    stig,
     summary,
     supply_chain,
     vulnerabilities,
@@ -132,7 +133,7 @@ def create_app() -> FastAPI:
     admin = APIRouter(prefix=PREFIX, dependencies=[Depends(require_admin)])
     for r in (summary.router, images.router, vulnerabilities.router, workloads.router, workloads.ns_router,
               checks.router, scans.router, scanners.router, settings.router, export.router, compliance.router,
-              reports.router, supply_chain.router):
+              reports.router, supply_chain.router, stig.router):
         admin.include_router(r)
 
     admin.include_router(controls.router)  # DESIGN §13 control evidence engine (/compliance/controls, ...)

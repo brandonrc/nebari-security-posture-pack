@@ -2,7 +2,7 @@
 
 * Postgres-as-queue: `scans` rows with status `queued`, claimed with
   `SELECT ... FOR UPDATE SKIP LOCKED`.
-* Stages (`--stages` / WORKER_STAGES): inventory, scan, provenance, controls, reports.
+* Stages (`--stages` / WORKER_STAGES): inventory, scan, provenance, controls, reports, scap.
   One process runs all of them by default. The chart splits them across two
   Deployments with different ServiceAccounts (worker.splitPrivileged): the scan
   worker (`--stages inventory,scan`, no Secrets access) runs inventory + CVE scans,
@@ -10,6 +10,12 @@
   (`--stages provenance,controls,reports`) claims `scanned` scans (status
   `finalizing`), runs provenance, writes the posture snapshot, marks the scan
   `done`, then runs the controls engine and auto-reports.
+* SCAP (DESIGN §14, posture.scap): when settings `scanners.scap` is on, the scan worker
+  queues the scan for the `scap-worker` (`--stages scap`: root in its container, claims
+  `scans.scap_status = queued`) as soon as its CVE stage is done, the same hand-off as
+  `scanned` -> privileged worker. The privileged worker waits for it before the posture
+  snapshot (at most SCAP_FINALIZE_WAIT_SECONDS; then the scan finishes with `scap pending`).
+  A worker that runs the scan stages and `scap` (or SCAP_EMBEDDED=true) runs it inline.
 * Scheduled scans are due `scan_interval_hours` after the newest `done` full scan
   started (computed from the DB on every loop, so worker restarts never reset it).
   APScheduler only drives grype DB updates and the scanner status refresh.
@@ -84,9 +90,13 @@ KEEP_INVENTORY_SCANS = 10
 LAST_SEEN_RESOLUTION = timedelta(hours=1)  # images.last_seen_at is bumped at most hourly (m9)
 VULN_ROLLUPS_KEPT = 2  # latest done scans whose vuln_rollup rows are kept
 
-ALL_STAGES = ("inventory", "scan", "provenance", "controls", "reports")
+ALL_STAGES = ("inventory", "scan", "provenance", "controls", "reports", "scap")
 SCAN_STAGES = frozenset({"inventory", "scan"})
 FINAL_STAGES = frozenset({"provenance", "controls", "reports"})
+SCAP_HEARTBEAT_ID = 3  # worker_heartbeat row of a scap-only worker
+SCAP_ALIVE_SECONDS = 180  # a scap worker heartbeat older than this counts as absent
+SCAP_ACTIVE = ("queued", "running")
+SCAP_LOG_LINES = 60
 # scan status flow: queued -> running -> [scanned -> finalizing ->] done | failed | cancelled
 STATUS_SCANNED = "scanned"  # scan stage done, waiting for the privileged worker
 STATUS_FINALIZING = "finalizing"  # claimed by the privileged worker
@@ -277,8 +287,9 @@ class Worker:
         self.stages = parse_stages(stages if stages is not None else getattr(settings, "worker_stages", None))
         self.scan_side = bool(self.stages & SCAN_STAGES)
         self.final_side = bool(self.stages & FINAL_STAGES)
+        self.scap_side = "scap" in self.stages
         # heartbeat row per role so a split deployment does not clobber one row
-        self.heartbeat_id = 1 if self.scan_side else 2
+        self.heartbeat_id = 1 if self.scan_side else (2 if self.final_side else SCAP_HEARTBEAT_ID)
         self.sm = sessionmaker
         self.scanners = scanners if scanners is not None else build_scanners(settings)
         self.inventory_fn = inventory_fn or collect
@@ -300,6 +311,7 @@ class Worker:
         self._excluded_ns: list[str] = []
         self.provenance_stage: provenance_stage.ProvenanceStage | None = (
             provenance_stage.ProvenanceStage(settings, sessionmaker) if "provenance" in self.stages else None)
+        self._scap_stage = None  # posture.scap.stage.ScapStage, created on first use
 
     # ------------------------------------------------------------------ queue
     async def enqueue(self, trigger: str = "scheduled", requested_by: str | None = None, force: bool = False) -> int | None:
@@ -353,6 +365,13 @@ class Worker:
                 )
                 if res.rowcount:
                     log.warning("scan.recovered_stale", count=res.rowcount)
+            if self.scap_side and not self.scan_side:  # a scap job interrupted by a restart is retried
+                res = await s.execute(update(Scan).where(Scan.scap_status == "running").values(scap_status="queued"))
+                if res.rowcount:
+                    log.warning("scap.recovered_stale", count=res.rowcount)
+            elif self.scan_side:  # inline scap of a scan that was running
+                await s.execute(update(Scan).where(Scan.scap_status == "running", Scan.status == "running")
+                                .values(scap_status="failed"))
             if self.final_side:
                 for scan in (await s.execute(select(Scan).where(Scan.status == STATUS_FINALIZING))).scalars():
                     snap = await s.scalar(select(func.count()).select_from(ScanSnapshot).where(
@@ -575,10 +594,13 @@ class Worker:
                 ctx.add_log("scan cancelled")
                 await self._finish(ctx, "cancelled")
                 return
+            await self._scap_after_scan(ctx, list(to_scan) + list(deferred), key_to_id,
+                                        full=bool(force and not target_ids and not target_ns))
             if not self.final_side:
                 await self._handoff(ctx, inv)
                 return
             ctx.supply_chain = await provenance_stage.finish(prov_task, ctx.add_log)
+            await self._await_scap(ctx)
             await self._persist_snapshot(ctx, inv, key_to_id)
             await self._finish(ctx, "done")
             completed = True
@@ -714,6 +736,7 @@ class Worker:
             if ctx.cancelled:
                 await self._finish(ctx, "cancelled")
                 return
+            await self._await_scap(ctx)
             await self._persist_snapshot(ctx, inv, key_to_id)
             async with self.sm() as s, s.begin():
                 await s.execute(delete(ScanSnapshot).where(ScanSnapshot.scan_id == scan_id,
@@ -1082,7 +1105,8 @@ class Worker:
         async with self.sm() as s:
             imgs = (await s.execute(select(Image).where(Image.id.in_(list(key_to_id.values()) or [0])))).scalars().all()
         by_id = {i.id: i for i in imgs}
-        images_by_key = {k: ImageInfo(i, by_id[i].ref, by_id[i].score, by_id[i].counts or {})
+        images_by_key = {k: ImageInfo(i, by_id[i].ref, by_id[i].score, by_id[i].counts or {},
+                                      stig_score=(getattr(by_id[i], "stig", None) or {}).get("score"))
                          for k, i in key_to_id.items() if i in by_id}
         workloads, namespaces, cluster = aggregate(inv, images_by_key, posture, ctx.supply_chain)
         sid = ctx.scan_id
@@ -1194,6 +1218,149 @@ class Worker:
             log.info("history.pruned", retain=retain, **out)
         return out
 
+    # ------------------------------------------------------------ scap (DESIGN §14)
+    @property
+    def scap_owner(self) -> bool:
+        """This process runs the scap stage itself (scap-worker, all-in-one, or SCAP_EMBEDDED)."""
+        return self.scap_side or (self.scan_side and bool(self.s.scap_embedded))
+
+    def scap_stage(self):
+        if self._scap_stage is None:
+            from .scap.stage import ScapStage
+
+            self._scap_stage = ScapStage(self.s, self.sm, self.mirror)
+        return self._scap_stage
+
+    async def _scap_after_scan(self, ctx: ScanContext, scanned: list[int], key_to_id: dict[str, int],
+                               full: bool) -> None:
+        """Scope = images (re)scanned now + inventory images never evaluated (all on a forced full
+        scan); run inline when this process owns the stage, else queue it for the scap-worker."""
+        if not getattr(ctx.settings.scanners, "scap", False):
+            return
+        from .scap.stage import never_evaluated
+
+        inventory = sorted(set(key_to_id.values()))
+        if full:
+            ids = inventory
+        else:
+            async with self.sm() as s:
+                fresh = await never_evaluated(s, inventory)
+            ids = sorted(set(scanned) | set(fresh))
+        detail = {"images": len(ids), "worker": "inline" if self.scap_owner else "scap-worker"}
+        if not ids:
+            async with self.sm() as s, s.begin():
+                await s.execute(update(Scan).where(Scan.id == ctx.scan_id).values(
+                    scap_status="done", scap_image_ids=[], scap_finished_at=now(), scap_detail=detail))
+            ctx.add_log("scap: nothing to evaluate (no rescanned or never-evaluated image)")
+            return
+        if not self.scap_owner:
+            async with self.sm() as s, s.begin():
+                await s.execute(update(Scan).where(Scan.id == ctx.scan_id).values(
+                    scap_status="queued", scap_image_ids=ids, scap_detail=detail))
+            ctx.add_log(f"scap: {len(ids)} image(s) queued for the scap-worker")
+            return
+        async with self.sm() as s, s.begin():
+            await s.execute(update(Scan).where(Scan.id == ctx.scan_id).values(
+                scap_status="running", scap_image_ids=ids, scap_detail=detail))
+        status = "done"
+        stats: dict[str, int] = {}
+        try:
+            stats = await self.scap_stage().run(ctx.scan_id, ids, ctx.settings, ctx.add_log,
+                                                cancelled=lambda: ctx.cancelled)
+        except Exception as e:  # noqa: BLE001  (the SCAP stage never fails a scan)
+            log.exception("scap.failed", scan_id=ctx.scan_id)
+            ctx.add_log(f"scap failed: {e}")
+            status = "failed"
+        async with self.sm() as s, s.begin():
+            await s.execute(update(Scan).where(Scan.id == ctx.scan_id).values(
+                scap_status=status, scap_finished_at=now(), scap_detail={**detail, "stats": stats}))
+
+    async def claim_scap(self) -> int | None:
+        async with self.sm() as s, s.begin():
+            scan = (await s.execute(
+                select(Scan).where(Scan.scap_status == "queued").order_by(Scan.id).limit(1)
+                .with_for_update(skip_locked=True))).scalar_one_or_none()
+            if scan is None:
+                return None
+            scan.scap_status = "running"
+            scan.scap_detail = {**(scan.scap_detail or {}), "worker": self.hostname, "startedAt": now().isoformat()}
+            return scan.id
+
+    async def run_scap_job(self, scan_id: int) -> None:
+        """scap-worker: evaluate a queued scan's images; progress lines go to scans.scap_detail.log
+        (the scan log belongs to the scan / privileged workers)."""
+        async with self.sm() as s:
+            scan = await s.get(Scan, scan_id)
+            ids = [int(i) for i in (scan.scap_image_ids or [])] if scan else []
+            settings = await app_settings.load(s, self.s)
+            detail = dict(scan.scap_detail or {}) if scan else {}
+        lines: deque = deque(maxlen=SCAP_LOG_LINES)
+
+        def add(msg: str) -> None:
+            self.last_loop_beat = time.monotonic()  # one image can take SCAP_TIMEOUT_SECONDS
+            lines.append(f"{now().strftime('%Y-%m-%dT%H:%M:%SZ')} {msg}")
+
+        status, stats = "done", {}
+        log.info("scap.job.start", scan_id=scan_id, images=len(ids))
+        try:
+            stats = await self.scap_stage().run(scan_id, ids, settings, add)
+        except Exception as e:  # noqa: BLE001
+            log.exception("scap.job.failed", scan_id=scan_id)
+            add(f"scap failed: {e}")
+            status = "failed"
+        async with self.sm() as s, s.begin():
+            await s.execute(update(Scan).where(Scan.id == scan_id).values(
+                scap_status=status, scap_finished_at=now(),
+                scap_detail={**detail, "stats": stats, "log": list(lines)}))
+        log.info("scap.job.done", scan_id=scan_id, status=status, **{k: v for k, v in stats.items() if v})
+
+    async def _scap_worker_alive(self) -> bool:
+        async with self.sm() as s:
+            row = await s.get(WorkerHeartbeat, SCAP_HEARTBEAT_ID)
+        if row is None or row.beat_at is None:
+            return False
+        beat = row.beat_at if row.beat_at.tzinfo else row.beat_at.replace(tzinfo=UTC)
+        return (now() - beat).total_seconds() < SCAP_ALIVE_SECONDS
+
+    async def _await_scap(self, ctx: ScanContext) -> None:
+        """Before the posture snapshot: wait (SCAP_FINALIZE_WAIT_SECONDS) for a queued / running
+        scap stage of this scan so its STIG scores enter the configuration score; otherwise the
+        scan finishes with `scap pending` (the API shows scapStatus)."""
+        deadline = time.monotonic() + max(0.0, float(self.s.scap_finalize_wait_seconds))
+        waited = False
+        while True:
+            async with self.sm() as s:
+                status = await s.scalar(select(Scan.scap_status).where(Scan.id == ctx.scan_id))
+            if status not in SCAP_ACTIVE:
+                if waited:
+                    ctx.add_log(f"scap stage {status}")
+                return
+            if status == "queued" and not await self._scap_worker_alive():
+                ctx.add_log("scap pending: no scap-worker heartbeat; the snapshot uses the previous STIG results")
+                return
+            if time.monotonic() >= deadline or ctx.cancelled:
+                ctx.add_log(f"scap pending: still {status} after {int(self.s.scap_finalize_wait_seconds)}s "
+                            "(SCAP_FINALIZE_WAIT_SECONDS); the snapshot uses the previous STIG results")
+                return
+            if not waited:
+                ctx.add_log("waiting for the scap-worker (SCAP stage)")
+                waited = True
+            self.last_loop_beat = time.monotonic()
+            await asyncio.sleep(5)
+
+    async def maybe_refresh_scap_content(self) -> None:
+        """Daily content refresh (SCAP_CONTENT_REFRESH_HOURS) by the process that owns the content dir."""
+        if not self.scap_owner:
+            return
+        try:
+            async with self.sm() as s:
+                settings = await app_settings.load(s, self.s)
+            if not settings.scanners.scap:
+                return
+            await self.scap_stage().refresh_content(settings)
+        except Exception:  # noqa: BLE001
+            log.exception("scap.content.refresh_failed")
+
     # ------------------------------------------------------------ controls (DESIGN §13)
     async def run_controls(self, trigger: str = "scan", scan_id: int | None = None,
                            run_id: int | None = None) -> int | None:
@@ -1250,6 +1417,11 @@ class Worker:
             scan_id = await self.claim_scanned()
             if scan_id is not None:
                 await self.finalize_scan(scan_id)
+                return True
+        if self.scap_side and not self.scan_side:
+            scan_id = await self.claim_scap()
+            if scan_id is not None:
+                await self.run_scap_job(scan_id)
                 return True
         return await self.poll_controls()
 
@@ -1334,6 +1506,10 @@ class Worker:
     async def run_forever(self) -> None:
         await self.wait_for_db()
         await self.recover_stale()
+        if self.scap_owner:
+            from .scap.stage import cleanup_work_dir
+
+            await asyncio.to_thread(cleanup_work_dir, __import__("pathlib").Path(self.s.scap_work_path))
         if "controls" in self.stages:
             await self.recover_controls()
         if self.scan_side:
@@ -1363,6 +1539,7 @@ class Worker:
                 await self._refresh_metrics()
                 await self.heartbeat()
                 await self.maybe_enqueue_scheduled()
+                await self.maybe_refresh_scap_content()
                 ran = await self.poll_once()
             except Exception:  # noqa: BLE001
                 log.exception("worker.loop_error")
@@ -1397,7 +1574,7 @@ def health_app(worker: Worker):
     async def healthz():
         age = round(time.monotonic() - worker.last_loop_beat, 1)
         # a long scan keeps the loop inside run_scan; progress flushes still beat
-        ok = age < max(600.0, worker.s.scan_timeout_seconds * 3)
+        ok = age < max(600.0, worker.s.scan_timeout_seconds * 3, worker.s.scap_timeout_seconds * 2 + 900)
         return JSONResponse({"status": "ok" if ok else "stale", "lastHeartbeatAgeSeconds": age},
                             status_code=200 if ok else 503)
 

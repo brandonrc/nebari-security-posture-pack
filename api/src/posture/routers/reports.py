@@ -200,12 +200,19 @@ async def stig_snapshot(session: AsyncSession, scan: Scan) -> dict[str, Any]:
 
 
 @router.get("/compliance/stig")
-async def compliance_stig(session: AsyncSession = Depends(get_session)) -> list[dict[str, Any]]:
+async def compliance_stig(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """`items`: Kubernetes STIG rule rollup (DESIGN §11; the UI also accepts the bare list this
+    used to be). `product`: OS / product STIGs inside images per benchmark (DESIGN §14)."""
+    from .stig import benchmark_rollup, stig_summary
+    from ..views import current_image_ids
+
     latest = await latest_done_scan(session)
-    if latest is None:
-        return []
-    snapshot = await stig_snapshot(session, latest)
-    rules = await asyncio.to_thread(stig_rollup, snapshot, None)
-    for r in rules:
-        r["checkId"] = (r.get("checks") or [None])[0]
-    return rules
+    rules: list[dict[str, Any]] = []
+    if latest is not None:
+        snapshot = await stig_snapshot(session, latest)
+        rules = await asyncio.to_thread(stig_rollup, snapshot, None)
+        for r in rules:
+            r["checkId"] = (r.get("checks") or [None])[0]
+    product = {"benchmarks": await benchmark_rollup(session),
+               **await stig_summary(session, await current_image_ids(session, latest))}
+    return {"items": rules, "product": product}

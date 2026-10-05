@@ -17,4 +17,9 @@ async def list_scanners(session: AsyncSession = Depends(get_session)) -> list[di
     settings = await app_settings.load(session)
     enabled = settings.scanners.model_dump()
     rows = await scanner_rows(session)
-    return [scanner_dict(n, rows.get(n), enabled[n]) for n in SCANNERS]
+    from .stig import scap_scanner_entry
+
+    # DESIGN §14: `scap` (OpenSCAP) after the vulnerability scanners, with its content catalogue;
+    # dbUpdatedAt = newest content fetch
+    return [scanner_dict(n, rows.get(n), enabled[n]) for n in SCANNERS] + [
+        await scap_scanner_entry(session, rows.get("scap"), bool(enabled.get("scap")))]

@@ -24,6 +24,8 @@ from ..views import (
     utcnow,
 )
 
+from .stig import stig_summary
+
 router = APIRouter(tags=["summary"])
 
 
@@ -178,6 +180,7 @@ async def build_summary(session: AsyncSession) -> dict[str, Any]:
         "warnings": warnings,
         "supplyChain": supply,
         "exposure": await kev_exposure(session),  # compliance review S4: CISA KEV, never down-weighted
+        "stig": await stig_summary(session, current_ids),  # DESIGN §14 (OS / product STIGs in images)
     }
 
 
