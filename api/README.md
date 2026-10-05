@@ -103,6 +103,7 @@ Scanner parser fixtures in `tests/fixtures/` are trimmed real outputs (see the R
 | `PROVENANCE_UPDATE_LEVEL` / `PROVENANCE_SKIP_PRERELEASE` | `patch` / `true` | both | update check (provenance-collector-pack semantics) |
 | `PROVENANCE_MAX_MAJOR_JUMP` | `50` | worker | update candidates more than this many majors above the current tag are ignored; `0` = off (docs/PROVENANCE.md) |
 | `PROVENANCE_HELM_ENABLED` | `true` | both | Helm release discovery from `sh.helm.release.v1.*` Secrets (needs secrets list RBAC; chart default off) |
+| `PROVENANCE_HELM_INDEX_TTL_HOURS` | `12` | Hours a cached chart-repo index / OCI tag list is reused before conditional revalidation (ETag / If-Modified-Since). |
 | `PROVENANCE_HELM_CHART_REPOS` | empty | worker | `https://…` index.yaml repos / `oci://host/path` prefixes for chart update checks |
 | `PROVENANCE_RECHECK_HOURS` | `24` | both | reuse a digest's signature/SBOM/provenance results |
 | `PROVENANCE_CONCURRENCY` / `PROVENANCE_REGISTRY_TIMEOUT` | `8` / `30` | worker | registry concurrency / per-request timeout (s) |
