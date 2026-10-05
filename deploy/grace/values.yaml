@@ -184,7 +184,7 @@ provenance:
       - https://helm.dask.org                                # dask-kubernetes-operator
       - https://codecentric.github.io/helm-charts            # keycloakx
       - oci://quay.io/nebari/charts                          # nebari-*-pack, nebari-landing
-      - oci://docker.io/envoyproxy                           # gateway-helm (eg)
+      - oci://docker.io/envoyproxy/gateway-helm   # gateway-helm (eg)
     # Not listed: no grace release uses a bitnami or metallb chart (MetalLB is
     # the MicroK8s addon). The artifact-keeper, bifrost, checkmaite,
     # dask-gateway-pack and security-posture charts are not published in any of
