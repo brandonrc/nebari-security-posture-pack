@@ -860,3 +860,139 @@ Choices and deviations from §14:
   - The DISA PostgreSQL STIG is for 9.x and manual only.
   - SSG references the Debian security OVAL feed remotely. It is not fetched (no
     `--fetch-remote-resources`), so that one rule is `unknown`.
+
+## 2026-10-05: image hardening (the pack's own images)
+
+Goal: zero *fixable* CRITICAL/HIGH findings in the pack's three images. Every remaining unfixed
+CRITICAL/HIGH is triaged in an OpenVEX document (Iron Bank-style justifications), and CI keeps it
+that way.
+
+**Measured** with trivy 0.75.0 (`image --severity CRITICAL,HIGH`) and grype 0.120.0, DBs of
+2026-10-05. Counts are distinct (CVE, package, version) tuples: CRITICAL / HIGH (fixable C / H).
+"Before" for api and ui is the grace build `065cc06`. For the worker it is the first OpenSCAP
+build (`dd43f5c`, bookworm, openscap 1.3.7).
+
+| image | trivy before | trivy after | grype before | grype after | after, with the VEX (trivy / grype) |
+|---|---|---|---|---|---|
+| ui | 2 / 40 (2 / 40) | 0 / 0 (0 / 0) | 21 / 87 (12 / 63) | 0 / 1 (0 / 0) | n/a (Alpine; the one zlib HIGH has no fix and no VEX statement) |
+| api | 6 / 66 (0 / 1) | 0 / 44 (0 / 0) | 9 / 74 (0 / 1) | 0 / 57 (0 / 0) | 0 / 0 and 0 / 4 (1 CVE, under_investigation) |
+| worker | 10 / 137 (3 / 57) | 1 / 57 (0 / 0) | 22 / 177 (6 / 59) | 9 / 102 (0 / 0) | 1 / 7 and 1 / 18 (11 CVEs, under_investigation) |
+
+**ui**: `nginxinc/nginx-unprivileged:1.31-alpine-slim`, pinned by digest, plus `apk upgrade
+--no-cache`. This supersedes Dependabot PR #1 (1.31-alpine), which builds, but the `-slim` variant
+has 21 apk packages instead of 70. It drops curl, libxml2/libxslt, gd/tiff/libavif and the
+njs/geoip/xslt/image-filter modules, and the config loads none of them. `node:22-alpine` (build
+stage) is digest-pinned too. container-structure-test and an HTTP smoke test pass.
+
+**api base**: measured with the same Dockerfile (apt-get upgrade, no pip):
+
+| base | trivy C/H (fixable) | grype C/H (fixable) | notes |
+|---|---|---|---|
+| python:3.12-slim-bookworm + upgrade | 6 / 65 (0 / 0) | 9 / 73 (0 / 0) | glibc/perl/zlib criticals with no Debian 12 fix |
+| python:3.12-slim-trixie + upgrade | 0 / 48 (0 / 0) | 0 / 61 (0 / 0) | |
+| **python:3.13-slim-trixie** + upgrade, mount purged | 0 / 44 (0 / 0) | 0 / 57 (0 / 0) | chosen |
+| gcr.io/distroless/python3-debian12 (bare base) | 2 / 56 (0 / 25) | 7 / 76 (2 / 34) | **not viable**: Python 3.11 (pyproject requires >= 3.12), no pango/harfbuzz/fontconfig for WeasyPrint, and the bare base alone has 25 fixable HIGHs that cannot be upgraded in place (no apt) |
+
+The bare distroless debian13 base scores 0 / 26 and 4 / 39. WeasyPrint's native closure (pango,
+harfbuzz, fontconfig, freetype, fribidi, glib) would have to be copied
+into it by hand, with no package database left for the scanners to see. That is worse for
+auditability than a slim image with dpkg metadata. 3.13 and 3.12 on trixie tie. 3.13 has the
+longer support window and is already in the CI matrix. The full suite passes **inside** the
+image (`python -m pytest` as uid 10001, dev deps from uv.lock into /tmp, throwaway
+`postgres:16-alpine` on `--network host`): 956 passed, 2 skipped, 5 xfailed.
+
+The runtime stage also removes pip/setuptools/wheel/ensurepip/idle/tkinter. The app runs from
+/opt/venv, and pip's vendored urllib3/msgpack were the fixable HIGHs on the 3.13 base. It purges
+`mount` (Priority required but neither Essential nor Protected; `login` is Protected in trixie
+and stays). CST checks both.
+
+**worker**: same base decision (3.13-slim-trixie, digest-pinned, apt-get upgrade, no pip, mount
+purged). Changes:
+- trivy 0.75.0 and grype 0.120.0 are already the latest releases. Their sha256 pins match the
+  releases' `checksums.txt`.
+- clairctl 4.9.0 (Dec 2025, Go 1.24.10, pgx 5.7.6) and cosign 3.1.3 (Go 1.26.4, grpc 1.82) are
+  the latest releases, but their binaries carry 3 / 57 fixable CRITICAL/HIGH between them. They
+  are now **built from their release tags** in a `gobuild` stage (`golang:1.27.1-trixie`, digest
+  pinned). Each build checks that the tag resolves to the pinned commit, applies the minimum
+  `go get` bumps (`*_GO_BUMPS`, exact versions; go.sum checked against sum.golang.org), then
+  `CGO_ENABLED=0 go build -trimpath`. Both report their release version (`clairctl version
+  v4.9.0`, cosign `GitVersion: v3.1.3`).
+- skopeo: Debian's skopeo 1.18 is built with Go 1.24.4, and grype flags 23 stdlib HIGH/CRITICAL
+  as fixable in it and in the CNI plugins it pulls in. It is replaced by skopeo **1.24.1**, built
+  static from its tag the same way (`containers_image_openpgp`, no btrfs/devicemapper drivers).
+  Every call site passes `--policy`, so containers-common's policy.json is not needed. This
+  drops containers-common, containernetworking-plugins, gpgme and friends (170 to 146 packages).
+  Smoke-tested in the image (`inspect --raw`, `copy` to an OCI layout).
+- OpenSCAP follows the base to trixie's **1.4.2+dfsg-1** (from 1.3.7). `oscap-chroot` is still
+  taken from the sha256-pinned `openscap-utils` .deb (`_all.deb` in trixie). Validation:
+  - The real `oscap-chroot` test in tests/scap passes in the image, and all of tests/scap pass as
+    root too (the scap-worker case).
+  - A hand-written OVAL (dpkginfo + rpminfo, positive and negative) evaluated through
+    `prepare_for_oscap` + `oscap-chroot` gives identical results under 1.3.7 and 1.4.2 on a Debian
+    13 rootfs and a UBI 9 rootfs.
+  - Differences: 1.4.2's rpm (4.20, Sequoia) logs `Verifying a signature using certificate ...
+    (Red Hat release key 2)` errors while reading a UBI rpmdb. Results are unaffected, and
+    `probe_warnings` does not match them. dpkginfo on a non-Debian rootfs returns `error`
+    instead of `false`, which is irrelevant because RHEL content has no dpkginfo tests.
+  - Re-check RHEL 9 STIG counts on grace after the rollout.
+- Full suite in the image: 983 passed, 1 skipped (the root-only rootfs test, run separately as
+  root), 5 xfailed. CST: 14/14.
+- `.github/trivy/ignore.yaml` is now empty (`vulnerabilities: []`). The three clairctl
+  exceptions and the ui openssl exception are fixed rather than excepted. The file stays as the
+  place for reviewed, expiring exceptions.
+
+**VEX** (`api/vex/posture-images.vex.json`, OpenVEX 0.2.0, 60 statements): 48 `not_affected`
+with a justification and impact statement, 12 `under_investigation`. Products are version-less
+OCI purls for both image names (`security-posture-{api,worker}` as in the chart/grace and
+`nebari-security-posture-pack-{api,worker}` as published by build-images.yaml), with
+`pkg:deb/debian/...` or `pkg:golang/...` subcomponents, so no statement applies to anyone
+else's image. trivy and grype both honour them (verified: with `--vex`, api goes to 0 / 0 and
+0 / 4). Evidence used:
+- `nm -D` over the exported filesystems. No ELF imports strfmon, ns_printrr/fp_nquery or
+  gzprintf/gzvprintf. libexpat1's only importer is libfontconfig, because CPython's pyexpat uses
+  its bundled expat 2.8.5. libcurl's only importer is libopenscap, which uses it only for
+  `--fetch-remote-resources`, never passed.
+- Package contents: no Pod::Text / Archive::Tar in perl-base, no rpmbuild/rpmuncompress, no
+  systemd-homed, no python3-libxml2.
+- Chart security contexts: capabilities dropped, read-only root fs. The scap-worker runs as root
+  with CHOWN/FOWNER/DAC_OVERRIDE/FSETID/SETFCAP/SYS_CHROOT and no SYS_ADMIN.
+
+Marked `under_investigation`, because the input is untrusted scanned-image content reaching a
+parser:
+- libstdc++ CVE-2026-95619 (aligned operator new; HarfBuzz/OpenSCAP consumers);
+- libxml2 x7 (OpenSCAP xmlfilecontent probes read XML from scanned images);
+- librpm CVE-2026-103242 / CVE-2026-95520 (rpminfo reads the scanned image's rpmdb headers);
+- libacl x2 in the worker (libopenscap `acl_extended_file`, librpm `acl_get_file` on scanned
+  rootfs paths in the root scap-worker). In the API these two are `not_affected`, because their
+  only consumers there are coreutils/tar/sed, which it never runs.
+
+Review the VEX whenever the base digest moves. A statement whose CVE is fixed upstream should be
+deleted once the image no longer carries the package version.
+
+**VEX in the worker's own scans: not wired (documented instead)**. The worker scans what it
+mirrored. In the default `MIRROR_MODE=local` the scanners get `oci-dir:<path>`, so trivy and
+grype see a path, not `security-posture-*`, and product matching never fires. Doing this
+properly needs the worker to recognise the pack's own images by `source_ref` and pass a per-scan
+VEX with the product rewritten to the scanned artifact. Trivy server mode would also need
+checking. That is a worker change with its own tests, while the scap stage is being changed in
+the same files. Follow-up: `SCAN_SELF_VEX` (off by default), keyed on the chart's image
+repositories. Until then the dashboard shows the pack's images without VEX, and CI and this file
+carry the triage.
+
+**CI** (`.github/workflows/image-scan.yaml`):
+- Both scanners run with `--vex`.
+- On pull requests the base branch's Dockerfiles are built too (same GHA cache scope), and a
+  sticky comment (`<!-- image-scan-counts -->`, same-repo PRs) plus the job summary show before
+  and after CRITICAL/HIGH (fixable) per image and scanner (`.github/scripts/image_scan_counts.py`).
+- The gate is now any fixable **CRITICAL or HIGH** (was CRITICAL only), from trivy
+  (`--ignore-unfixed`, minus ignore.yaml) and from grype (`--only-fixed --fail-on high`, pinned
+  0.120.0 by sha256).
+- The weekly schedule catches fixes published for unchanged images. Locally, all three new
+  images pass both gates, and the old ui image fails the grype gate.
+
+**Upkeep**:
+- `*_GO_BUMPS` exist only because upstream releases lag. When clair, cosign or skopeo release
+  with the fixes, drop the bumps. For clairctl/cosign, return to the sha256-pinned release
+  binaries.
+- Dependabot keeps tag+digest pins current for python/node/nginx. The Go builder image and the
+  tool versions are manual (see .github/dependabot.yml).
