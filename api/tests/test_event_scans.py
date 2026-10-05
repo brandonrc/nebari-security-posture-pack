@@ -24,19 +24,24 @@ def test_pod_image_keys():
 
 
 def test_observe_and_debounce():
+    # Fixed clock: with the real time.monotonic() as `first`, `(first + 60) - first` can round to
+    # 59.999... (e.g. first=122.498934423 on a fresh CI runner) and the 60 s cap looked flaky.
+    t0 = 1000.0
     w = PodWatcher(None, excluded_namespaces=lambda: ["kube-system"], debounce=60, quiet=10)
     w.known = {f"ghcr.io/o/web@{D1}"}
-    assert w.observe({"type": "ADDED", "object": pod("app", ("ghcr.io/o/web:1", f"ghcr.io/o/web@{D1}"))}) == 0
-    assert w.observe({"type": "DELETED", "object": pod("app", ("alpine", f"alpine@{D2}"))}) == 0
-    assert w.observe({"type": "ADDED", "object": pod("kube-system", ("alpine", f"alpine@{D2}"))}) == 0
-    assert not w.due()
-    assert w.observe({"type": "MODIFIED", "object": pod("batch", ("alpine", f"alpine@{D2}"))}) == 1
-    assert w.observe({"type": "MODIFIED", "object": pod("batch", ("alpine", f"alpine@{D2}"))}) == 0  # once
-    first = w._first
-    assert not w.due(first + 5)
-    assert w.due(first + 10.5)  # quiet for 10 s
-    w._last = first + 55  # a steady trickle of new keys still flushes 60 s after the first one
-    assert not w.due(first + 59) and w.due(first + 60)
+    assert w.observe({"type": "ADDED", "object": pod("app", ("ghcr.io/o/web:1", f"ghcr.io/o/web@{D1}"))},
+                     now=t0) == 0
+    assert w.observe({"type": "DELETED", "object": pod("app", ("alpine", f"alpine@{D2}"))}, now=t0) == 0
+    assert w.observe({"type": "ADDED", "object": pod("kube-system", ("alpine", f"alpine@{D2}"))}, now=t0) == 0
+    assert not w.due(t0)
+    assert w.observe({"type": "MODIFIED", "object": pod("batch", ("alpine", f"alpine@{D2}"))}, now=t0) == 1
+    assert w.observe({"type": "MODIFIED", "object": pod("batch", ("alpine", f"alpine@{D2}"))},
+                     now=t0 + 1) == 0  # once
+    assert w._first == w._last == t0
+    assert not w.due(t0 + 5)
+    assert w.due(t0 + 10.5)  # quiet for 10 s
+    w._last = t0 + 55  # a steady trickle of new keys still flushes 60 s after the first one
+    assert not w.due(t0 + 59) and w.due(t0 + 60)
 
 
 # ------------------------------------------------------------------ hygiene (grace, 2026-10-05)
