@@ -50,6 +50,9 @@ class FakeMirror:
     async def _raw_bytes(self, ref, insecure, authfile=False):
         return self.raw
 
+    async def _raw_config(self, ref, insecure, authfile=False):
+        return getattr(self, "config", None)
+
 
 def cache(tmp_path, skopeo, max_bytes=10**9, raw=None):
     s = SimpleNamespace(cache_dir=str(tmp_path / "cache"), image_cache_max_bytes=max_bytes, skopeo_bin=skopeo)
@@ -167,3 +170,33 @@ async def test_index_child_converted_to_oci_verifies_against_the_child(tmp_path)
     c = LocalImageCache(s, M())
     _, digest = await c.ensure("docker.io/library/x", index_d, False)
     assert digest == "sha256:" + hashlib.sha256(oci).hexdigest()
+
+
+async def test_converted_config_verifies_by_diff_ids(tmp_path):
+    """Docker -> OCI also rewrites the config blob: accepted when the source config (hash-checked
+    against the source manifest) and the copied config list the same rootfs diff_ids."""
+    layer = "sha256:" + "d" * 64
+    src_cfg = json.dumps({"rootfs": {"type": "layers", "diff_ids": ["sha256:" + "9" * 64]}, "container_config": {}}).encode()
+    oci_cfg = json.dumps({"rootfs": {"type": "layers", "diff_ids": ["sha256:" + "9" * 64]}}).encode()
+    src_cfg_d = "sha256:" + hashlib.sha256(src_cfg).hexdigest()
+    oci_cfg_d = "sha256:" + hashlib.sha256(oci_cfg).hexdigest()
+    docker = json.dumps({"schemaVersion": 2, "config": {"digest": src_cfg_d}, "layers": [{"digest": layer}]}).encode()
+    oci = json.dumps({"schemaVersion": 2, "config": {"digest": oci_cfg_d}, "layers": [{"digest": layer}]}).encode()
+    d_docker = "sha256:" + hashlib.sha256(docker).hexdigest()
+
+    def skopeo_with_cfg(t, cfg):
+        script = fake_skopeo(t, oci)
+        with open(script, "a") as fh:
+            fh.write(f"printf '%s' '{cfg.decode()}' > \"$dir/blobs/sha256/{oci_cfg_d.split(':')[1]}\"\n")
+        return script
+
+    c = cache(tmp_path, skopeo_with_cfg(tmp_path, oci_cfg), raw=docker)
+    c.mirror.config = src_cfg
+    _, digest = await c.ensure("docker.io/coredns/coredns", d_docker, False)
+    assert digest == "sha256:" + hashlib.sha256(oci).hexdigest()
+    (tmp_path / "b").mkdir()
+    bad_cfg = json.dumps({"rootfs": {"type": "layers", "diff_ids": ["sha256:" + "8" * 64]}}).encode()
+    bad = cache(tmp_path / "b", skopeo_with_cfg(tmp_path / "b", bad_cfg), raw=docker)
+    bad.mirror.config = src_cfg
+    with pytest.raises(RuntimeError, match="not part of source"):
+        await bad.ensure("docker.io/coredns/coredns", d_docker, False)

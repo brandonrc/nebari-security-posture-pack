@@ -128,3 +128,22 @@ def test_uncompressed_layers_and_bad_layouts(tmp_path):
         flatten(tmp_path / "bad", tmp_path / "r2", privileged=False)
     with pytest.raises(RootfsError):  # non-empty destination
         flatten(layout, tmp_path / "r", privileged=False)
+
+
+def test_prepare_for_oscap_synthesises_distroless_dpkg_status(tmp_path):
+    from posture.scap.rootfs import prepare_for_oscap
+
+    r = tmp_path / "r"
+    (r / "var/lib/dpkg/status.d").mkdir(parents=True)
+    (r / "var/lib/dpkg/status.d/base").write_text("Package: base-files\nStatus: install ok installed\n")
+    (r / "var/lib/dpkg/status.d/libc6").write_text("Package: libc6\nStatus: install ok installed\n\n")
+    (r / "var/lib/dpkg/status.d/libc6.md5sums").write_text("x  /lib/libc.so\n")
+    notes = prepare_for_oscap(r)
+    status = (r / "var/lib/dpkg/status").read_text()
+    assert status == ("Package: base-files\nStatus: install ok installed\n\n"
+                      "Package: libc6\nStatus: install ok installed\n")
+    assert (r / "var/cache/apt").is_dir() and "distroless" in notes[0]
+    assert "pkgcache.bin" in (r / "etc/apt/apt.conf.d/zzzz-posture-oscap").read_text()
+    assert prepare_for_oscap(r) == []  # existing status file is left alone
+    (tmp_path / "empty").mkdir()
+    assert prepare_for_oscap(tmp_path / "empty") == [] and not (tmp_path / "empty/var").exists()

@@ -64,6 +64,7 @@ class EvalResult:
     duration_ms: int = 0
     returncode: int | None = None
     stderr_tail: str = ""
+    warnings: list[str] = field(default_factory=list)  # probe failures that make results unreliable
 
 
 def count(rules: list[RuleResult]) -> dict[str, int]:
@@ -150,6 +151,20 @@ def _row(cur: dict[str, Any], result: str, m: dict[str, Any]) -> RuleResult:
         srg=list(m.get("srg") or []), fix_text=m.get("fixText"), group_title=m.get("groupTitle") or None)
 
 
+_PROBE_FAILURES = (
+    ("dpkginfo_init has failed", "dpkginfo probe failed: Debian package rules are unreliable"),
+    ("Unable to open /usr/lib/rpm/rpmrc", "rpm configuration missing: RPM package rules are unreliable"),
+    ("chroot failed", "probe chroot() refused (CAP_SYS_CHROOT missing): package rules are unreliable"),
+    ("rpmdb", "rpm database could not be read: RPM package rules are unreliable"),
+)
+
+
+def probe_warnings(stderr: str) -> list[str]:
+    """OpenSCAP keeps evaluating when a probe cannot initialise and reports the objects as absent
+    (a silent false negative / fail); surface those so the result is flagged."""
+    return [msg for needle, msg in _PROBE_FAILURES if needle in (stderr or "")]
+
+
 async def oscap_version(oscap_bin: str = "oscap") -> str | None:
     res = await run_proc([oscap_bin, "--version"], 30)
     if res.returncode != 0:
@@ -194,6 +209,7 @@ async def evaluate(rootfs: Path, datastream: Path, profile_id: str, work_dir: Pa
     res.duration_ms = proc.duration_ms
     res.returncode = proc.returncode
     res.stderr_tail = tail(proc.stderr, 2000)
+    res.warnings = probe_warnings(proc.stderr)
     res.profile_id = res.profile_id or profile_id
     res.benchmark_id = res.benchmark_id or benchmark_id
     res.started_at = res.started_at or started

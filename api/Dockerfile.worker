@@ -25,6 +25,11 @@ ARG CLAIRCTL_SHA256=202ba386620bb8720631e34381fa24621536045ff898dd6d08a3b64ee3d5
 # cosign: signature verification for the supply-chain stage (DESIGN §12)
 ARG COSIGN_VERSION=3.1.3
 ARG COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
+# oscap-chroot (DESIGN §14): a 3 KB shell wrapper that sets OSCAP_PROBE_ROOT and runs `oscap`.
+# Debian ships it in openscap-utils, which drags in rpm, python3-openscap and a second python;
+# only the script is taken from the (apt-verified, sha256-pinned) package.
+ARG OPENSCAP_DEB_VERSION=1.3.7+dfsg-1+deb12u1
+ARG OPENSCAP_UTILS_SHA256=01f0f230e42794d644004ecf77dc75add1fd8de11a8a35ca72d595dd4284e519
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /dl
 RUN set -eux; \
@@ -39,20 +44,46 @@ RUN set -eux; \
     curl -fsSLo cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"; \
     echo "${COSIGN_SHA256}  cosign" | sha256sum -c -; \
     chmod 0755 trivy grype clairctl cosign
+RUN set -eux; \
+    apt-get update; \
+    apt-get download "openscap-utils=${OPENSCAP_DEB_VERSION}"; \
+    echo "${OPENSCAP_UTILS_SHA256}  openscap-utils_$(echo ${OPENSCAP_DEB_VERSION} | sed 's/:/%3a/')_amd64.deb" | sha256sum -c -; \
+    dpkg-deb -x openscap-utils_*.deb ou; \
+    install -m 0755 ou/usr/bin/oscap-chroot /dl/oscap-chroot; \
+    rm -rf ou openscap-utils_*.deb /var/lib/apt/lists/*
 
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="security-posture-worker" \
       org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
-# skopeo for mirroring; pango/harfbuzz/fonts for WeasyPrint (SAR PDF from reports.autoGenerate)
+# skopeo for mirroring; pango/harfbuzz/fonts for WeasyPrint (SAR PDF from reports.autoGenerate);
+# openscap-scanner (`oscap`, OVAL probes incl. dpkginfo/rpminfo) + bzip2/xz/zstd for the SCAP stage
+# (DESIGN §14); rpm-common supplies /usr/lib/rpm/rpmrc, without which librpm (the rpminfo probe used
+# for RHEL / UBI images) aborts oscap. No SCAP content is vendored: it is fetched to SCAP_CONTENT_DIR
+# at runtime.
+ARG OPENSCAP_DEB_VERSION=1.3.7+dfsg-1+deb12u1
 RUN apt-get update \
  && apt-get install -y --no-install-recommends skopeo ca-certificates \
       libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core \
+      "openscap-scanner=${OPENSCAP_DEB_VERSION}" "openscap-common=${OPENSCAP_DEB_VERSION}" bzip2 xz-utils zstd \
+      rpm-common \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 10001 posture \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture \
  && mkdir -p /cache /data/reports && chown 10001:10001 /cache /data/reports
-COPY --from=tools /dl/trivy /dl/grype /dl/clairctl /dl/cosign /usr/local/bin/
+COPY --from=tools /dl/trivy /dl/grype /dl/clairctl /dl/cosign /dl/oscap-chroot /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
+# fail the build when the SCAP toolchain is incomplete
+# OpenSCAP probe environment (validated on grace, DESIGN §14):
+# - dpkginfo reads the image's /var/lib/dpkg/status through libapt-pkg with RootDir=<rootfs>; the
+#   base image's apt.conf.d/docker-clean sets Dir::Cache::pkgcache "" which RootDir turns into
+#   "<rootfs>/" and apt fails ("dpkginfo_init has failed", every package rule false). Name the
+#   cache files again (they land in the scratch rootfs' var/cache/apt).
+# - rpminfo uses this image's rpm macros, and Debian's rpm keeps its database in ~/.rpmdb; RHEL /
+#   UBI images keep it in /var/lib/rpm.
+RUN printf 'Dir::Cache::pkgcache "pkgcache.bin";\nDir::Cache::srcpkgcache "srcpkgcache.bin";\n' \
+      > /etc/apt/apt.conf.d/zz-posture-oscap \
+ && mkdir -p /etc/rpm && printf '%%_dbpath /var/lib/rpm\n' > /etc/rpm/macros.posture-oscap
+RUN oscap --version | head -1 && test -x /usr/local/bin/oscap-chroot && test -f /usr/lib/rpm/rpmrc
 # Everything the tools write goes under /cache (PVC) or /tmp (emptyDir): the root fs
 # can be read-only.
 ENV PATH=/opt/venv/bin:$PATH \

@@ -80,8 +80,17 @@ def layout_manifest_digest(layout: Path) -> str | None:
 MAX_CHILDREN_CHECKED = 16
 
 
+def _diff_ids(config: bytes) -> tuple[str, ...]:
+    try:
+        doc = json.loads(config)
+        return tuple(str(d).lower() for d in ((doc.get("rootfs") or {}).get("diff_ids") or []))
+    except (ValueError, AttributeError):
+        return ()
+
+
 def _blob_set(manifest: bytes) -> tuple[str, tuple[str, ...]] | None:
-    """(config digest, layer digests) of an image manifest (Docker schema 2 or OCI), else None."""
+    """(config digest, layer digests) of an image manifest (Docker schema 2 or OCI), else None.
+    The Docker -> OCI conversion rewrites the config blob, so callers compare layers + diff_ids."""
     try:
         doc = json.loads(manifest)
     except ValueError:
@@ -176,7 +185,8 @@ class LocalImageCache:
                 if digest != source_digest:  # platform manifest / format conversion
                     copied = await asyncio.to_thread(
                         (tmp / "layout" / "blobs" / "sha256" / digest.split(":", 1)[1]).read_bytes)
-                    if not await self._belongs(src, pinned, src_insecure, source_digest, digest, copied):
+                    if not await self._belongs(src, pinned, src_insecure, source_digest, digest, copied,
+                                               tmp / "layout"):
                         raise RuntimeError(f"copied manifest {digest} is not part of source {source_digest}")
                 size = await asyncio.to_thread(_dir_size, tmp / "layout")
                 (tmp / "layout" / MARKER).write_text(json.dumps({
@@ -190,8 +200,18 @@ class LocalImageCache:
         await asyncio.to_thread(self.cleanup)
         return layout, digest
 
+    @staticmethod
+    def _layout_blob(layout: Path, digest: str) -> bytes | None:
+        """A blob of the layout being copied (verified against its digest)."""
+        p = layout / "blobs" / "sha256" / digest.split(":", 1)[-1]
+        try:
+            data = p.read_bytes()
+        except OSError:
+            return None
+        return data if "sha256:" + hashlib.sha256(data).hexdigest() == digest else None
+
     async def _belongs(self, src: ImageRef, pinned: str, insecure: bool, source_digest: str, digest: str,
-                       copied: bytes) -> bool:
+                       copied: bytes, layout: Path) -> bool:
         """The copied manifest is the source (or one of its platform manifests): either listed by the
         source index, or - when skopeo converted a Docker schema 2 manifest to OCI for the layout
         (the manifest bytes change, the content-addressed config and layer blobs do not) - it
@@ -206,11 +226,25 @@ class LocalImageCache:
         want = _blob_set(copied)
         if want is None:
             return False
-        if _blob_set(raw) == want:
-            return True
+        candidates = [(pinned, raw)] if _blob_set(raw) else []
         for child in sorted(children)[:MAX_CHILDREN_CHECKED]:
-            craw = await self.mirror._raw_bytes(f"{src.registry}/{src.repository}@{child}", insecure, authfile=True)
-            if craw and "sha256:" + hashlib.sha256(craw).hexdigest() == child and _blob_set(craw) == want:
+            cref = f"{src.registry}/{src.repository}@{child}"
+            craw = await self.mirror._raw_bytes(cref, insecure, authfile=True)
+            if craw and "sha256:" + hashlib.sha256(craw).hexdigest() == child:
+                candidates.append((cref, craw))
+        for ref, manifest in candidates:
+            have = _blob_set(manifest)
+            if have is None or have[1] != want[1]:
+                continue
+            if have[0] == want[0]:
+                return True
+            # converted config: the source config (as the registry serves it for the hash-verified
+            # manifest) and the copied one must describe the same filesystem layers
+            src_cfg = await self.mirror._raw_config(ref, insecure, authfile=True)
+            if src_cfg is None or "sha256:" + hashlib.sha256(src_cfg).hexdigest() != have[0]:
+                continue
+            copied_cfg = self._layout_blob(layout, want[0])
+            if copied_cfg is not None and _diff_ids(src_cfg) and _diff_ids(src_cfg) == _diff_ids(copied_cfg):
                 return True
         return False
 

@@ -90,3 +90,9 @@ async def test_oscap_chroot_end_to_end(tmp_path):
     assert {r.rule_id.rsplit("_", 1)[-1]: r.result for r in res.rules} == {"banner": "fail", "rhosts": "fail",
                                                                           "motd": "pass"}
     assert await oscap.oscap_version() not in (None, "")
+
+
+def test_probe_warnings_flag_silent_package_probe_failures():
+    err = "W: oscap: uname offline\nE: oscap:     dpkginfo_init has failed.\n"
+    assert oscap.probe_warnings(err) == ["dpkginfo probe failed: Debian package rules are unreliable"]
+    assert oscap.probe_warnings("") == []

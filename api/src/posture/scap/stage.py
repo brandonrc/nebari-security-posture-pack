@@ -32,7 +32,7 @@ from . import content as content_mod
 from . import oscap as oscap_mod
 from .detect import Detection, candidates_for, detect
 from .models import ScapContent, ScapImageSummary, ScapResultRow
-from .rootfs import RootfsError, flatten, is_root, remove_tree
+from .rootfs import RootfsError, flatten, is_root, prepare_for_oscap, remove_tree
 from .scoring import image_stig, open_by_cat, stig_score, weights
 
 log = get_logger(__name__)
@@ -242,9 +242,10 @@ class ScapStage:
             except RootfsError as e:
                 out.error = f"rootfs: {e}"
                 return out
-            out.rootfs = rr.as_dict()
-            det = await asyncio.to_thread(detect, rootfs_dir)
+            det = await asyncio.to_thread(detect, rootfs_dir)  # before prepare_for_oscap touches the tree
             out.detection = det
+            rr.notes += await asyncio.to_thread(prepare_for_oscap, rootfs_dir)
+            out.rootfs = rr.as_dict()
             cands = candidates_for(det, prefer_disa, extra=getattr(self.s, "scap_benchmarks_file", "") or None)
             if not cands:
                 out.status = "notApplicable"
@@ -330,7 +331,8 @@ class ScapStage:
                     cat1_open=opened["cat1Open"], cat2_open=opened["cat2Open"], cat3_open=opened["cat3Open"],
                     evaluated_weight=ev_w, failed_weight=fl_w, score=stig_score(pairs), rootfs_fidelity=fidelity,
                     rootfs=out.rootfs, detected={**det, **({"product": b.candidate["product"]} if b.candidate.get("product") else {})},
-                    oscap_version=self.oscap_version, duration_ms=r.duration_ms, error=r.error, evaluated_at=ts)
+                    oscap_version=self.oscap_version, duration_ms=r.duration_ms,
+                    error="; ".join([*([r.error] if r.error else []), *r.warnings]) or None, evaluated_at=ts)
                 s.add(summ)
                 await s.flush()
                 if r.rules:

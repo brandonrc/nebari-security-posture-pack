@@ -426,6 +426,49 @@ def flatten(layout: Path, dest: Path, max_bytes: int = 10 * 1024**3, privileged:
     return ex.res
 
 
+def prepare_for_oscap(root: Path) -> list[str]:
+    """Scratch-rootfs fixes so OpenSCAP's package probes see the image's packages (DESIGN §14):
+    * distroless images keep dpkg metadata in var/lib/dpkg/status.d/<pkg> (no status file): the
+      files are concatenated into var/lib/dpkg/status (the image's own records, unchanged);
+    * libapt-pkg writes its cache under RootDir/var/cache/apt: created when missing, and named in
+      an apt.conf.d drop-in (the image's docker-clean config empties it); its directories and
+      dpkg's cputable / tupletable (absent in distroless) are supplied when missing.
+    Returns notes for the summary."""
+    notes: list[str] = []
+    try:
+        dpkg = secure_join(root, "var/lib/dpkg")
+        status, status_d = dpkg / "status", dpkg / "status.d"
+        if status_d.is_dir() and not status_d.is_symlink() and not (status.exists() or status.is_symlink()):
+            parts = []
+            for f in sorted(status_d.iterdir()):
+                if f.is_file() and not f.is_symlink() and not f.name.endswith(".md5sums"):
+                    parts.append(f.read_bytes().strip(b"\n"))
+            status.write_bytes(b"\n\n".join(parts) + b"\n")
+            notes.append(f"dpkg status synthesised from {len(parts)} status.d record(s) (distroless)")
+        if dpkg.is_dir():
+            secure_join(root, "var/cache/apt").mkdir(parents=True, exist_ok=True)
+            # libapt-pkg (dpkginfo probe, RootDir=<rootfs>) reads the image's apt.conf.d: Debian
+            # container images set Dir::Cache::pkgcache "" (docker-clean), which RootDir turns into
+            # "<rootfs>/" and apt init fails, so every package rule would read "not installed"
+            for d in ("etc/apt/apt.conf.d", "var/lib/apt/lists/partial", "var/cache/apt/archives/partial"):
+                secure_join(root, d).mkdir(parents=True, exist_ok=True)  # distroless: no apt at all
+            # libapt-pkg also needs dpkg's architecture tables, which distroless images lack
+            for name in ("cputable", "tupletable", "ostable"):
+                dst = secure_join(root, f"usr/share/dpkg/{name}")
+                host = Path("/usr/share/dpkg") / name
+                if not (dst.exists() or dst.is_symlink()) and host.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(host, dst)
+                    notes.append(f"dpkg {name} supplied from the worker image")
+            conf = secure_join(root, "etc/apt/apt.conf.d")
+            if conf.is_dir() and not conf.is_symlink():
+                (conf / "zzzz-posture-oscap").write_text(
+                    'Dir::Cache::pkgcache "pkgcache.bin";\nDir::Cache::srcpkgcache "srcpkgcache.bin";\n')
+    except (OSError, RootfsError) as e:
+        notes.append(f"rootfs preparation skipped: {e}")
+    return notes
+
+
 def remove_tree(path: Path) -> None:
     """rm -rf that also works on trees whose directories were made read-only by the image."""
     path = Path(path)

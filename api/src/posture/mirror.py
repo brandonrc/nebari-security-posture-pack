@@ -117,10 +117,14 @@ class Mirror:
             return cached_digest, False
         return cached_digest, cached_digest in _child_digests(source)
 
-    async def _raw_bytes(self, ref: str, insecure: bool, authfile: bool = False) -> bytes | None:
-        """Exact manifest bytes (hashing needs the bytes, not decoded text)."""
+    async def _raw_config(self, ref: str, insecure: bool, authfile: bool = False) -> bytes | None:
+        """The image config blob of a (single-platform) manifest ref."""
+        return await self._raw_bytes(ref, insecure, authfile, config=True)
+
+    async def _raw_bytes(self, ref: str, insecure: bool, authfile: bool = False, config: bool = False) -> bytes | None:
+        """Exact manifest (or, with `config`, image config) bytes (hashing needs the bytes)."""
         argv = [self.s.skopeo_bin, "--policy", self.policy_path(), "inspect", "--raw",
-                f"--tls-verify={str(not insecure).lower()}"]
+                *(["--config"] if config else []), f"--tls-verify={str(not insecure).lower()}"]
         if authfile:
             argv += self._auth_args("--authfile")
         argv += ["--", f"docker://{safe_ref_arg(ref)}"]
