@@ -189,3 +189,19 @@ async def test_recorded_copy_replaced_in_mirror_is_still_rejected(tmp_path):
     store.write_text(json.dumps(db))
     t = await Mirror(m.s).prepare(ref)
     assert t.ref == f"{HUB_REPO}@{D(DOCKER_V2)}" and any("did not match" in w for w in t.warnings)
+
+
+def test_rescan_replaces_per_scan_mirror_warnings():
+    """grace revision 21: scan #43's "did not match source digest; re-copied" warnings stayed on 20
+    images after scan #46 verified their mirror copies (the merge kept every warning but
+    "mirror failed ...")."""
+    from posture.worker import merge_scan_warnings
+
+    old = ["mirror copy r/x:sha256-ab did not match source digest sha256:ab; re-copied",
+           "mirror copy r/y could not be verified (source manifest of sha256:cd unavailable, e.g. registry "
+           "rate limit); re-copied",
+           "mirror failed: toomanyrequests; scanned original ref", "only one scanner succeeded (low confidence)",
+           "base image is end-of-life"]
+    assert merge_scan_warnings(old, []) == ["base image is end-of-life"]
+    assert merge_scan_warnings(None, ["mirror copy reported no digest; scanned original ref"]) == [
+        "mirror copy reported no digest; scanned original ref"]

@@ -243,6 +243,17 @@ def post_scan_plan(*, trigger: str, targeted: bool, rescanned: int | None, inven
     return PostScanPlan(controls, creason, reports, rreason)
 
 
+# Image warnings that describe one scan's mirror / scanner outcome: replaced by every rescan, so a
+# warning of an earlier scan (e.g. grace #43's "did not match source digest; re-copied") does not
+# stay on the image after the mirror copy verified (grace 2026-10-05, revision 21).
+PER_SCAN_WARNING_PREFIXES = ("mirror failed", "mirror copy ", "all scanners failed", "only one scanner")
+
+
+def merge_scan_warnings(previous: list[str] | None, current: list[str]) -> list[str]:
+    """The image's warnings after a rescan: the previous ones that are not per-scan, then this scan's."""
+    return [w for w in (previous or []) if not w.startswith(PER_SCAN_WARNING_PREFIXES)] + list(current)
+
+
 def pack_raw(r: ScanResult, max_gz: int) -> tuple[bytes | None, int, bool]:
     """gzip raw scanner output for `image_scans.raw_gz`, never cut into invalid JSON: output whose
     gzip exceeds RAW_MAX_GZ_BYTES is replaced by a small `{"truncated": true, ...}` summary."""
@@ -1144,9 +1155,7 @@ class Worker:
                     and getattr(target, "mirror_digest", None):
                 mref = f"{mref}@{target.mirror_digest}"  # local OCI layout: show the verified digest
             img.mirror_ref = mref if target.mirrored else None
-            warnings = [w for w in (img.warnings or []) if not w.startswith(("mirror failed", "all scanners failed",
-                                                                                "only one scanner"))]
-            warnings += target.warnings
+            warnings = merge_scan_warnings(img.warnings, target.warnings)
             if not analysis.succeeded and ctx.enabled:
                 warnings.append("all scanners failed; score unavailable")
             elif len(analysis.succeeded) == 1 and len(ctx.enabled) > 1:
