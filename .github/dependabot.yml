@@ -1,7 +1,8 @@
 # Dependency updates (quality review m3). Minor/patch bumps are grouped per ecosystem to keep the
-# PR count manageable; majors come one PR each. Scanner binary versions (TRIVY_/GRYPE_/CLAIRCTL_/
-# COSIGN_VERSION ARGs in api/Dockerfile.worker) are not covered by Dependabot: bump them by hand
-# together with the parser fixtures (api/tests/fixtures/README.md) and .github/cst/worker.yaml.
+# PR count manageable; majors come one PR each. Scanner/tool versions in api/Dockerfile.worker
+# (TRIVY_/GRYPE_ release binaries; CLAIR_/COSIGN_/SKOPEO_ source builds with *_COMMIT and *_GO_BUMPS;
+# GOLANG_IMAGE) are not covered by Dependabot: bump them by hand together with the parser fixtures
+# (api/tests/fixtures/README.md) and .github/cst/worker.yaml.
 version: 2
 updates:
   - package-ecosystem: uv            # api/pyproject.toml + api/uv.lock (the images install from the lock)

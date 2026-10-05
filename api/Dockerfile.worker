@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 # Nebari Security Posture worker: same Python package as the API plus pinned scanner
 # binaries (trivy client, grype, clairctl, cosign) and skopeo. Build context: api/
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+# Base: same decision as Dockerfile.api (Debian 13 slim, digest-pinned; docs/DECISIONS.md
+# "2026-10-05: image hardening"); remaining unfixed Debian CVEs: vex/posture-images.vex.json.
+ARG PYTHON_IMAGE=python:3.13-slim-trixie@sha256:3dd7cc108ec1493442514f5c2a871af6af0ec31d768ff6e378a93340c3b3db5f
+ARG GOLANG_IMAGE=golang:1.27.1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5
 
 FROM ${PYTHON_IMAGE} AS builder
 # Dependencies come from uv.lock (hash-pinned, transitive deps included), so the
@@ -15,21 +18,62 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
+# clairctl, cosign and skopeo are built from their tagged release sources with a current Go
+# toolchain plus the minimum dependency bumps that clear the fixable CRITICAL/HIGH findings of the
+# upstream binaries (Go stdlib, pgx, x/crypto, x/net, grpc, ...). Each tag must resolve to the
+# pinned commit; module downloads are verified against go.sum / sum.golang.org (GOSUMDB default).
+# Debian's skopeo (Go 1.24.4, plus containers-common, CNI plugins and gpgme) is not installed; this
+# one is static (openpgp instead of gpgme, no btrfs/devicemapper graph drivers) and every call
+# site passes --policy. When upstream releases carry these fixes, drop the bumps (or return to
+# the sha256-pinned release binaries).
+FROM ${GOLANG_IMAGE} AS gobuild
+ARG CLAIR_VERSION=4.9.0
+ARG CLAIR_COMMIT=f6a412ccbfc4c3db83005348584d437348826763
+ARG CLAIR_GO_BUMPS="github.com/jackc/pgx/v5@v5.9.2 golang.org/x/crypto@v0.57.0 golang.org/x/net@v0.59.0 golang.org/x/text@v0.42.0 github.com/go-jose/go-jose/v3@v3.0.5 go.opentelemetry.io/otel@v1.47.0 github.com/docker/cli@v29.8.2+incompatible"
+ARG COSIGN_VERSION=3.1.3
+ARG COSIGN_COMMIT=11926fa5bbbbde47e88fc006b625a17769b743b2
+ARG COSIGN_GO_BUMPS="golang.org/x/crypto@v0.57.0 golang.org/x/mod@v0.41.0 golang.org/x/text@v0.42.0 google.golang.org/grpc@v1.84.0"
+ARG SKOPEO_VERSION=1.24.1
+ARG SKOPEO_COMMIT=77f3d92f861271c7cb9175afcf876017bcae9202
+ARG SKOPEO_GO_BUMPS="golang.org/x/crypto@v0.57.0 google.golang.org/grpc@v1.84.0"
+ENV CGO_ENABLED=0 GOFLAGS=-mod=mod GOTOOLCHAIN=local
+WORKDIR /build
+# fetch <repo> <tag> <commit> <go get args...>: shallow clone at the tag, check the commit, bump, tidy
+RUN cat > /usr/local/bin/fetch <<'SH' && chmod 0755 /usr/local/bin/fetch
+#!/bin/sh
+set -eux
+repo=$1 tag=$2 commit=$3; shift 3
+git -c advice.detachedHead=false clone -q --depth 1 --branch "$tag" "https://github.com/$repo" src
+test "$(git -C src rev-parse HEAD)" = "$commit"
+cd src && rm -rf vendor && go get "$@" && go mod tidy
+SH
+RUN set -eux; fetch quay/clair "v${CLAIR_VERSION}" "${CLAIR_COMMIT}" ${CLAIR_GO_BUMPS}; \
+    cd src && go build -trimpath -buildvcs=false \
+      -ldflags "-s -w -buildid= -X github.com/quay/clair/v4/cmd.Version=v${CLAIR_VERSION}" -o /dl/clairctl ./cmd/clairctl; \
+    cd .. && rm -rf src && /dl/clairctl --version
+RUN set -eux; fetch sigstore/cosign "v${COSIGN_VERSION}" "${COSIGN_COMMIT}" ${COSIGN_GO_BUMPS}; \
+    cd src && go build -trimpath -buildvcs=false \
+      -ldflags "-s -w -buildid= -X sigs.k8s.io/release-utils/version.gitVersion=v${COSIGN_VERSION}" \
+      -o /dl/cosign ./cmd/cosign; \
+    cd .. && rm -rf src && /dl/cosign version
+RUN set -eux; fetch containers/skopeo "v${SKOPEO_VERSION}" "${SKOPEO_COMMIT}" ${SKOPEO_GO_BUMPS}; \
+    cd src && go build -trimpath -buildvcs=false \
+      -tags "containers_image_openpgp exclude_graphdriver_btrfs exclude_graphdriver_devicemapper" \
+      -ldflags "-s -w -buildid= -X main.gitCommit=${SKOPEO_COMMIT}" -o /dl/skopeo ./cmd/skopeo; \
+    cd .. && rm -rf src && /dl/skopeo --version
+
 FROM ${PYTHON_IMAGE} AS tools
 ARG TRIVY_VERSION=0.75.0
 ARG TRIVY_SHA256=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
 ARG GRYPE_VERSION=0.120.0
 ARG GRYPE_SHA256=a5a1218dce63acdac152a6b3b5bb366e7267e36f4069848cf455543b3fa5700e
-ARG CLAIRCTL_VERSION=4.9.0
-ARG CLAIRCTL_SHA256=202ba386620bb8720631e34381fa24621536045ff898dd6d08a3b64ee3d52328
-# cosign: signature verification for the supply-chain stage (DESIGN §12)
-ARG COSIGN_VERSION=3.1.3
-ARG COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
+# (sha256 values are the ones in each release's checksums file; clairctl and cosign, the supply-
+# chain stage's signature verifier (DESIGN §12), come from the gobuild stage above)
 # oscap-chroot (DESIGN §14): a 3 KB shell wrapper that sets OSCAP_PROBE_ROOT and runs `oscap`.
 # Debian ships it in openscap-utils, which drags in rpm, python3-openscap and a second python;
 # only the script is taken from the (apt-verified, sha256-pinned) package.
-ARG OPENSCAP_DEB_VERSION=1.3.7+dfsg-1+deb12u1
-ARG OPENSCAP_UTILS_SHA256=01f0f230e42794d644004ecf77dc75add1fd8de11a8a35ca72d595dd4284e519
+ARG OPENSCAP_DEB_VERSION=1.4.2+dfsg-1
+ARG OPENSCAP_UTILS_SHA256=38612978dbedae54e60b2359312d74063e2290f34137116469613ddd4c7f1332
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /dl
 RUN set -eux; \
@@ -39,15 +83,12 @@ RUN set -eux; \
     curl -fsSLo grype.tgz "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"; \
     echo "${GRYPE_SHA256}  grype.tgz" | sha256sum -c -; \
     tar -xzf grype.tgz grype; \
-    curl -fsSLo clairctl "https://github.com/quay/clair/releases/download/v${CLAIRCTL_VERSION}/clairctl-linux-amd64"; \
-    echo "${CLAIRCTL_SHA256}  clairctl" | sha256sum -c -; \
-    curl -fsSLo cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"; \
-    echo "${COSIGN_SHA256}  cosign" | sha256sum -c -; \
-    chmod 0755 trivy grype clairctl cosign
+    chmod 0755 trivy grype; \
+    rm -f trivy.tgz grype.tgz
 RUN set -eux; \
     apt-get update; \
     apt-get download "openscap-utils=${OPENSCAP_DEB_VERSION}"; \
-    echo "${OPENSCAP_UTILS_SHA256}  openscap-utils_$(echo ${OPENSCAP_DEB_VERSION} | sed 's/:/%3a/')_amd64.deb" | sha256sum -c -; \
+    echo "${OPENSCAP_UTILS_SHA256}  $(ls openscap-utils_*.deb)" | sha256sum -c -; \
     dpkg-deb -x openscap-utils_*.deb ou; \
     install -m 0755 ou/usr/bin/oscap-chroot /dl/oscap-chroot; \
     rm -rf ou openscap-utils_*.deb /var/lib/apt/lists/*
@@ -55,22 +96,31 @@ RUN set -eux; \
 FROM ${PYTHON_IMAGE} AS runtime
 LABEL org.opencontainers.image.title="security-posture-worker" \
       org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
-# skopeo for mirroring; pango/harfbuzz/fonts for WeasyPrint (SAR PDF from reports.autoGenerate);
+# skopeo (static, gobuild stage) for mirroring; pango/harfbuzz/fonts for WeasyPrint (SAR PDF from reports.autoGenerate);
 # openscap-scanner (`oscap`, OVAL probes incl. dpkginfo/rpminfo) + bzip2/xz/zstd for the SCAP stage
 # (DESIGN §14); rpm-common supplies /usr/lib/rpm/rpmrc, without which librpm (the rpminfo probe used
 # for RHEL / UBI images) aborts oscap. No SCAP content is vendored: it is fetched to SCAP_CONTENT_DIR
 # at runtime.
-ARG OPENSCAP_DEB_VERSION=1.3.7+dfsg-1+deb12u1
+# Also: apt-get upgrade (Debian fixes newer than the base digest); mount purged (unprivileged
+# container, see the VEX); no pip/setuptools/ensurepip/idle/tkinter (the app runs from /opt/venv).
+ARG OPENSCAP_DEB_VERSION=1.4.2+dfsg-1
 RUN apt-get update \
- && apt-get install -y --no-install-recommends skopeo ca-certificates \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends ca-certificates \
       libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libharfbuzz-subset0 fonts-dejavu-core \
       "openscap-scanner=${OPENSCAP_DEB_VERSION}" "openscap-common=${OPENSCAP_DEB_VERSION}" bzip2 xz-utils zstd \
       rpm-common \
- && rm -rf /var/lib/apt/lists/* \
+ && apt-get purge -y mount \
+ && apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/apt /var/log/dpkg.log \
+ && rm -rf /usr/local/bin/pip* /usr/local/bin/idle* /usr/local/bin/pydoc* \
+      /usr/local/lib/python3*/site-packages/pip* /usr/local/lib/python3*/site-packages/setuptools* \
+      /usr/local/lib/python3*/site-packages/wheel* /usr/local/lib/python3*/ensurepip \
+      /usr/local/lib/python3*/idlelib /usr/local/lib/python3*/tkinter \
  && groupadd --gid 10001 posture \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin posture \
  && mkdir -p /cache /data/reports && chown 10001:10001 /cache /data/reports
-COPY --from=tools /dl/trivy /dl/grype /dl/clairctl /dl/cosign /dl/oscap-chroot /usr/local/bin/
+COPY --from=tools /dl/trivy /dl/grype /dl/oscap-chroot /usr/local/bin/
+COPY --from=gobuild /dl/clairctl /dl/cosign /dl/skopeo /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
 # fail the build when the SCAP toolchain is incomplete
 # OpenSCAP probe environment (validated on grace, DESIGN §14):

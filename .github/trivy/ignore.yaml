@@ -1,19 +1,16 @@
-# Reviewed exceptions for the CRITICAL+fixable gate in image-scan.yaml. Every entry expires: when
+# Reviewed exceptions for the fixable CRITICAL/HIGH gate in image-scan.yaml. Every entry expires: when
 # it does, the gate fails again until the image is rebuilt on a fixed base/binary or the entry is
-# re-reviewed. Keep this list short. (HIGH findings are reported via SARIF but do not gate.)
-vulnerabilities:
-  # worker: clairctl 4.9.0 is the upstream release binary (Go 1.24.10, pgx 5.7.6); fixed only by a
-  # newer clairctl release. clairctl is a CLI client in the worker: it does not use pgx's server-side
-  # paths. Bump CLAIRCTL_VERSION in api/Dockerfile.worker when quay/clair ships a rebuilt release.
-  - id: CVE-2025-68121
-    paths: ["usr/local/bin/clairctl"]
-    statement: upstream clairctl 4.9.0 binary (Go stdlib 1.24.10); awaiting a clair release
-    expired_at: 2026-11-15
-  - id: CVE-2026-33815
-    paths: ["usr/local/bin/clairctl"]
-    statement: pgx in the upstream clairctl binary; client-only use, no database connection
-    expired_at: 2026-11-15
-  - id: CVE-2026-33816
-    paths: ["usr/local/bin/clairctl"]
-    statement: pgx in the upstream clairctl binary; client-only use, no database connection
-    expired_at: 2026-11-15
+# re-reviewed. Keep this list short. Unfixed CVEs (no fixed version) are not gated; they are triaged
+# in api/vex/posture-images.vex.json (OpenVEX) instead.
+#
+# Empty since 2026-10-05 (docs/DECISIONS.md "image hardening"): the clairctl entries (Go stdlib, pgx)
+# went away when clairctl/cosign/skopeo started being built from their release tags with patched
+# dependencies (api/Dockerfile.worker, gobuild stage), and the ui openssl entry with the
+# nginx-unprivileged 1.31-alpine-slim base + apk upgrade.
+#
+# Entry format:
+#   - id: CVE-YYYY-NNNNN
+#     paths: ["usr/local/bin/<binary>"]   # optional: narrow to one file
+#     statement: why it is acceptable until the expiry, and what fixes it
+#     expired_at: YYYY-MM-DD
+vulnerabilities: []

@@ -5,7 +5,7 @@
   "role": "Document Creator",
   "timestamp": "2026-10-05T00:00:00Z",
   "version": 1,
-  "tooling": "hand-reviewed; regenerate per docs/DECISIONS.md (2026-10-05: image hardening)",
+  "tooling": "hand-reviewed triage; method and evidence in docs/DECISIONS.md (2026-10-05: image hardening)",
   "statements": [
     {
       "vulnerability": {
@@ -24,7 +24,29 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libsystemd0"
+            },
+            {
+              "@id": "pkg:deb/debian/libudev1"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libsystemd0"
+            },
+            {
+              "@id": "pkg:deb/debian/libudev1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/libsystemd0"
@@ -63,7 +85,41 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/gcc-14-base"
@@ -108,7 +164,41 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/gcc-14-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libgcc-s1"
+            },
+            {
+              "@id": "pkg:deb/debian/libatomic1"
+            },
+            {
+              "@id": "pkg:deb/debian/libstdc++6"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/gcc-14-base"
@@ -146,7 +236,29 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/libc6"
@@ -179,7 +291,29 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libc6"
+            },
+            {
+              "@id": "pkg:deb/debian/libc-bin"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/libc6"
@@ -230,7 +364,65 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/util-linux"
@@ -262,7 +454,7 @@
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged (SUID or root) mount invocation. The mount package is purged from the image; As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints, so libmount's mount context is never driven."
+      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged mount invocation (SUID mount or CAP_SYS_ADMIN). The mount package is purged from both images. No process in the image executes it: the API runs only its Python entrypoints, the worker additionally trivy, grype, clairctl, cosign, skopeo, oscap/oscap-chroot and zstd. As deployed by the chart every container drops all capabilities and has a read-only root filesystem; the scap-worker Deployment runs the worker image as root but adds back only CHOWN/FOWNER/DAC_OVERRIDE/FSETID/SETFCAP/SYS_CHROOT (no SYS_ADMIN); libmount's mount context is never driven."
     },
     {
       "vulnerability": {
@@ -299,7 +491,65 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/util-linux"
@@ -331,7 +581,7 @@
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged (SUID or root) mount invocation. The mount package is purged from the image; As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints, so libmount's mount context is never driven."
+      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged mount invocation (SUID mount or CAP_SYS_ADMIN). The mount package is purged from both images. No process in the image executes it: the API runs only its Python entrypoints, the worker additionally trivy, grype, clairctl, cosign, skopeo, oscap/oscap-chroot and zstd. As deployed by the chart every container drops all capabilities and has a read-only root filesystem; the scap-worker Deployment runs the worker image as root but adds back only CHOWN/FOWNER/DAC_OVERRIDE/FSETID/SETFCAP/SYS_CHROOT (no SYS_ADMIN); libmount's mount context is never driven."
     },
     {
       "vulnerability": {
@@ -368,7 +618,65 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/util-linux"
@@ -400,7 +708,7 @@
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged (SUID or root) mount invocation. The mount package is purged from the image; As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints, so libmount's mount context is never driven."
+      "impact_statement": "The flaw is in mount(8)'s X-mount.* helper/post-hook handling and needs a privileged mount invocation (SUID mount or CAP_SYS_ADMIN). The mount package is purged from both images. No process in the image executes it: the API runs only its Python entrypoints, the worker additionally trivy, grype, clairctl, cosign, skopeo, oscap/oscap-chroot and zstd. As deployed by the chart every container drops all capabilities and has a read-only root filesystem; the scap-worker Deployment runs the worker image as root but adds back only CHOWN/FOWNER/DAC_OVERRIDE/FSETID/SETFCAP/SYS_CHROOT (no SYS_ADMIN); libmount's mount context is never driven."
     },
     {
       "vulnerability": {
@@ -437,7 +745,65 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/util-linux"
+            },
+            {
+              "@id": "pkg:deb/debian/bsdutils"
+            },
+            {
+              "@id": "pkg:deb/debian/libblkid1"
+            },
+            {
+              "@id": "pkg:deb/debian/libmount1"
+            },
+            {
+              "@id": "pkg:deb/debian/libsmartcols1"
+            },
+            {
+              "@id": "pkg:deb/debian/libuuid1"
+            },
+            {
+              "@id": "pkg:deb/debian/liblastlog2-2"
+            },
+            {
+              "@id": "pkg:deb/debian/login"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/util-linux"
@@ -469,7 +835,7 @@
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "The flaw is in nsenter --join-cgroup run as root. As deployed by the chart the container runs as uid 10001 with all capabilities dropped and a read-only root filesystem (containerSecurityContext), and the only processes it starts are its own Python entrypoints; nsenter is never executed and could not open a cgroup.procs file as root."
+      "impact_statement": "The flaw is in nsenter --join-cgroup. No process in the image executes it: the API runs only its Python entrypoints, the worker additionally trivy, grype, clairctl, cosign, skopeo, oscap/oscap-chroot and zstd. As deployed by the chart every container drops all capabilities and has a read-only root filesystem; the scap-worker Deployment runs the worker image as root but adds back only CHOWN/FOWNER/DAC_OVERRIDE/FSETID/SETFCAP/SYS_CHROOT (no SYS_ADMIN); nsenter (and setns/cgroup migration, which needs SYS_ADMIN) is never used."
     },
     {
       "vulnerability": {
@@ -494,7 +860,41 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/ncurses-bin"
+            },
+            {
+              "@id": "pkg:deb/debian/ncurses-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libtinfo6"
+            },
+            {
+              "@id": "pkg:deb/debian/libncursesw6"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/ncurses-bin"
+            },
+            {
+              "@id": "pkg:deb/debian/ncurses-base"
+            },
+            {
+              "@id": "pkg:deb/debian/libtinfo6"
+            },
+            {
+              "@id": "pkg:deb/debian/libncursesw6"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/ncurses-bin"
@@ -530,7 +930,23 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/perl-base"
@@ -557,7 +973,23 @@
           ]
         },
         {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        },
+        {
           "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/perl-base"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/perl-base"
@@ -582,6 +1014,14 @@
               "@id": "pkg:deb/debian/libacl1"
             }
           ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
         }
       ],
       "status": "not_affected",
@@ -596,6 +1036,14 @@
       "products": [
         {
           "@id": "pkg:oci/security-posture-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
           "subcomponents": [
             {
               "@id": "pkg:deb/debian/libacl1"
@@ -620,12 +1068,36 @@
               "@id": "pkg:deb/debian/libexpat1"
             }
           ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
         }
       ],
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package; no other ELF object in either image imports XML_ParserCreate (nm -D), so request or scanned-image data never reaches the Debian libexpat."
     },
     {
       "vulnerability": {
@@ -639,12 +1111,36 @@
               "@id": "pkg:deb/debian/libexpat1"
             }
           ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
         }
       ],
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package; no other ELF object in either image imports XML_ParserCreate (nm -D), so request or scanned-image data never reaches the Debian libexpat."
     },
     {
       "vulnerability": {
@@ -658,12 +1154,36 @@
               "@id": "pkg:deb/debian/libexpat1"
             }
           ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
         }
       ],
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package; no other ELF object in either image imports XML_ParserCreate (nm -D), so request or scanned-image data never reaches the Debian libexpat."
     },
     {
       "vulnerability": {
@@ -677,12 +1197,36 @@
               "@id": "pkg:deb/debian/libexpat1"
             }
           ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libexpat1"
+            }
+          ]
         }
       ],
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
-      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package, so request data never reaches the Debian libexpat."
+      "impact_statement": "The system libexpat1 is used only by libfontconfig1 to parse the image's root-owned /etc/fonts configuration. CPython's pyexpat (xml.etree) is built against its bundled expat (2.8.5), not this package; no other ELF object in either image imports XML_ParserCreate (nm -D), so request or scanned-image data never reaches the Debian libexpat."
     },
     {
       "vulnerability": {
@@ -696,12 +1240,1243 @@
               "@id": "pkg:deb/debian/zlib1g"
             }
           ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-api",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/zlib1g"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/zlib1g"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/zlib1g"
+            }
+          ]
         }
       ],
       "status": "not_affected",
       "timestamp": "2026-10-05T00:00:00Z",
       "justification": "vulnerable_code_not_in_execute_path",
-      "impact_statement": "Requires gzprintf/gzvprintf after a non-blocking gzwrite stall. No ELF object in the API image imports gzprintf or gzvprintf (nm -D across the exported filesystem)."
+      "impact_statement": "Requires gzprintf/gzvprintf after a non-blocking gzwrite stall. No ELF object in either image imports gzprintf or gzvprintf (nm -D across the exported filesystems); the gzwrite users (libxml2, librpmio, libapt-pkg, dpkg-deb) write regular files, never non-blocking descriptors."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-10536"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-11856"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-12064"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-13608"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-18924"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-19931"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-80229"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-80230"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-80255"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-82209"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-8286"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-8458"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-8924"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-8926"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-8927"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-8932"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-9079"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-9080"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-9545"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libcurl4t64"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "libcurl's only consumer in the worker is libopenscap (nm -D: no other importer of curl_easy_perform), which uses it solely for --fetch-remote-resources. The worker never passes that flag (posture.scap.oscap builds the argv); SCAP content is fetched by the Python worker and sha256-checked. skopeo/trivy/grype/cosign/clairctl are static Go binaries that do not use libcurl."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-44604"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in the rpmuncompress tool. Only librpm10/librpmio10/rpm-common are installed (for OpenSCAP's rpminfo probe); the rpm, rpm2cpio and rpm-build packages that ship those executables are not."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-84838"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in the rpmuncompress tool. Only librpm10/librpmio10/rpm-common are installed (for OpenSCAP's rpminfo probe); the rpm, rpm2cpio and rpm-build packages that ship those executables are not."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-78367"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in the rpmbuild tool. Only librpm10/librpmio10/rpm-common are installed (for OpenSCAP's rpminfo probe); the rpm, rpm2cpio and rpm-build packages that ship those executables are not."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-84837"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in the rpmbuild tool. Only librpm10/librpmio10/rpm-common are installed (for OpenSCAP's rpminfo probe); the rpm, rpm2cpio and rpm-build packages that ship those executables are not."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-84233"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in the rpmbuild/rpmuncompress (.gem sources) tool. Only librpm10/librpmio10/rpm-common are installed (for OpenSCAP's rpminfo probe); the rpm, rpm2cpio and rpm-build packages that ship those executables are not."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-95521"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Requires installing or rebuilding a source RPM. librpm is used read-only by OpenSCAP's rpminfo probe to iterate the scanned image's rpmdb; nothing installs or rebuilds packages."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-95519"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Requires querying a package manifest file (rpm -q -p). The rpm CLI is not installed and the rpminfo probe only iterates the rpmdb; no package or manifest files are opened."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-103242"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "Header-parsing flaw. The rpmdb of a scanned RHEL/UBI image is untrusted input to OpenSCAP's rpminfo probe (scap-worker); whether the probe's header reads reach the affected tag handling is not yet established. Mitigations: probes run chrooted into a scratch copy, the scap-worker is a separate, short-lived pod."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-95520"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/librpm10"
+            },
+            {
+              "@id": "pkg:deb/debian/librpmio10"
+            },
+            {
+              "@id": "pkg:deb/debian/rpm-common"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "Header-parsing flaw. The rpmdb of a scanned RHEL/UBI image is untrusted input to OpenSCAP's rpminfo probe (scap-worker); whether the probe's header reads reach the affected tag handling is not yet established. Mitigations: probes run chrooted into a scratch copy, the scap-worker is a separate, short-lived pod."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-74860"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The flaw is in libxml2's Python bindings (python3-libxml2), which are not installed."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-6653"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libxml2 (via libopenscap/libxslt/libxmlsec1) parses SCAP content, which is sha256-pinned, and, through OVAL xmlfilecontent probes, XML files inside the scanned image, which are untrusted. Reachability of the affected functions from those probes is being assessed; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-86138"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libxml2 (via libopenscap/libxslt/libxmlsec1) parses SCAP content, which is sha256-pinned, and, through OVAL xmlfilecontent probes, XML files inside the scanned image, which are untrusted. Reachability of the affected functions from those probes is being assessed; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-86139"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libxml2 (via libopenscap/libxslt/libxmlsec1) parses SCAP content, which is sha256-pinned, and, through OVAL xmlfilecontent probes, XML files inside the scanned image, which are untrusted. Reachability of the affected functions from those probes is being assessed; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-86140"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libxml2 (via libopenscap/libxslt/libxmlsec1) parses SCAP content, which is sha256-pinned, and, through OVAL xmlfilecontent probes, XML files inside the scanned image, which are untrusted. Reachability of the affected functions from those probes is being assessed; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-86142"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libxml2 (via libopenscap/libxslt/libxmlsec1) parses SCAP content, which is sha256-pinned, and, through OVAL xmlfilecontent probes, XML files inside the scanned image, which are untrusted. Reachability of the affected functions from those probes is being assessed; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-86143"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libxml2 (via libopenscap/libxslt/libxmlsec1) parses SCAP content, which is sha256-pinned, and, through OVAL xmlfilecontent probes, XML files inside the scanned image, which are untrusted. Reachability of the affected functions from those probes is being assessed; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-86144"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libxml2"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libxml2 (via libopenscap/libxslt/libxmlsec1) parses SCAP content, which is sha256-pinned, and, through OVAL xmlfilecontent probes, XML files inside the scanned image, which are untrusted. Reachability of the affected functions from those probes is being assessed; tracking the Debian fix."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54369"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libopenscap (acl_extended_file) and librpm (acl_get_file) call libacl on paths inside the scanned image's rootfs, and the scap-worker runs those probes with CAP_SYS_CHROOT. Probes are chrooted into a scratch copy of the rootfs; whether symlink substitution can escape that is being assessed."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-54370"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:deb/debian/libacl1"
+            }
+          ]
+        }
+      ],
+      "status": "under_investigation",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "status_notes": "libopenscap (acl_extended_file) and librpm (acl_get_file) call libacl on paths inside the scanned image's rootfs, and the scap-worker runs those probes with CAP_SYS_CHROOT. Probes are chrooted into a scratch copy of the rootfs; whether symlink substitution can escape that is being assessed."
+    },
+    {
+      "vulnerability": {
+        "name": "GO-2026-4887",
+        "aliases": [
+          "GHSA-pxq6-2prw-chj9"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "grype links only the moby client/API packages of github.com/docker/docker (to read images from a daemon, which the worker never has). The AuthZ-plugin request handling is daemon code and is not compiled into the binary."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-41567"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Daemon-side flaw in github.com/docker/docker (engine archive upload / docker cp mount setup). grype links only the moby client/API packages; the engine code is not compiled into the binary, and the worker has no Docker daemon or socket."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-42306"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/security-posture-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/nebari-security-posture-pack-worker",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com/docker/docker"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "timestamp": "2026-10-05T00:00:00Z",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "Daemon-side flaw in github.com/docker/docker (engine archive upload / docker cp mount setup). grype links only the moby client/API packages; the engine code is not compiled into the binary, and the worker has no Docker daemon or socket."
     }
   ]
 }
