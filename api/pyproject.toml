@@ -15,7 +15,7 @@ dependencies = [
   "pydantic-settings==2.15.0",
   "httpx==0.28.1",
   "pyjwt[crypto]==2.15.1",
-  "kubernetes==36.0.3",
+  "kubernetes==37.0.0",
   "apscheduler==3.11.3",
   "pyyaml==6.0.3",
   # compliance report generators (posture.reports, see reports-requirements.txt)
