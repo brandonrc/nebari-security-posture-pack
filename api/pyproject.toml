@@ -6,13 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "BSD-3-Clause" }
 dependencies = [
-  "fastapi==0.142.2",
+  "fastapi==0.143.2",
   "uvicorn[standard]==0.54.0",
-  "sqlalchemy[asyncio]==2.1.2",
-  "asyncpg==0.31.0",
+  "sqlalchemy[asyncio]==2.1.4",
+  "asyncpg==0.32.0",
   "alembic==1.20.0",
-  "pydantic==2.13.5",
-  "pydantic-settings==2.15.0",
+  "pydantic==2.14.1",
+  "pydantic-settings==2.16.0",
   "httpx==0.28.1",
   "pyjwt[crypto]==2.15.1",
   "kubernetes==36.0.3",
@@ -24,13 +24,13 @@ dependencies = [
   "weasyprint==70.0",
   # >>> operations / scale: /metrics (posture.metrics), streaming scanner JSON parse
   "prometheus-client==0.26.0",
-  "ijson==3.5.1",
+  "ijson==3.6.0",
   # <<< operations / scale
 ]
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-cov==7.1.0", "cryptography==50.0.2", "jsonschema==4.26.0"]
-lint = ["ruff==0.16.10", "mypy==2.4.0"]
+lint = ["ruff==0.17.1", "mypy==2.4.0"]
 
 [build-system]
 requires = ["hatchling"]
