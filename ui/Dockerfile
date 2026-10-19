@@ -14,7 +14,7 @@ RUN npm run build
 # (~21 apk packages vs ~70) drops curl, libxml2/libxslt, gd/libavif/tiff and the njs/geoip/
 # image-filter/xslt modules, none of which this config loads. Pinned by digest (Dependabot bumps
 # tag + digest together); `apk upgrade` below picks up Alpine fixes published after the base.
-FROM nginxinc/nginx-unprivileged:1.31-alpine-slim@sha256:1517d8c358e2e093957ebee087afa9eb19a32f5d7ecb711b7429e369cb998224
+FROM nginxinc/nginx-unprivileged:1.31-alpine-slim@sha256:b94a56c52fd315bbd8f1f4368d64c25983351c978313e02feff2c0b35e856f2d
 LABEL org.opencontainers.image.title="security-posture-ui" \
       org.opencontainers.image.description="Nebari Security Posture pack UI (static SPA + /api proxy)" \
       org.opencontainers.image.source="https://github.com/nebari-dev/nebari-security-posture-pack"
